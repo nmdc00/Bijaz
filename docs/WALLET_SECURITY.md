@@ -239,6 +239,65 @@ class CooldownEnforcer {
 }
 ```
 
+## Live Execution Mode
+
+When you set `execution.mode: live` in your config, Bijaz will execute real trades on Polymarket using your wallet. This requires:
+
+1. **Wallet Setup**: Create or import a wallet using `bijaz wallet create` or `bijaz wallet import`
+2. **Password**: Set `BIJAZ_WALLET_PASSWORD` environment variable with your keystore password
+3. **USDC Balance**: Fund your wallet with USDC on Polygon
+4. **MATIC for Gas**: Small amount of MATIC (~$5) for transaction fees
+
+### How Live Execution Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Trade Decision                           │
+│  (from autonomous scan or manual command)                   │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LiveExecutor checks:                                       │
+│  1. Spending limits (daily & per-trade)                     │
+│  2. Address whitelist (Polymarket contracts only)           │
+│  3. Wallet balance                                          │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Order Signing:                                             │
+│  • Wallet decrypted using BIJAZ_WALLET_PASSWORD             │
+│  • Order signed with EIP-712 typed data                     │
+│  • Private key cleared from memory                          │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  CLOB API Submission:                                       │
+│  • Signed order sent to Polymarket CLOB                     │
+│  • API credentials derived from wallet signature            │
+│  • Response logged and position recorded                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Switching Execution Modes
+
+```yaml
+# Paper mode (default) - no real trades
+execution:
+  mode: paper
+
+# Webhook mode - external execution
+execution:
+  mode: webhook
+  webhookUrl: "https://your-service.com/execute"
+
+# Live mode - real Polymarket trades
+execution:
+  mode: live
+```
+
 ## Setup Guide
 
 ### 1. Create a Dedicated Wallet

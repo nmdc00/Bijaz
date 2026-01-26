@@ -9,6 +9,7 @@ export interface IntelAlertConfig {
   minTitleLength?: number;
   minSentiment?: number;
   maxSentiment?: number;
+  sentimentPreset?: 'any' | 'positive' | 'negative' | 'neutral';
   includeEntities?: string[];
   excludeEntities?: string[];
   minEntityOverlap?: number;
@@ -17,7 +18,11 @@ export interface IntelAlertConfig {
   keywordWeight?: number;
   entityWeight?: number;
   sentimentWeight?: number;
+  positiveSentimentThreshold?: number;
+  negativeSentimentThreshold?: number;
   showScore?: boolean;
+  showReasons?: boolean;
+  entityAliases?: Record<string, string[]>;
 }
 
 export interface IntelAlertItem {
@@ -36,6 +41,14 @@ export function filterIntelAlerts(
 }
 
 function normalizeConfig(config: IntelAlertConfig) {
+  const preset = config.sentimentPreset ?? 'any';
+  const minScore =
+    config.minScore !== undefined
+      ? config.minScore
+      : preset === 'negative'
+        ? -Infinity
+        : 0;
+
   return {
     watchlistOnly: config.watchlistOnly ?? true,
     maxItems: config.maxItems ?? 10,
@@ -47,15 +60,20 @@ function normalizeConfig(config: IntelAlertConfig) {
     minTitleLength: config.minTitleLength ?? 8,
     minSentiment: config.minSentiment ?? null,
     maxSentiment: config.maxSentiment ?? null,
+    sentimentPreset: preset,
+    positiveSentimentThreshold: config.positiveSentimentThreshold ?? 0.05,
+    negativeSentimentThreshold: config.negativeSentimentThreshold ?? -0.05,
     includeEntities: config.includeEntities ?? [],
     excludeEntities: config.excludeEntities ?? [],
     minEntityOverlap: config.minEntityOverlap ?? 1,
     useContent: config.useContent ?? true,
-    minScore: config.minScore ?? 0,
+    minScore,
     keywordWeight: config.keywordWeight ?? 1,
     entityWeight: config.entityWeight ?? 1,
     sentimentWeight: config.sentimentWeight ?? 1,
     showScore: config.showScore ?? false,
+    showReasons: config.showReasons ?? false,
+    entityAliases: config.entityAliases ?? {},
   };
 }
 
@@ -90,42 +108,65 @@ function buildText(item: IntelAlertItem, useContent: boolean): string {
 }
 
 function extractEntities(text: string): string[] {
-  const words = text
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
+  const cleaned = text.replace(/[^\w\s'-]/g, ' ');
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
   const entities: string[] = [];
-  for (const word of words) {
-    if (word.length < 3) continue;
-    if (word === word.toUpperCase()) {
-      entities.push(word);
+  let current: string[] = [];
+
+  const flush = () => {
+    if (current.length === 0) return;
+    const phrase = current.join(' ');
+    if (phrase.length >= 3) {
+      entities.push(phrase);
+    }
+    current = [];
+  };
+
+  for (const token of tokens) {
+    const isAcronym = token.length >= 2 && token === token.toUpperCase();
+    const isCapitalized = token.length > 1 && token[0] === token[0]?.toUpperCase();
+    const isNumber = /^\d{2,}$/.test(token);
+
+    if (isAcronym || isCapitalized) {
+      current.push(token);
       continue;
     }
-    if (word[0] === word[0].toUpperCase()) {
-      entities.push(word);
+    if (isNumber && current.length > 0) {
+      current.push(token);
+      continue;
     }
+    flush();
   }
+  flush();
+
   return Array.from(new Set(entities));
 }
 
 function overlapCount(a: string[], b: string[]): number {
-  const setB = new Set(b.map((item) => item.toLowerCase()));
   let count = 0;
   for (const item of a) {
-    if (setB.has(item.toLowerCase())) {
-      count += 1;
+    const lowerA = item.toLowerCase();
+    for (const target of b) {
+      const lowerB = target.toLowerCase();
+      if (lowerA === lowerB || lowerA.includes(lowerB) || lowerB.includes(lowerA)) {
+        count += 1;
+        break;
+      }
     }
   }
   return count;
 }
 
 const POSITIVE = new Set([
-  'beat', 'beats', 'surge', 'surges', 'rally', 'rallies', 'win', 'wins', 'strong',
-  'growth', 'record', 'up', 'upgrade', 'boom', 'positive', 'bullish', 'soar',
+  'beat', 'beats', 'beating', 'surge', 'surges', 'surged', 'rally', 'rallies', 'rallied',
+  'win', 'wins', 'won', 'strong', 'growth', 'record', 'up', 'upgrade', 'upgrades',
+  'boom', 'positive', 'bullish', 'soar', 'soars', 'soared',
 ]);
 const NEGATIVE = new Set([
-  'miss', 'misses', 'fall', 'falls', 'drop', 'drops', 'crash', 'crashes', 'loss',
-  'weak', 'decline', 'down', 'downgrade', 'bust', 'negative', 'bearish', 'plunge',
+  'miss', 'misses', 'missed', 'fall', 'falls', 'fell', 'drop', 'drops', 'dropped',
+  'crash', 'crashes', 'crashed', 'loss', 'losses', 'weak', 'decline', 'declines',
+  'declined', 'down', 'downgrade', 'downgrades', 'bust', 'negative', 'bearish',
+  'plunge', 'plunges', 'plunged',
 ]);
 
 function scoreSentiment(text: string): number {
@@ -181,23 +222,46 @@ export function rankIntelAlerts(
     }
 
     let entityScore = 0;
-    if (settings.includeEntities.length > 0) {
-      const entities = extractEntities(text);
-      const count = overlapCount(entities, settings.includeEntities);
+    const entities = extractEntities(text);
+    const expandedEntities = expandEntities(entities, settings.entityAliases);
+    const targetIncludeEntities = expandEntities(
+      settings.includeEntities,
+      settings.entityAliases
+    );
+    const targetExcludeEntities = expandEntities(
+      settings.excludeEntities,
+      settings.entityAliases
+    );
+
+    if (targetIncludeEntities.length > 0) {
+      const count = overlapCount(expandedEntities, targetIncludeEntities);
       if (count < settings.minEntityOverlap) {
         continue;
       }
       entityScore += count;
     }
-    if (settings.excludeEntities.length > 0) {
-      const entities = extractEntities(text);
-      const count = overlapCount(entities, settings.excludeEntities);
+    if (targetExcludeEntities.length > 0) {
+      const count = overlapCount(expandedEntities, targetExcludeEntities);
       if (count > 0) {
         continue;
       }
     }
 
     const sentiment = scoreSentiment(text);
+    const preset = settings.sentimentPreset;
+    if (preset === 'positive' && sentiment < settings.positiveSentimentThreshold) {
+      continue;
+    }
+    if (preset === 'negative' && sentiment > settings.negativeSentimentThreshold) {
+      continue;
+    }
+    if (
+      preset === 'neutral' &&
+      (sentiment < settings.negativeSentimentThreshold ||
+        sentiment > settings.positiveSentimentThreshold)
+    ) {
+      continue;
+    }
     if (settings.minSentiment !== null && sentiment < settings.minSentiment) {
       continue;
     }
@@ -216,11 +280,62 @@ export function rankIntelAlerts(
 
     const link = intel.url ? `\n${intel.url}` : '';
     const scoreSuffix = settings.showScore ? ` [score: ${score.toFixed(2)}]` : '';
+    const reasonsSuffix = settings.showReasons
+      ? buildReasons({
+          keywordScore,
+          entityScore,
+          sentiment,
+          entities: expandedEntities,
+          includeKeywords: settings.includeKeywords,
+          includeEntities: targetIncludeEntities,
+        })
+      : '';
     ranked.push({
-      text: `• ${intel.title} (${intel.source})${scoreSuffix}${link}`,
+      text: `• ${intel.title} (${intel.source})${scoreSuffix}${reasonsSuffix}${link}`,
       score,
     });
   }
 
   return ranked.sort((a, b) => b.score - a.score).slice(0, settings.maxItems);
+}
+
+function expandEntities(items: string[], aliases: Record<string, string[]>): string[] {
+  const expanded: string[] = [];
+  for (const item of items) {
+    expanded.push(item);
+    const mapped = aliases[item];
+    if (mapped) {
+      expanded.push(...mapped);
+    }
+  }
+  return Array.from(new Set(expanded));
+}
+
+function buildReasons(params: {
+  keywordScore: number;
+  entityScore: number;
+  sentiment: number;
+  entities: string[];
+  includeKeywords: string[];
+  includeEntities: string[];
+}): string {
+  const reasons: string[] = [];
+  if (params.keywordScore > 0) {
+    reasons.push(`kw=${params.keywordScore}`);
+  }
+  if (params.entityScore > 0) {
+    reasons.push(`ent=${params.entityScore}`);
+  }
+  if (params.sentiment !== 0) {
+    reasons.push(`sent=${params.sentiment.toFixed(2)}`);
+  }
+  if (params.includeEntities.length > 0) {
+    const matched = params.includeEntities.filter((e) =>
+      params.entities.some((ent) => ent.toLowerCase().includes(e.toLowerCase()))
+    );
+    if (matched.length > 0) {
+      reasons.push(`match=${matched.slice(0, 3).join(',')}`);
+    }
+  }
+  return reasons.length > 0 ? ` [${reasons.join(' ')}]` : '';
 }

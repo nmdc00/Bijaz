@@ -5,6 +5,7 @@ import { Logger } from './logger.js';
 import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
 import { PaperExecutor } from '../execution/modes/paper.js';
 import { WebhookExecutor } from '../execution/modes/webhook.js';
+import { LiveExecutor } from '../execution/modes/live.js';
 import type { ExecutionAdapter } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { addWatchlist, listWatchlist } from '../memory/watchlist.js';
@@ -33,10 +34,7 @@ export class BijazAgent {
     }
     this.llm = createLlmClient(this.config);
     this.marketClient = new PolymarketMarketClient(this.config);
-    this.executor =
-      config.execution.mode === 'webhook' && config.execution.webhookUrl
-        ? new WebhookExecutor(config.execution.webhookUrl)
-        : new PaperExecutor();
+    this.executor = this.createExecutor(config);
 
     this.limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
@@ -54,6 +52,24 @@ export class BijazAgent {
       this.config,
       this.logger
     );
+  }
+
+  private createExecutor(config: BijazConfig): ExecutionAdapter {
+    if (config.execution.mode === 'live') {
+      const password = process.env.BIJAZ_WALLET_PASSWORD;
+      if (!password) {
+        throw new Error(
+          'Live execution mode requires BIJAZ_WALLET_PASSWORD environment variable'
+        );
+      }
+      return new LiveExecutor({ config, password });
+    }
+
+    if (config.execution.mode === 'webhook' && config.execution.webhookUrl) {
+      return new WebhookExecutor(config.execution.webhookUrl);
+    }
+
+    return new PaperExecutor();
   }
 
   start(): void {

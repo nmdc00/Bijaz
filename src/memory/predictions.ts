@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
+import { adjustCashBalance } from './portfolio.js';
 
 export type ConfidenceLevel = 'low' | 'medium' | 'high';
 export type Outcome = 'YES' | 'NO';
@@ -52,6 +53,7 @@ export interface OpenPositionRecord {
   predictedOutcome?: Outcome;
   executionPrice?: number | null;
   positionSize?: number | null;
+  netShares?: number | null;
   createdAt: string;
   currentPrices?: Record<string, number> | number[] | null;
 }
@@ -281,6 +283,7 @@ export function recordExecution(params: {
   id: string;
   executionPrice?: number | null;
   positionSize?: number | null;
+  cashDelta?: number | null;
 }): void {
   const db = openDatabase();
   const stmt = db.prepare(`
@@ -296,6 +299,15 @@ export function recordExecution(params: {
     executionPrice: params.executionPrice ?? null,
     positionSize: params.positionSize ?? null,
   });
+
+  if (params.cashDelta !== null && params.cashDelta !== undefined) {
+    adjustCashBalance(params.cashDelta);
+    return;
+  }
+
+  if (params.positionSize && params.positionSize > 0) {
+    adjustCashBalance(-Math.abs(params.positionSize));
+  }
 }
 
 export function listUnresolvedPredictions(limit = 50): Array<{

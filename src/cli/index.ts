@@ -18,15 +18,19 @@ import { addWatchlist, listWatchlist } from '../memory/watchlist.js';
 import { runIntelPipeline } from '../intel/pipeline.js';
 import { listRecentIntel } from '../intel/store.js';
 import { rankIntelAlerts } from '../intel/alerts.js';
+import { runProactiveSearch } from '../core/proactive_search.js';
 import {
   listCalibrationSummaries,
   listResolvedPredictions,
 } from '../memory/calibration.js';
 import { listOpenPositions } from '../memory/predictions.js';
+import { listOpenPositionsFromTrades } from '../memory/trades.js';
+import { adjustCashBalance, getCashBalance, setCashBalance } from '../memory/portfolio.js';
 import { resolveOutcomes } from '../core/resolver.js';
 import { getUserContext, updateUserContext } from '../memory/user.js';
 import { encryptPrivateKey, saveKeystore } from '../execution/wallet/keystore.js';
 import { loadWallet } from '../execution/wallet/manager.js';
+import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { ethers } from 'ethers';
 import inquirer from 'inquirer';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -109,6 +113,13 @@ wallet
     if (wallet.provider) {
       const balance = await wallet.provider.getBalance(wallet.address);
       console.log(`MATIC: ${ethers.utils.formatEther(balance)}`);
+      const { getWalletBalances } = await import('../execution/wallet/balances.js');
+      const tokenBalances = await getWalletBalances(wallet);
+      if (tokenBalances) {
+        console.log(`USDC: ${tokenBalances.usdc.toFixed(2)} (${tokenBalances.usdcAddress})`);
+      }
+    } else {
+      console.log('No RPC provider configured.');
     }
   });
 
@@ -257,6 +268,24 @@ markets
     console.log(`Adding ${id} to watchlist...`);
     addWatchlist(id);
     console.log('Done.');
+  });
+
+markets
+  .command('sync')
+  .description('Sync market cache for faster lookups')
+  .option('-l, --limit <number>', 'Limit results', '200')
+  .action(async (options) => {
+    const { syncMarketCache } = await import('../core/markets_sync.js');
+    const ora = await import('ora');
+    const spinner = ora.default('Syncing market cache...').start();
+    try {
+      const result = await syncMarketCache(config, Number(options.limit));
+      spinner.succeed(`Stored ${result.stored} market(s) in cache.`);
+    } catch (error) {
+      spinner.fail(
+        `Market sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   });
 
 markets
@@ -440,12 +469,51 @@ trade
 program
   .command('portfolio')
   .description('Show portfolio and positions')
-  .action(async () => {
+  .option('--set-cash <amount>', 'Set cash balance (USD)')
+  .option('--add-cash <amount>', 'Add to cash balance (USD)')
+  .option('--withdraw-cash <amount>', 'Withdraw from cash balance (USD)')
+  .action(async (options) => {
+    const setCash = options.setCash !== undefined ? Number(options.setCash) : undefined;
+    const addCash = options.addCash !== undefined ? Number(options.addCash) : undefined;
+    const withdrawCash =
+      options.withdrawCash !== undefined ? Number(options.withdrawCash) : undefined;
+
+    if (setCash !== undefined || addCash !== undefined || withdrawCash !== undefined) {
+      if (setCash !== undefined) {
+        if (!Number.isFinite(setCash)) {
+          console.log('Cash amount must be a number.');
+          return;
+        }
+        setCashBalance(setCash);
+      } else if (addCash !== undefined) {
+        if (!Number.isFinite(addCash)) {
+          console.log('Cash amount must be a number.');
+          return;
+        }
+        adjustCashBalance(addCash);
+      } else if (withdrawCash !== undefined) {
+        if (!Number.isFinite(withdrawCash)) {
+          console.log('Cash amount must be a number.');
+          return;
+        }
+        adjustCashBalance(-withdrawCash);
+      }
+
+      const updated = getCashBalance();
+      console.log(`Cash balance: $${updated.toFixed(2)}`);
+      return;
+    }
+
     console.log('Portfolio');
     console.log('═'.repeat(60));
-    const positions = listOpenPositions(200);
+    const positions = (() => {
+      const fromTrades = listOpenPositionsFromTrades(200);
+      return fromTrades.length > 0 ? fromTrades : listOpenPositions(200);
+    })();
+    const cashBalance = getCashBalance();
     if (positions.length === 0) {
       console.log('No open positions.');
+      console.log(`Cash Balance: $${cashBalance.toFixed(2)}`);
       return;
     }
 
@@ -470,7 +538,12 @@ program
 
       const averagePrice = position.executionPrice ?? currentPrice ?? 0;
       const positionSize = position.positionSize ?? 0;
-      const shares = averagePrice > 0 ? positionSize / averagePrice : 0;
+      const netShares =
+        typeof (position as { netShares?: number | null }).netShares === 'number'
+          ? Number((position as { netShares?: number | null }).netShares)
+          : null;
+      const shares =
+        netShares !== null ? netShares : averagePrice > 0 ? positionSize / averagePrice : 0;
       const price = currentPrice ?? averagePrice;
       const value = shares * price;
       const unrealizedPnl = value - positionSize;
@@ -487,18 +560,28 @@ program
       console.log(
         `  Value: $${value.toFixed(2)} | PnL: ${unrealizedPnl >= 0 ? '+' : ''}$${unrealizedPnl.toFixed(2)} (${unrealizedPnlPercent.toFixed(1)}%)`
       );
+      const realizedPnl =
+        typeof (position as { realizedPnl?: number | null }).realizedPnl === 'number'
+          ? Number((position as { realizedPnl?: number | null }).realizedPnl)
+          : null;
+      if (realizedPnl !== null) {
+        console.log(`  Realized: ${realizedPnl >= 0 ? '+' : ''}$${realizedPnl.toFixed(2)}`);
+      }
       console.log(`  Market ID: ${position.marketId}`);
       console.log('');
     }
 
     const totalPnl = totalValue - totalCost;
     const totalPnlPercent = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+    const totalEquity = cashBalance + totalValue;
 
     console.log('Totals');
     console.log('─'.repeat(60));
     console.log(`Total Value: $${totalValue.toFixed(2)}`);
     console.log(`Total Cost: $${totalCost.toFixed(2)}`);
     console.log(`Total PnL: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)} (${totalPnlPercent.toFixed(1)}%)`);
+    console.log(`Cash Balance: $${cashBalance.toFixed(2)}`);
+    console.log(`Total Equity: $${totalEquity.toFixed(2)}`);
   });
 
 // ============================================================================
@@ -720,11 +803,32 @@ intel
   .command('alerts')
   .description('Preview intel alerts with current config')
   .option('-l, --limit <number>', 'Limit items scanned', '50')
+  .option('--show-score', 'Show alert scores')
+  .option('--show-reasons', 'Show alert reasons')
+  .option('--min-score <number>', 'Minimum score threshold')
+  .option('--sentiment <preset>', 'Sentiment preset: any|positive|negative|neutral')
   .action(async (options) => {
     const alertsConfig = config.notifications?.intelAlerts;
     if (!alertsConfig?.enabled) {
       console.log('Intel alerts are disabled in config.');
       return;
+    }
+
+    const previewConfig = { ...alertsConfig };
+    if (options.showScore) {
+      previewConfig.showScore = true;
+    }
+    if (options.showReasons) {
+      previewConfig.showReasons = true;
+    }
+    if (options.minScore !== undefined) {
+      const minScore = Number(options.minScore);
+      if (!Number.isNaN(minScore)) {
+        previewConfig.minScore = minScore;
+      }
+    }
+    if (options.sentiment) {
+      previewConfig.sentimentPreset = String(options.sentiment) as 'any' | 'positive' | 'negative' | 'neutral';
     }
 
     const limit = Number(options.limit);
@@ -757,7 +861,7 @@ intel
         url: item.url,
         content: item.content,
       })),
-      alertsConfig,
+      previewConfig,
       watchlistTitles
     ).map((item) => item.text);
 
@@ -778,6 +882,26 @@ intel
   .action(async () => {
     const stored = await runIntelPipeline(config);
     console.log(`Intel updated. New items stored: ${stored}.`);
+  });
+
+intel
+  .command('proactive')
+  .description('Run proactive search (Clawdbot-style)')
+  .option('--max-queries <number>', 'Max search queries', '8')
+  .option('--watchlist-limit <number>', 'Watchlist markets to scan', '20')
+  .option('--recent-intel-limit <number>', 'Recent intel items to seed queries', '25')
+  .option('--no-llm', 'Disable LLM query refinement')
+  .option('--extra <query...>', 'Extra queries to include')
+  .action(async (options) => {
+    const result = await runProactiveSearch(config, {
+      maxQueries: Number(options.maxQueries),
+      watchlistLimit: Number(options.watchlistLimit),
+      useLlm: options.llm !== false,
+      recentIntelLimit: Number(options.recentIntelLimit),
+      extraQueries: Array.isArray(options.extra) ? options.extra : [],
+    });
+    console.log(`Queries: ${result.queries.join(' | ')}`);
+    console.log(`Stored items: ${result.storedCount}`);
   });
 
 // ============================================================================

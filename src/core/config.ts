@@ -28,7 +28,7 @@ const ConfigSchema = z.object({
   }),
   execution: z
     .object({
-      mode: z.enum(['paper', 'webhook']).default('paper'),
+      mode: z.enum(['paper', 'webhook', 'live']).default('paper'),
       webhookUrl: z.string().optional(),
     })
     .default({}),
@@ -207,6 +207,24 @@ const ConfigSchema = z.object({
           time: z.string().default('06:00'),
         })
         .default({}),
+      marketSync: z
+        .object({
+          enabled: z.boolean().default(false),
+          time: z.string().default('07:00'),
+          limit: z.number().default(200),
+        })
+        .default({}),
+      proactiveSearch: z
+        .object({
+          enabled: z.boolean().default(false),
+          time: z.string().default('07:30'),
+          maxQueries: z.number().default(8),
+          watchlistLimit: z.number().default(20),
+          useLlm: z.boolean().default(true),
+          recentIntelLimit: z.number().default(25),
+          extraQueries: z.array(z.string()).default([]),
+        })
+        .default({}),
       intelAlerts: z
         .object({
           enabled: z.boolean().default(false),
@@ -221,6 +239,7 @@ const ConfigSchema = z.object({
           minTitleLength: z.number().default(8),
           minSentiment: z.number().optional(),
           maxSentiment: z.number().optional(),
+          sentimentPreset: z.enum(['any', 'positive', 'negative', 'neutral']).default('any'),
           includeEntities: z.array(z.string()).default([]),
           excludeEntities: z.array(z.string()).default([]),
           minEntityOverlap: z.number().default(1),
@@ -230,6 +249,8 @@ const ConfigSchema = z.object({
           entityWeight: z.number().default(1),
           sentimentWeight: z.number().default(1),
           showScore: z.boolean().default(false),
+          showReasons: z.boolean().default(false),
+          entityAliases: z.record(z.array(z.string())).default({}),
         })
         .default({}),
     })

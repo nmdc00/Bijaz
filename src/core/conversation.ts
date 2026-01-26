@@ -391,7 +391,7 @@ export class ConversationHandler {
     clearChatMessages(sessionId);
   }
 
-  private async buildSemanticChatContext(message: string, userId: string): Promise<string> {
+  private async buildSemanticChatContext(message: string, _userId: string): Promise<string> {
     if (!this.config.memory?.embeddings?.enabled) {
       return '';
     }
@@ -442,6 +442,7 @@ export class ConversationHandler {
       | 'confirm'
       | 'watchlist'
       | 'keywords'
+      | 'sentiment'
       | 'sources'
       | undefined;
 
@@ -499,10 +500,28 @@ export class ConversationHandler {
 
       updateUserContext(userId, {
         preferences: {
-          intelAlertsPending: 'sources',
+          intelAlertsPending: 'sentiment',
           intelAlertsDraft: {
             ...(preferences as Record<string, any>).intelAlertsDraft,
             includeKeywords: keywords,
+          },
+        },
+      });
+      return 'Do you want alerts for positive, negative, neutral, or any sentiment? Reply with one of: positive | negative | neutral | any.';
+    }
+
+    if (pending === 'sentiment') {
+      const preset = normalized;
+      const allowed = ['positive', 'negative', 'neutral', 'any'];
+      if (!allowed.includes(preset)) {
+        return 'Please reply with one of: positive | negative | neutral | any.';
+      }
+      updateUserContext(userId, {
+        preferences: {
+          intelAlertsPending: 'sources',
+          intelAlertsDraft: {
+            ...(preferences as Record<string, any>).intelAlertsDraft,
+            sentimentPreset: preset,
           },
         },
       });
@@ -522,6 +541,7 @@ export class ConversationHandler {
         watchlistOnly: draft.watchlistOnly ?? true,
         includeKeywords: draft.includeKeywords ?? [],
         includeSources: sources,
+        sentimentPreset: draft.sentimentPreset ?? 'any',
       };
 
       const saved = this.applyIntelAlertConfig(updated);
@@ -547,6 +567,7 @@ export class ConversationHandler {
     watchlistOnly: boolean;
     includeKeywords: string[];
     includeSources: string[];
+    sentimentPreset: 'any' | 'positive' | 'negative' | 'neutral';
   }): boolean {
     try {
       const path =
@@ -566,6 +587,7 @@ export class ConversationHandler {
       intelAlerts.watchlistOnly = settings.watchlistOnly;
       intelAlerts.includeKeywords = settings.includeKeywords;
       intelAlerts.includeSources = settings.includeSources;
+      intelAlerts.sentimentPreset = settings.sentimentPreset;
       intelAlerts.maxItems = intelAlerts.maxItems ?? 10;
       intelAlerts.minKeywordOverlap = intelAlerts.minKeywordOverlap ?? 1;
       intelAlerts.minTitleLength = intelAlerts.minTitleLength ?? 8;

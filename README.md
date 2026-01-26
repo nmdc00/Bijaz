@@ -176,9 +176,39 @@ agent:
 #### Execution Modes
 ```yaml
 execution:
-  mode: paper            # paper | webhook
+  mode: paper            # paper | webhook | live
   webhookUrl: ""         # required for webhook mode
 ```
+
+**Mode descriptions:**
+- `paper` (default): Simulates trades without real execution. Tracks positions and P&L for practice/testing.
+- `webhook`: Sends trade decisions to an external URL for execution (useful for external signing services).
+- `live`: Executes real trades on Polymarket via the CLOB API. Requires wallet setup and `BIJAZ_WALLET_PASSWORD` environment variable.
+
+**Live mode setup:**
+```bash
+# 1. Create or import a wallet
+bijaz wallet create
+# or
+bijaz wallet import
+
+# 2. Set your wallet password as environment variable
+export BIJAZ_WALLET_PASSWORD="your-secure-password"
+
+# 3. Update config to use live mode
+# In config.yaml:
+# execution:
+#   mode: live
+
+# 4. Start the gateway
+pnpm bijaz gateway
+```
+
+**Security note:** Live mode connects to real markets with real funds. Always:
+- Use a dedicated hot wallet with limited funds
+- Set conservative spending limits
+- Test thoroughly in paper mode first
+- See [Wallet Security Guide](docs/WALLET_SECURITY.md) for details
 
 #### Wallet
 ```yaml
@@ -261,6 +291,7 @@ notifications:
     minTitleLength: 8
     minSentiment:
     maxSentiment:
+    sentimentPreset: any
     includeEntities: []
     excludeEntities: []
     minEntityOverlap: 1
@@ -269,7 +300,11 @@ notifications:
     keywordWeight: 1
     entityWeight: 1
     sentimentWeight: 1
+    positiveSentimentThreshold: 0.05
+    negativeSentimentThreshold: -0.05
     showScore: false
+    showReasons: false
+    entityAliases: {}
 ```
 
 #### Channels
@@ -319,6 +354,13 @@ bijaz calibration show
 
 # View portfolio
 bijaz portfolio
+# Set or adjust cash balance
+bijaz portfolio --set-cash 1000
+bijaz portfolio --add-cash 250
+bijaz portfolio --withdraw-cash 100
+
+# Sync market cache (improves portfolio pricing)
+bijaz markets sync --limit 200
 
 # Manual trade
 bijaz trade buy "French Election - Le Pen" YES 0.35 --amount 50
@@ -342,6 +384,7 @@ bijaz user set <id> --domains politics,crypto --risk moderate --pref timezone=ES
 bijaz intel status
 bijaz intel recent --limit 20
 bijaz intel alerts --limit 50
+bijaz intel proactive --provider internal --max-queries 8
 ```
 
 ### Memory (CLI)
@@ -590,7 +633,7 @@ MIT License - See [LICENSE](LICENSE)
 ## Clawdbot Integration Plan
 
 Bijaz is designed to eventually fork [Clawdbot](https://github.com/clawdbot/clawdbot) for its:
-- **Proactive search capabilities** - Clawdbot can autonomously search and gather information
+- **Proactive search capabilities** - now implemented locally, but Clawdbot offers a mature foundation
 - **Multi-step reasoning** - Complex task decomposition
 - **Session management** - Robust conversation state
 - **Skills system** - Modular capabilities
@@ -600,6 +643,22 @@ Currently, Bijaz uses a lightweight gateway substitute. The plan is to integrate
 2. Multi-step research before making predictions
 3. Learning from conversation patterns
 4. More sophisticated autonomous reasoning
+
+### Proactive Search (Clawdbot-Style, Local)
+Bijaz now runs a Clawdbot-style proactive search loop locally. It generates queries from your watchlist
+and recent intel, optionally refines them with the LLM, then runs the intel pipeline using those queries.
+
+Config example:
+```yaml
+notifications:
+  proactiveSearch:
+    enabled: true
+    time: "07:30"
+    maxQueries: 8
+    watchlistLimit: 20
+    recentIntelLimit: 25
+    useLlm: true
+```
 
 ## Acknowledgments
 

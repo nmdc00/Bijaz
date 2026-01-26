@@ -166,11 +166,14 @@ Autonomous trading assistant for prediction markets with strong guardrails:
 - [x] Intel alerts for watchlist-related news
 - [x] Wallet keystore encryption
 - [x] CLI commands
+- [x] Portfolio/position tracking + balance reporting
+- [x] Trade ledger with realized PnL
+- [x] Market cache sync job + CLI
+- [x] Proactive search (Clawdbot-style local loop)
 
 ## What's Missing
 - [ ] Polymarket execution adapter (CLOB or on-chain signing) - **CRITICAL for real trading**
-- [ ] Portfolio/position tracking + balance reporting
-- [ ] Full Clawdbot integration for proactive search
+- [ ] Full Clawdbot fork (gateway + sessions + channels)
 - [ ] ChromaDB vector search (optional; SQLite embeddings now exist)
 
 ## Next Steps (Priority Order)

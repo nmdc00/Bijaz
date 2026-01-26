@@ -413,6 +413,7 @@ notifications:
     minTitleLength: 8
     minSentiment:
     maxSentiment:
+    sentimentPreset: any
     includeEntities: []
     excludeEntities: []
     minEntityOverlap: 1
@@ -421,7 +422,11 @@ notifications:
     keywordWeight: 1
     entityWeight: 1
     sentimentWeight: 1
+    positiveSentimentThreshold: 0.05
+    negativeSentimentThreshold: -0.05
     showScore: false
+    showReasons: false
+    entityAliases: {}
 ```
 
 ## Monitoring
@@ -449,6 +454,9 @@ bijaz intel search "Federal Reserve" --from 7d
 
 # Preview alerts
 bijaz intel alerts --limit 50
+bijaz intel alerts --show-score --min-score 1.5
+bijaz intel alerts --show-reasons
+bijaz intel alerts --sentiment negative
 ```
 
 ## Conversational Alert Setup

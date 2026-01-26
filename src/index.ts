@@ -4,17 +4,19 @@
  * Main entry point for the Bijaz library.
  */
 
-import type { BijazConfig } from './core/config.js';
-import { loadConfig } from './core/config.js';
+import { loadConfig, type BijazConfig } from './core/config.js';
 import { createLlmClient } from './core/llm.js';
 import { ConversationHandler } from './core/conversation.js';
 import { PolymarketMarketClient } from './execution/polymarket/markets.js';
 import { PaperExecutor } from './execution/modes/paper.js';
 import { WebhookExecutor } from './execution/modes/webhook.js';
+import { LiveExecutor } from './execution/modes/live.js';
 import type { ExecutionAdapter } from './execution/executor.js';
 import { DbSpendingLimitEnforcer } from './execution/wallet/limits_db.js';
 import { listCalibrationSummaries } from './memory/calibration.js';
 import { listOpenPositions } from './memory/predictions.js';
+import { listOpenPositionsFromTrades } from './memory/trades.js';
+import { getCashBalance } from './memory/portfolio.js';
 
 // Re-export types
 export * from './types/index.js';
@@ -66,7 +68,6 @@ export const VERSION = '0.1.0';
 export class Bijaz {
   private configPath?: string;
   private userId: string;
-  private config?: BijazConfig;
   private llm?: ReturnType<typeof createLlmClient>;
   private marketClient?: PolymarketMarketClient;
   private executor?: ExecutionAdapter;
@@ -92,13 +93,9 @@ export class Bijaz {
       process.env.BIJAZ_DB_PATH = config.memory.dbPath;
     }
 
-    this.config = config;
     this.llm = createLlmClient(config);
     this.marketClient = new PolymarketMarketClient(config);
-    this.executor =
-      config.execution.mode === 'webhook' && config.execution.webhookUrl
-        ? new WebhookExecutor(config.execution.webhookUrl)
-        : new PaperExecutor();
+    this.executor = this.createExecutor(config);
     this.limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
       perTrade: config.wallet?.limits?.perTrade ?? 25,
@@ -107,6 +104,24 @@ export class Bijaz {
     this.conversation = new ConversationHandler(this.llm, this.marketClient, config);
 
     this.started = true;
+  }
+
+  private createExecutor(config: BijazConfig): ExecutionAdapter {
+    if (config.execution.mode === 'live') {
+      const password = process.env.BIJAZ_WALLET_PASSWORD;
+      if (!password) {
+        throw new Error(
+          'Live execution mode requires BIJAZ_WALLET_PASSWORD environment variable'
+        );
+      }
+      return new LiveExecutor({ config, password });
+    }
+
+    if (config.execution.mode === 'webhook' && config.execution.webhookUrl) {
+      return new WebhookExecutor(config.execution.webhookUrl);
+    }
+
+    return new PaperExecutor();
   }
 
   /**
@@ -122,7 +137,6 @@ export class Bijaz {
     this.executor = undefined;
     this.marketClient = undefined;
     this.llm = undefined;
-    this.config = undefined;
     this.started = false;
   }
 
@@ -181,7 +195,11 @@ export class Bijaz {
    */
   async getPortfolio(): Promise<unknown> {
     this.ensureStarted();
-    const positions = listOpenPositions(200);
+    const positions = (() => {
+      const fromTrades = listOpenPositionsFromTrades(200);
+      return fromTrades.length > 0 ? fromTrades : listOpenPositions(200);
+    })();
+    const cashBalance = getCashBalance();
 
     const formatted = positions.map((position) => {
       const outcome = position.predictedOutcome ?? 'YES';
@@ -201,12 +219,21 @@ export class Bijaz {
 
       const averagePrice = position.executionPrice ?? currentPrice ?? 0;
       const positionSize = position.positionSize ?? 0;
-      const shares = averagePrice > 0 ? positionSize / averagePrice : 0;
+      const netShares =
+        typeof (position as { netShares?: number | null }).netShares === 'number'
+          ? Number((position as { netShares?: number | null }).netShares)
+          : null;
+      const shares =
+        netShares !== null ? netShares : averagePrice > 0 ? positionSize / averagePrice : 0;
       const price = currentPrice ?? averagePrice;
       const value = shares * price;
       const unrealizedPnl = value - positionSize;
       const unrealizedPnlPercent =
         positionSize > 0 ? (unrealizedPnl / positionSize) * 100 : 0;
+      const realizedPnl =
+        typeof (position as { realizedPnl?: number | null }).realizedPnl === 'number'
+          ? Number((position as { realizedPnl?: number | null }).realizedPnl)
+          : undefined;
 
       return {
         marketId: position.marketId,
@@ -218,6 +245,7 @@ export class Bijaz {
         value,
         unrealizedPnl,
         unrealizedPnlPercent,
+        realizedPnl,
       };
     });
 
@@ -226,13 +254,16 @@ export class Bijaz {
     const totalPnl = totalValue - totalCost;
     const totalPnlPercent = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
+    const totalEquity = cashBalance + totalValue;
+
     return {
       positions: formatted,
       totalValue,
       totalCost,
       totalPnl,
       totalPnlPercent,
-      cashBalance: 0,
+      cashBalance,
+      totalEquity,
     };
   }
 

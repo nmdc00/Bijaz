@@ -7,12 +7,14 @@ import { BijazAgent } from '../core/agent.js';
 import { TelegramAdapter } from '../interface/telegram.js';
 import { WhatsAppAdapter } from '../interface/whatsapp.js';
 import { resolveOutcomes } from '../core/resolver.js';
-import { runIntelPipeline, runIntelPipelineDetailed } from '../intel/pipeline.js';
+import { runIntelPipelineDetailed } from '../intel/pipeline.js';
 import { pruneChatMessages } from '../memory/chat.js';
 import { listWatchlist } from '../memory/watchlist.js';
 import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
 import { pruneIntel } from '../intel/store.js';
 import { rankIntelAlerts } from '../intel/alerts.js';
+import { syncMarketCache } from '../core/markets_sync.js';
+import { runProactiveSearch } from '../core/proactive_search.js';
 
 const config = loadConfig();
 const rawLevel = (process.env.BIJAZ_LOG_LEVEL ?? 'info').toLowerCase();
@@ -138,6 +140,71 @@ if (intelFetchConfig?.enabled) {
   }, 60_000);
 }
 
+const marketSyncConfig = config.notifications?.marketSync;
+let lastMarketSyncDate = '';
+if (marketSyncConfig?.enabled) {
+  setInterval(async () => {
+    const now = new Date();
+    const [hours, minutes] = marketSyncConfig.time.split(':').map((part) => Number(part));
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+      return;
+    }
+    const today = now.toISOString().split('T')[0]!;
+    if (lastMarketSyncDate === today) {
+      return;
+    }
+    if (now.getHours() !== hours || now.getMinutes() !== minutes) {
+      return;
+    }
+
+    try {
+      const result = await syncMarketCache(config, marketSyncConfig.limit);
+      logger.info(`Market cache sync stored ${result.stored} market(s).`);
+    } catch (error) {
+      logger.error('Market cache sync failed', error);
+    }
+    lastMarketSyncDate = today;
+  }, 60_000);
+}
+
+const proactiveConfig = config.notifications?.proactiveSearch;
+let lastProactiveDate = '';
+if (proactiveConfig?.enabled) {
+  setInterval(async () => {
+    const now = new Date();
+    const [hours, minutes] = proactiveConfig.time.split(':').map((part) => Number(part));
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+      return;
+    }
+    const today = now.toISOString().split('T')[0]!;
+    if (lastProactiveDate === today) {
+      return;
+    }
+    if (now.getHours() !== hours || now.getMinutes() !== minutes) {
+      return;
+    }
+
+    try {
+      const result = await runProactiveSearch(config, {
+        maxQueries: proactiveConfig.maxQueries,
+        watchlistLimit: proactiveConfig.watchlistLimit,
+        useLlm: proactiveConfig.useLlm,
+        recentIntelLimit: proactiveConfig.recentIntelLimit,
+        extraQueries: proactiveConfig.extraQueries,
+      });
+      logger.info(`Proactive search stored ${result.storedCount} item(s).`);
+
+      const alertsConfig = config.notifications?.intelAlerts;
+      if (alertsConfig?.enabled && result.storedItems.length > 0) {
+        await sendIntelAlerts(result.storedItems, alertsConfig);
+      }
+    } catch (error) {
+      logger.error('Proactive search failed', error);
+    }
+    lastProactiveDate = today;
+  }, 60_000);
+}
+
 const dailyReportConfig = config.notifications?.dailyReport;
 if (dailyReportConfig?.enabled) {
   agent.getAutonomous().on('daily-report', async (report) => {
@@ -194,6 +261,22 @@ async function sendIntelAlerts(
     excludeKeywords?: string[];
     minKeywordOverlap?: number;
     minTitleLength?: number;
+    minSentiment?: number;
+    maxSentiment?: number;
+    sentimentPreset?: 'any' | 'positive' | 'negative' | 'neutral';
+    includeEntities?: string[];
+    excludeEntities?: string[];
+    minEntityOverlap?: number;
+    useContent?: boolean;
+    minScore?: number;
+    keywordWeight?: number;
+    entityWeight?: number;
+    sentimentWeight?: number;
+    positiveSentimentThreshold?: number;
+    negativeSentimentThreshold?: number;
+    showScore?: boolean;
+    showReasons?: boolean;
+    entityAliases?: Record<string, string[]>;
   }
 ): Promise<void> {
   const settings = {
@@ -206,6 +289,22 @@ async function sendIntelAlerts(
     excludeKeywords: alertsConfig.excludeKeywords ?? [],
     minKeywordOverlap: alertsConfig.minKeywordOverlap ?? 1,
     minTitleLength: alertsConfig.minTitleLength ?? 8,
+    minSentiment: alertsConfig.minSentiment ?? undefined,
+    maxSentiment: alertsConfig.maxSentiment ?? undefined,
+    sentimentPreset: alertsConfig.sentimentPreset ?? 'any',
+    includeEntities: alertsConfig.includeEntities ?? [],
+    excludeEntities: alertsConfig.excludeEntities ?? [],
+    minEntityOverlap: alertsConfig.minEntityOverlap ?? 1,
+    useContent: alertsConfig.useContent ?? true,
+    minScore: alertsConfig.minScore ?? 0,
+    keywordWeight: alertsConfig.keywordWeight ?? 1,
+    entityWeight: alertsConfig.entityWeight ?? 1,
+    sentimentWeight: alertsConfig.sentimentWeight ?? 1,
+    positiveSentimentThreshold: alertsConfig.positiveSentimentThreshold ?? 0.05,
+    negativeSentimentThreshold: alertsConfig.negativeSentimentThreshold ?? -0.05,
+    showScore: alertsConfig.showScore ?? false,
+    showReasons: alertsConfig.showReasons ?? false,
+    entityAliases: alertsConfig.entityAliases ?? {},
   };
 
   const marketClient = new PolymarketMarketClient(config);

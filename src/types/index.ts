@@ -200,6 +200,7 @@ export interface Position {
   value: number;
   unrealizedPnl: number;
   unrealizedPnlPercent: number;
+  realizedPnl?: number;
 }
 
 export interface Portfolio {
@@ -209,6 +210,7 @@ export interface Portfolio {
   totalPnl: number;
   totalPnlPercent: number;
   cashBalance: number;
+  totalEquity?: number;
 }
 
 export interface Balance {

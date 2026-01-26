@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import type { ExecutionAdapter, TradeDecision, TradeResult } from '../executor.js';
 import type { Market } from '../polymarket/markets.js';
 import { createPrediction, recordExecution } from '../../memory/predictions.js';
+import { recordTrade } from '../../memory/trades.js';
 import { logWalletOperation } from '../../memory/audit.js';
 
 export class WebhookExecutor implements ExecutionAdapter {
@@ -51,6 +52,20 @@ export class WebhookExecutor implements ExecutionAdapter {
       id: predictionId,
       executionPrice: market.prices?.[decision.outcome] ?? null,
       positionSize: decision.amount,
+      cashDelta: decision.action === 'sell' ? decision.amount : -decision.amount,
+    });
+
+    const price = market.prices?.[decision.outcome] ?? null;
+    const shares = price && price > 0 ? decision.amount / price : null;
+    recordTrade({
+      predictionId,
+      marketId: market.id,
+      marketTitle: market.question,
+      outcome: decision.outcome,
+      side: decision.action,
+      price,
+      amount: decision.amount,
+      shares,
     });
 
     logWalletOperation({

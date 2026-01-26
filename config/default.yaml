@@ -120,6 +120,18 @@ notifications:
   intelFetch:
     enabled: false
     time: "06:00"
+  marketSync:
+    enabled: false
+    time: "07:00"
+    limit: 200
+  proactiveSearch:
+    enabled: false
+    time: "07:30"
+    maxQueries: 8
+    watchlistLimit: 20
+    useLlm: true
+    recentIntelLimit: 25
+    extraQueries: []
   intelAlerts:
     enabled: false
     channels: []
@@ -133,6 +145,7 @@ notifications:
     minTitleLength: 8
     minSentiment:
     maxSentiment:
+    sentimentPreset: any
     includeEntities: []
     excludeEntities: []
     minEntityOverlap: 1
@@ -141,7 +154,11 @@ notifications:
     keywordWeight: 1
     entityWeight: 1
     sentimentWeight: 1
+    positiveSentimentThreshold: 0.05
+    negativeSentimentThreshold: -0.05
     showScore: false
+    showReasons: false
+    entityAliases: {}
 
 # Intel sources
 intel:

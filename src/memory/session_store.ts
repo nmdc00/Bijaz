@@ -27,9 +27,9 @@ export class SessionStore {
   private transcriptsDir: string;
   private meta: Record<string, SessionMeta> = {};
 
-  constructor(private config: BijazConfig) {
+  constructor(_config: BijazConfig) {
     const base =
-      config.memory?.sessionsPath ?? join(homedir(), '.bijaz', 'sessions');
+      _config.memory?.sessionsPath ?? join(homedir(), '.bijaz', 'sessions');
     this.baseDir = base;
     this.sessionsPath = join(base, 'sessions.json');
     this.transcriptsDir = join(base, 'transcripts');
@@ -192,7 +192,7 @@ ${messagesText}
     const entriesToKeep: TranscriptEntry[] = [
       summaryEntry,
       ...recent.map((entry) => ({
-        type: 'message',
+        type: 'message' as const,
         role: entry.role,
         content: entry.content,
         timestamp: entry.timestamp,

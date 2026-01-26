@@ -14,9 +14,34 @@ export interface IntelPipelineResult {
   storedItems: StoredIntel[];
 }
 
+export interface IntelPipelineOverrides {
+  newsapiQueries?: string[];
+  googlenewsQueries?: string[];
+  twitterKeywords?: string[];
+}
+
 export async function runIntelPipeline(config: BijazConfig): Promise<number> {
   const result = await runIntelPipelineDetailed(config);
   return result.storedCount;
+}
+
+export async function runIntelPipelineDetailedWithOverrides(
+  config: BijazConfig,
+  overrides: IntelPipelineOverrides
+): Promise<IntelPipelineResult> {
+  const cloned = JSON.parse(JSON.stringify(config)) as BijazConfig;
+
+  if (overrides.newsapiQueries && cloned.intel?.sources?.newsapi) {
+    cloned.intel.sources.newsapi.queries = overrides.newsapiQueries;
+  }
+  if (overrides.googlenewsQueries && cloned.intel?.sources?.googlenews) {
+    cloned.intel.sources.googlenews.queries = overrides.googlenewsQueries;
+  }
+  if (overrides.twitterKeywords && cloned.intel?.sources?.twitter) {
+    cloned.intel.sources.twitter.keywords = overrides.twitterKeywords;
+  }
+
+  return runIntelPipelineDetailed(cloned);
 }
 
 export async function runIntelPipelineDetailed(

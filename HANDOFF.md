@@ -34,11 +34,13 @@ This document provides everything needed to continue development on Bijaz.
 - NewsAPI/Google News/Twitter/Polymarket comments intel
 - Conversational intel alert setup + preview
 - Paper trading works, real trading needs Polymarket adapter
+- Portfolio positions + cash balance tracking (CLI `bijaz portfolio --set-cash`)
+- Trade ledger + realized PnL (FIFO) + market cache sync
+- Proactive search loop (Clawdbot-style, local) + CLI `bijaz intel proactive`
 
 ### Immediate Next Steps
 1. Build Polymarket execution adapter (CLOB API) for real trading
-2. Portfolio/position tracking + balance reporting
-3. Fork Clawdbot for proactive search capabilities
+2. Full Clawdbot fork (gateway + sessions + channels)
 
 ---
 

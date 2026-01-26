@@ -1,4 +1,6 @@
 import { openDatabase } from './db.js';
+import { adjustCashBalance } from './portfolio.js';
+import { listTradesByPrediction } from './trades.js';
 
 export interface CalibrationSummary {
   domain: string;
@@ -17,24 +19,76 @@ export function recordOutcome(params: {
   const prediction = db
     .prepare(
       `
-        SELECT predicted_outcome as predictedOutcome, predicted_probability as predictedProbability
+        SELECT outcome,
+               predicted_outcome as predictedOutcome,
+               predicted_probability as predictedProbability,
+               executed,
+               execution_price as executionPrice,
+               position_size as positionSize
         FROM predictions
         WHERE id = ?
       `
     )
-    .get(params.id) as { predictedOutcome?: string; predictedProbability?: number } | undefined;
+    .get(params.id) as
+    | {
+        outcome?: string | null;
+        predictedOutcome?: string;
+        predictedProbability?: number;
+        executed?: number;
+        executionPrice?: number | null;
+        positionSize?: number | null;
+      }
+    | undefined;
+
+  if (prediction?.outcome) {
+    return;
+  }
 
   const predictedProbability = prediction?.predictedProbability ?? null;
   const outcomeValue = params.outcome === 'YES' ? 1 : 0;
   const brier =
     predictedProbability === null ? null : Math.pow(predictedProbability - outcomeValue, 2);
 
+  let pnl: number | null = null;
+  let payout: number | null = null;
+  const trades = listTradesByPrediction(params.id);
+  if (trades.length > 0) {
+    const cashFlow = trades.reduce((sum, trade) => {
+      const amount = trade.amount ?? 0;
+      return sum + (trade.side === 'sell' ? amount : -amount);
+    }, 0);
+    const sharesByOutcome = new Map<string, number>();
+    for (const trade of trades) {
+      const shares = trade.shares ?? 0;
+      const key = trade.outcome;
+      const current = sharesByOutcome.get(key) ?? 0;
+      sharesByOutcome.set(
+        key,
+        current + (trade.side === 'sell' ? -shares : shares)
+      );
+    }
+    payout = sharesByOutcome.get(params.outcome) ?? 0;
+    pnl = cashFlow + payout;
+  } else if (prediction?.executed && prediction.positionSize) {
+    const positionSize = prediction.positionSize;
+    if ((prediction.predictedOutcome ?? '').toUpperCase() === params.outcome) {
+      if (prediction.executionPrice && prediction.executionPrice > 0) {
+        const shares = positionSize / prediction.executionPrice;
+        payout = shares;
+        pnl = shares - positionSize;
+      }
+    } else {
+      pnl = -positionSize;
+    }
+  }
+
   db.prepare(
     `
       UPDATE predictions
       SET outcome = @outcome,
           outcome_timestamp = @outcomeTimestamp,
-          brier_contribution = @brier
+          brier_contribution = @brier,
+          pnl = @pnl
       WHERE id = @id
     `
   ).run({
@@ -42,7 +96,12 @@ export function recordOutcome(params: {
     outcome: params.outcome,
     outcomeTimestamp: params.outcomeTimestamp ?? new Date().toISOString(),
     brier,
+    pnl,
   });
+
+  if (payout && payout > 0) {
+    adjustCashBalance(payout);
+  }
 }
 
 export function listCalibrationSummaries(): CalibrationSummary[] {

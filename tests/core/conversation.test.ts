@@ -39,9 +39,13 @@ vi.mock('../../src/memory/db.js', () => ({
   }),
 }));
 
+const userPreferences: Record<string, any> = {};
+
 vi.mock('../../src/memory/user.js', () => ({
-  getUserContext: () => null,
-  updateUserContext: () => undefined,
+  getUserContext: () => ({ preferences: userPreferences }),
+  updateUserContext: (_userId: string, updates: any) => {
+    Object.assign(userPreferences, updates.preferences ?? {});
+  },
 }));
 
 vi.mock('../../src/memory/session_store.js', () => ({
@@ -129,8 +133,14 @@ describe('ConversationHandler', () => {
     } as any;
 
     const handler = new ConversationHandler(llm as any, marketClient as any, config);
+    userPreferences.intelAlertsConfigured = true;
+    userPreferences.intelAlertsPending = undefined;
     await handler.chat('user', 'Hello');
-    const systemMessage = (llm.complete as any).mock.calls[0][0][0].content;
+    const calls = (llm.complete as any).mock.calls;
+    if (calls.length === 0) {
+      throw new Error('LLM was not called');
+    }
+    const systemMessage = calls[0][0][0].content;
     expect(systemMessage).toContain('Relevant Past Conversation');
   });
 
@@ -143,6 +153,8 @@ describe('ConversationHandler', () => {
     const config = { notifications: { intelAlerts: { enabled: false } } } as any;
 
     const handler = new ConversationHandler(llm as any, marketClient as any, config);
+    userPreferences.intelAlertsConfigured = false;
+    userPreferences.intelAlertsPrompted = false;
     const reply = await handler.chat('user', 'Hello');
     expect(reply).toContain('set up intel alerts');
   });

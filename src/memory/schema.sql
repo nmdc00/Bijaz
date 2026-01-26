@@ -144,6 +144,40 @@ INSERT OR IGNORE INTO spending_state (id, today_spent, last_reset_date, today_tr
 VALUES (1, 0, date('now'), 0);
 
 -- ============================================================================
+-- Portfolio State
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS portfolio_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),  -- Singleton row
+    cash_balance REAL DEFAULT 0,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO portfolio_state (id, cash_balance)
+VALUES (1, 0);
+
+-- ============================================================================
+-- Trade Ledger
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prediction_id TEXT,
+    market_id TEXT NOT NULL,
+    market_title TEXT NOT NULL,
+    outcome TEXT CHECK(outcome IN ('YES', 'NO')) NOT NULL,
+    side TEXT CHECK(side IN ('buy', 'sell')) NOT NULL,
+    price REAL,
+    amount REAL,
+    shares REAL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_prediction ON trades(prediction_id);
+CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id);
+CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at);
+
+-- ============================================================================
 -- Market Cache
 -- ============================================================================
 
