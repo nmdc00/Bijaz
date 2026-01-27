@@ -37,6 +37,8 @@ export class PolymarketMarketClient {
   async listMarkets(limit = 20): Promise<Market[]> {
     const url = new URL(`${this.gammaUrl}/markets`);
     url.searchParams.set('limit', String(limit));
+    url.searchParams.set('active', 'true');
+    url.searchParams.set('closed', 'false');
     const response = await fetch(url.toString());
     if (!response.ok) {
       throw new Error(`Failed to fetch markets: ${response.status}`);
@@ -49,6 +51,8 @@ export class PolymarketMarketClient {
   async searchMarkets(query: string, limit = 10): Promise<Market[]> {
     const url = new URL(`${this.gammaUrl}/markets`);
     url.searchParams.set('limit', String(limit));
+    url.searchParams.set('active', 'true');
+    url.searchParams.set('closed', 'false');
     url.searchParams.set('search', query);
     const response = await fetch(url.toString());
     if (!response.ok) {
