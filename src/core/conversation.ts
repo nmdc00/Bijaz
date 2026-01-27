@@ -216,45 +216,7 @@ function formatMarketsForChat(markets: Market[]): string {
   return lines.join('\n');
 }
 
-/**
- * Detect if the user's message is asking about markets or events that we should search for
- */
-function extractSearchTopics(message: string): string[] {
-  const topics: string[] = [];
-
-  // Common patterns that suggest market search
-  const patterns = [
-    /what (?:do you think|are the odds|is the probability|are the chances).*?(?:of|that|about) (.+?)(?:\?|$)/i,
-    /will (.+?)(?:\?|$)/i,
-    /is (.+?) going to/i,
-    /(?:markets?|predictions?) (?:for|about|on) (.+?)(?:\?|$)/i,
-    /(?:any|find) markets? (?:for|about|on) (.+?)(?:\?|$)/i,
-    /what(?:'s| is) (?:the market|polymarket) (?:saying|think)/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = message.match(pattern);
-    if (match && match[1]) {
-      // Clean up the extracted topic
-      let topic = match[1].trim();
-      // Remove common filler words at the end
-      topic = topic.replace(/\s+(happen|occur|win|lose|pass|fail)\s*$/i, '');
-      if (topic.length > 3 && topic.length < 100) {
-        topics.push(topic);
-      }
-    }
-  }
-
-  // Also extract quoted topics
-  const quotedMatches = message.match(/"([^"]+)"/g);
-  if (quotedMatches) {
-    for (const quoted of quotedMatches) {
-      topics.push(quoted.replace(/"/g, ''));
-    }
-  }
-
-  return [...new Set(topics)]; // Dedupe
-}
+// Tool calling now handles market lookup; no regex extraction needed.
 
 /**
  * Main conversation handler

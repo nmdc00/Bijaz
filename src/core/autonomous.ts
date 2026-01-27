@@ -273,7 +273,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     }
 
     const exposureCheck = checkExposureLimits({
-      config: this.config,
+      config: this.bijazConfig,
       market: opp.market,
       outcome: opp.direction.includes('YES') ? 'YES' : 'NO',
       amount,

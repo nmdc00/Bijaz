@@ -32,6 +32,9 @@ const agentRegistry = createAgentRegistry(config, logger);
 const defaultAgent =
   agentRegistry.agents.get(agentRegistry.defaultAgentId) ??
   agentRegistry.agents.values().next().value;
+if (!defaultAgent) {
+  throw new Error('No agents configured');
+}
 
 const telegram = config.channels.telegram.enabled ? new TelegramAdapter(config) : null;
 const whatsapp = config.channels.whatsapp.enabled ? new WhatsAppAdapter(config) : null;

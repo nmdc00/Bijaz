@@ -122,7 +122,6 @@ function formatMarketForTool(market: Market): object {
   return {
     id: market.id,
     question: market.question,
-    description: market.description ?? null,
     outcomes: market.outcomes,
     yes_price: normalizePrice(market, 'Yes'),
     no_price: normalizePrice(market, 'No'),

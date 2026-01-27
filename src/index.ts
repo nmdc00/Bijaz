@@ -69,7 +69,7 @@ export const VERSION = '0.1.0';
  */
 export class Bijaz {
   private configPath?: string;
-  private config?: BijazConfig;
+  private config!: BijazConfig;
   private userId: string;
   private llm?: ReturnType<typeof createLlmClient>;
   private marketClient?: PolymarketMarketClient;

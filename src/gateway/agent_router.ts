@@ -130,7 +130,11 @@ export function createAgentRegistry(config: BijazConfig, logger: Logger) {
 
   const resolveAgent = (message: IncomingMessage): { agentId: string; agent: BijazAgent } => {
     const agentId = resolveAgentId(message);
-    const agent = agents.get(agentId) ?? agents.get(defaultAgentId) ?? agents.values().next().value;
+    const fallback = agents.get(defaultAgentId) ?? agents.values().next().value;
+    if (!fallback) {
+      throw new Error('No agents configured');
+    }
+    const agent = agents.get(agentId) ?? fallback;
     return { agentId, agent };
   };
 
