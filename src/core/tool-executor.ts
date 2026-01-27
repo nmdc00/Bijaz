@@ -326,10 +326,21 @@ function normalizePrice(market: Market, outcome: 'Yes' | 'No'): number | null {
   if (typeof fromMap === 'number') {
     return fromMap;
   }
+  if (typeof fromMap === 'string') {
+    const parsed = Number(fromMap);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
   if (Array.isArray(market.prices)) {
     const index = outcome === 'Yes' ? 0 : 1;
     const value = market.prices[index];
-    return typeof value === 'number' ? value : null;
+    if (typeof value === 'number') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
   }
   return null;
 }
