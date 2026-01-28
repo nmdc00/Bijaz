@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { LlmClient } from './llm.js';
+import type { Logger } from './logger.js';
 import type { Market } from '../execution/polymarket/markets.js';
 import { listCalibrationSummaries, type CalibrationSummary } from '../memory/calibration.js';
 import { listPredictions } from '../memory/predictions.js';
@@ -14,6 +15,29 @@ const DecisionSchema = z.object({
 });
 
 export type Decision = z.infer<typeof DecisionSchema>;
+
+function extractJsonCandidate(text: string): string {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end >= 0 && end > start) {
+    return text.slice(start, end + 1);
+  }
+  return text.trim();
+}
+
+function parseDecision(text: string): Decision | null {
+  const candidate = extractJsonCandidate(text);
+  try {
+    const parsed = DecisionSchema.safeParse(JSON.parse(candidate));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Build calibration context string for LLM prompt.
@@ -181,7 +205,8 @@ export async function decideTrade(
   plannerLlm: LlmClient,
   executorLlm: LlmClient,
   market: Market,
-  remainingDaily: number
+  remainingDaily: number,
+  logger?: Logger
 ): Promise<Decision> {
   const domain = market.category ?? undefined;
 
@@ -258,18 +283,51 @@ Remember: Your calibration data shows your historical accuracy. If you've been o
     { temperature: 0.1 }
   );
 
-  const trimmed = response.content.trim();
-  const jsonStart = trimmed.indexOf('{');
-  const jsonEnd = trimmed.lastIndexOf('}');
-  const json = jsonStart >= 0 && jsonEnd >= 0 ? trimmed.slice(jsonStart, jsonEnd + 1) : trimmed;
+  let decision = parseDecision(response.content);
 
-  try {
-    const parsed = DecisionSchema.safeParse(JSON.parse(json));
-    if (!parsed.success) {
-      return { action: 'hold', reasoning: 'Failed to parse decision' };
-    }
-    return parsed.data;
-  } catch {
+  if (!decision) {
+    logger?.warn('Decision parse failed, attempting repair', {
+      marketId: market.id,
+      preview: response.content.slice(0, 400),
+    });
+    const repairPrompt = `Convert the following content into ONLY valid JSON matching this schema:
+{
+  "action": "buy" | "sell" | "hold",
+  "outcome": "YES" | "NO" (required if action is buy/sell),
+  "amount": number,
+  "confidence": "low" | "medium" | "high",
+  "reasoning": string
+}
+
+Content:
+${response.content}`.trim();
+    const repaired = await executorLlm.complete(
+      [
+        { role: 'system', content: 'Return ONLY valid JSON. No markdown, no commentary.' },
+        { role: 'user', content: repairPrompt },
+      ],
+      { temperature: 0 }
+    );
+    decision = parseDecision(repaired.content);
+  }
+
+  if (!decision) {
     return { action: 'hold', reasoning: 'Failed to parse decision JSON' };
   }
+
+  if (decision.action !== 'hold') {
+    if (!decision.outcome) {
+      return { action: 'hold', reasoning: 'Missing outcome in decision' };
+    }
+    if (!decision.amount || Number.isNaN(decision.amount) || decision.amount <= 0) {
+      const fallbackAmount = Math.max(1, positionSuggestion.suggested || 1);
+      return {
+        ...decision,
+        amount: Math.min(fallbackAmount, remainingDaily),
+        reasoning: `${decision.reasoning ?? ''} (amount auto-filled)`.trim(),
+      };
+    }
+  }
+
+  return decision;
 }

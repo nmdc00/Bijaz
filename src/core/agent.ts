@@ -480,7 +480,7 @@ Just type naturally to chat about predictions, events, or markets.
         break;
       }
 
-      const decision = await decideTrade(this.llm, this.executorLlm, market, remaining);
+      const decision = await decideTrade(this.llm, this.executorLlm, market, remaining, this.logger);
       if (decision.action === 'hold') {
         decisions.push(`${market.id}: hold`);
         continue;
@@ -600,7 +600,7 @@ Just type naturally to chat about predictions, events, or markets.
     let amount = params.amount;
 
     if (!outcome || !amount) {
-      const decision = await decideTrade(this.llm, this.executorLlm, market, remaining);
+      const decision = await decideTrade(this.llm, this.executorLlm, market, remaining, this.logger);
       if (decision.action === 'hold') {
         return decision.reasoning ?? 'No clear edge; holding.';
       }
