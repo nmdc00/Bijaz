@@ -307,12 +307,9 @@ export class OrchestratorClient implements LlmClient {
 
     const plan = extractJson<ExecutionPlan>(planResponse.content);
     if (!plan?.toolCalls || plan.toolCalls.length === 0) {
-      this.logger?.debug('Orchestrator: no tool calls planned');
-      return this.fallbackExecutor
-        ? (orchestratorMetrics.fallbacks += 1,
-          this.logger?.debug('Orchestrator: using fallback for direct response'),
-          this.fallbackExecutor.complete(messages, options))
-        : this.orchestrator.complete(messages, options);
+      this.logger?.debug('Orchestrator: no tool calls planned, using primary LLM for response');
+      // Use orchestrator (primary LLM) for direct responses to preserve identity
+      return this.orchestrator.complete(messages, options);
     }
 
     orchestratorMetrics.toolCallsPlanned += plan.toolCalls.length;
