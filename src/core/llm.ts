@@ -579,6 +579,15 @@ export class AgenticOpenAiClient implements LlmClient {
       }
 
       const data = (await response.json()) as {
+        response?: {
+          output?: Array<{
+            type?: string;
+            content?: Array<
+              | { type: 'output_text'; text?: string }
+              | { type: 'function_call'; name: string; arguments: string; call_id?: string }
+            >;
+          }>;
+        };
         choices?: Array<{
           message: {
             content: string | null;
@@ -595,8 +604,9 @@ export class AgenticOpenAiClient implements LlmClient {
       };
 
       if (this.useResponsesApi) {
+        const root = data.response ?? data;
         const contentParts =
-          data.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
+          root.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
         const toolCalls = contentParts
           .filter((part) => part.type === 'function_call')
           .map((part) => ({
@@ -770,12 +780,15 @@ class OpenAiClient implements LlmClient {
     }
 
     const data = (await response.json()) as {
+      response?: {
+        output?: Array<{ type?: string; content?: Array<{ type: string; text?: string }> }>;
+      };
       choices?: Array<{ message: { content: string } }>;
       output?: Array<{ type?: string; content?: Array<{ type: string; text?: string }> }>;
     };
 
     const text = this.useResponsesApi
-      ? (data.output
+      ? ((data.response?.output ?? data.output)
           ?.flatMap((item) => (Array.isArray(item.content) ? item.content : []))
           .filter((part) => part.type === 'output_text')
           .map((part) => part.text ?? '')
