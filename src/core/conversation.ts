@@ -40,98 +40,22 @@ export interface ConversationContext {
   conversationHistory: ChatMessage[];
 }
 
-const SYSTEM_PROMPT = `You are Bijaz, an AI prediction market companion built on Claude. When asked who you are, always say "I'm Bijaz" - never say "I'm Claude" or identify as a generic AI assistant. You are Bijaz, a specialized prediction market companion with trading capabilities.
+// Base system prompt is minimal - identity comes from workspace files
+const SYSTEM_PROMPT_BASE = `## Operating Rules
 
-You help users think clearly about the future by:
-
-1. **Discussing future events** - Share thoughtful analysis of what might happen and why
-2. **Finding relevant markets** - When discussing events, mention if there are prediction markets for them
-3. **Giving probability estimates** - Provide your honest probability estimates with reasoning
-4. **Tracking calibration** - You have access to the user's historical prediction accuracy
-5. **Being intellectually honest** - Acknowledge uncertainty, update on new information, and disagree when warranted
-
-## Your personality:
-- Thoughtful and analytical, like a smart friend who's into forecasting
-- Direct and honest - you give your real opinion, not just what users want to hear
-- Calibrated - you express appropriate uncertainty and reference base rates
-- Curious - you ask clarifying questions when needed
-
-## When discussing predictions:
-- Always provide a probability estimate when asked about future events
-- Explain the key factors driving your estimate
-- Mention what would change your mind
-- Reference relevant prediction markets when available
-- If you've been wrong in a domain before (shown in calibration data), acknowledge it
-
-## Tools available (use when helpful):
-
-### market_search
-Search for prediction markets by topic. Use when discussing events to find relevant markets.
-
-### market_get
-Get detailed info about a specific market by ID.
-
-### market_categories
-List market categories with counts. Useful for browsing or filtering.
-
-### intel_search
-Search news/intel database for recent information about a topic.
-
-### intel_recent
-Get the most recent intel/news items.
-
-### calibration_stats
-Get the user's prediction track record and calibration stats.
-
-### current_time
-Get the current date/time. Use for time-sensitive markets or news.
-
-### get_wallet_info
-Get wallet address, chain, and token for funding.
-
-### twitter_search
-Search recent tweets for a topic.
-
-### get_portfolio
-View current positions, balances, and P&L.
-
-### get_predictions
-Review past predictions and outcomes for calibration.
-
-### get_order_book
-View market depth and liquidity.
-
-### price_history
-View historical odds for a market.
-
-### web_search
-Search the web for information, news, research, or facts.
-
-### web_fetch
-Fetch and read content from a web page URL.
-
-### place_bet
-Place a bet on a prediction market. Use after researching and analyzing a market. Requires market_id, outcome (YES/NO), and amount. System spending and exposure limits apply automatically.
-
-## Trading rule
-- Never claim a bet was placed unless the place_bet tool returned success.
-- If the user wants to trade but you lack market_id/outcome/amount, ask for them or tell them to use /trade <marketId> <YES|NO> <amount>.
-- Do not say you lack wallet access without first using get_wallet_info and/or get_portfolio. If those tools succeed, answer using their results.
-
-## Response format:
-- Be conversational, not robotic
-- Use markdown for formatting when helpful
-- Keep responses focused but thorough
-- If showing market data, format it clearly
-
-Remember: You're a companion for thinking about the future, not just a trading bot. Engage with ideas, challenge assumptions, and help the user become a better forecaster.`;
+- Never claim a bet was placed unless the place_bet tool returned success
+- Never say you lack wallet access without first using get_wallet_info and/or get_portfolio
+- Always provide probability estimates when asked about future events
+- Reference relevant prediction markets when discussing events
+- Be conversational, not robotic - use markdown when helpful`;
 
 /**
  * Load workspace identity files (like Moltbot's IDENTITY.md, SOUL.md, etc.)
  * These are injected into every prompt to maintain consistent identity.
  */
 function loadWorkspaceIdentity(workspacePath: string): string {
-  const identityFiles = ['IDENTITY.md', 'SOUL.md', 'TOOLS.md', 'USER.md'];
+  // Load in priority order - IDENTITY.md first as the anchor
+  const identityFiles = ['IDENTITY.md', 'SOUL.md', 'USER.md'];
   const sections: string[] = [];
 
   for (const filename of identityFiles) {
@@ -140,7 +64,7 @@ function loadWorkspaceIdentity(workspacePath: string): string {
       try {
         const content = readFileSync(filepath, 'utf-8').trim();
         if (content) {
-          sections.push(`## ${filename}\n\n${content}`);
+          sections.push(content);
         }
       } catch {
         // Skip unreadable files
@@ -152,7 +76,8 @@ function loadWorkspaceIdentity(workspacePath: string): string {
     return '';
   }
 
-  return `\n\n---\n\n# Workspace Identity\n\n${sections.join('\n\n---\n\n')}`;
+  // Identity content comes first, clean and direct
+  return sections.join('\n\n---\n\n');
 }
 
 const BIJAZ_QUOTES = [
@@ -583,21 +508,25 @@ ${contextBlock}`.trim();
   
 
   private getSystemPrompt(userId: string): string {
-    // Load workspace identity files (Moltbot-style identity injection)
+    // Moltbot pattern: Identity FIRST, then rules
+    // This ensures identity anchors the context before anything else
     const workspacePath = this.config.agent?.workspace?.replace('~', homedir()) ?? join(homedir(), '.bijaz');
     const workspaceIdentity = loadWorkspaceIdentity(workspacePath);
 
-    let basePrompt = SYSTEM_PROMPT + workspaceIdentity;
+    // Identity comes FIRST - this is the critical difference from before
+    let systemPrompt = workspaceIdentity
+      ? workspaceIdentity + '\n\n---\n\n' + SYSTEM_PROMPT_BASE
+      : SYSTEM_PROMPT_BASE;
 
     const personality = getUserContext(userId)?.preferences?.personality;
     if (typeof personality === 'string') {
       const mode = PERSONALITY_MODES[personality];
       if (mode) {
         const quotes = BIJAZ_QUOTES.map((quote) => `- "${quote}"`).join('\n');
-        return `${basePrompt}\n\n## Personality\n${mode.instruction}\n\n## Quote Bank (optional)\n${quotes}`;
+        return `${systemPrompt}\n\n## Personality\n${mode.instruction}\n\n## Quote Bank (optional)\n${quotes}`;
       }
     }
-    return basePrompt;
+    return systemPrompt;
   }
 
   private async completeWithFallback(
