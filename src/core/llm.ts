@@ -499,6 +499,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const MAX_RETRY_DELAY_MS = 30_000; // Cap retry delay at 30 seconds
+
+function parseProxyError(detail: string): string {
+  try {
+    const outer = JSON.parse(detail);
+    const inner = outer?.error?.message ? JSON.parse(outer.error.message) : null;
+    if (inner?.error?.code === 'model_cooldown') {
+      return `LLM rate limited. All providers cooling down. Reset in ${inner.error.reset_time ?? 'a few minutes'}.`;
+    }
+    return inner?.error?.message ?? outer?.error?.message ?? detail;
+  } catch {
+    return detail;
+  }
+}
+
 async function fetchWithRetry(
   factory: () => Promise<FetchResponse>,
   maxRetries = 3
@@ -511,7 +526,13 @@ async function fetchWithRetry(
     }
 
     const retryAfter = Number(response.headers.get('retry-after') ?? '');
-    const baseDelay = Number.isFinite(retryAfter) ? retryAfter * 1000 : 500 * 2 ** attempt;
+    // If retry-after is longer than our max, don't wait - just return the 429
+    if (Number.isFinite(retryAfter) && retryAfter * 1000 > MAX_RETRY_DELAY_MS) {
+      return response;
+    }
+    const baseDelay = Number.isFinite(retryAfter)
+      ? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS)
+      : Math.min(500 * 2 ** attempt, MAX_RETRY_DELAY_MS);
     const jitter = Math.floor(Math.random() * 250);
     await sleep(baseDelay + jitter);
     attempt += 1;
@@ -607,9 +628,8 @@ export class AgenticOpenAiClient implements LlmClient {
         } catch {
           detail = '';
         }
-        throw new Error(
-          `OpenAI request failed: ${response.status}${detail ? ` ${detail}` : ''}`
-        );
+        const errorMsg = detail ? parseProxyError(detail) : `status ${response.status}`;
+        throw new Error(`LLM request failed: ${errorMsg}`);
       }
 
       const data = (await response.json()) as {
@@ -814,9 +834,8 @@ class OpenAiClient implements LlmClient {
       } catch {
         detail = '';
       }
-      throw new Error(
-        `OpenAI request failed: ${response.status}${detail ? ` ${detail}` : ''}`
-      );
+      const errorMsg = detail ? parseProxyError(detail) : `status ${response.status}`;
+      throw new Error(`LLM request failed: ${errorMsg}`);
     }
 
     const data = (await response.json()) as {
