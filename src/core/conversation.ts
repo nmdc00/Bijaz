@@ -23,8 +23,15 @@ import { join } from 'node:path';
 import yaml from 'yaml';
 import { createResearchPlan, runResearchPlan } from './research_planner.js';
 import { ToolRegistry } from './tools.js';
-import { AgenticAnthropicClient, AgenticOpenAiClient, wrapWithLimiter } from './llm.js';
+import {
+  AgenticAnthropicClient,
+  AgenticOpenAiClient,
+  OrchestratorClient,
+  createAgenticExecutorClient,
+  wrapWithLimiter,
+} from './llm.js';
 import type { ToolExecutorContext } from './tool-executor.js';
+import { Logger } from './logger.js';
 
 export interface ConversationContext {
   userId: string;
@@ -286,13 +293,15 @@ export class ConversationHandler {
   private config: BijazConfig;
   private sessions: SessionStore;
   private chatVectorStore: ChatVectorStore;
+  private logger?: Logger;
 
   constructor(
     llm: LlmClient,
     marketClient: PolymarketMarketClient,
     config: BijazConfig,
     infoLlm?: LlmClient,
-    toolContext?: ToolExecutorContext
+    toolContext?: ToolExecutorContext,
+    logger?: Logger
   ) {
     this.llm = llm;
     this.infoLlm = infoLlm;
@@ -300,6 +309,7 @@ export class ConversationHandler {
     this.config = config;
     this.sessions = new SessionStore(config);
     this.chatVectorStore = new ChatVectorStore(config);
+    this.logger = logger;
     const context = toolContext ?? { config, marketClient };
     const provider = config.agent?.provider ?? 'anthropic';
     const hasAgentModel = Boolean(config.agent?.model);
@@ -311,6 +321,11 @@ export class ConversationHandler {
     }
     if (config.agent?.model || config.agent?.openaiModel) {
       this.agenticOpenAi = wrapWithLimiter(new AgenticOpenAiClient(config, context));
+    }
+    if (config.agent?.useExecutorModel) {
+      const executor = createAgenticExecutorClient(config, context);
+      const fallback = this.agenticLlm ?? this.agenticOpenAi;
+      this.agenticLlm = new OrchestratorClient(this.llm, executor, fallback, this.logger);
     }
   }
 
@@ -486,6 +501,8 @@ ${contextBlock}`.trim();
       return basePrompt + `\n\n---\n\n${contextBlock}`;
     }
   }
+
+  
 
   private getSystemPrompt(userId: string): string {
     const personality = getUserContext(userId)?.preferences?.personality;

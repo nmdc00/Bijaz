@@ -19,6 +19,11 @@ echo "- Restarting service"
 if command -v systemctl >/dev/null 2>&1; then
   sudo systemctl restart bijaz
   sudo systemctl status bijaz --no-pager
+  if systemctl list-unit-files --type=service --no-legend | awk '{print $1}' | grep -qx 'llm-mux.service'; then
+    echo "- Restarting llm-mux"
+    sudo systemctl restart llm-mux
+    sudo systemctl status llm-mux --no-pager
+  fi
 else
   echo "systemctl not found; skipping service restart"
 fi

@@ -23,9 +23,14 @@ const ConfigSchema = z.object({
     model: z.string(),
     fallbackModel: z.string().optional(),
     openaiModel: z.string().default('gpt-5.2'),
+    executorModel: z.string().optional(),
+    executorProvider: z.enum(['anthropic', 'openai', 'local']).default('openai'),
+    useExecutorModel: z.boolean().default(false),
     provider: z.enum(['anthropic', 'openai', 'local']).default('anthropic'),
     apiBaseUrl: z.string().optional(),
     workspace: z.string().optional(),
+    useProxy: z.boolean().default(false),
+    proxyBaseUrl: z.string().default('http://localhost:8317'),
   }),
   execution: z
     .object({
@@ -199,9 +204,14 @@ const ConfigSchema = z.object({
                   model: z.string().optional(),
                   fallbackModel: z.string().optional(),
                   openaiModel: z.string().optional(),
+                  executorModel: z.string().optional(),
+                  executorProvider: z.enum(['anthropic', 'openai', 'local']).optional(),
+                  useExecutorModel: z.boolean().optional(),
                   provider: z.enum(['anthropic', 'openai', 'local']).optional(),
                   apiBaseUrl: z.string().optional(),
                   workspace: z.string().optional(),
+                  useProxy: z.boolean().optional(),
+                  proxyBaseUrl: z.string().optional(),
                 })
                 .default({}),
               memory: z

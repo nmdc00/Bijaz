@@ -14,12 +14,19 @@ agent:
   model: claude-sonnet-4-5-20251101
   # OpenAI model (used for info gathering + execution)
   openaiModel: gpt-5.2
+  # Executor model (orchestrator pattern)
+  executorModel: gpt-5.2
+  executorProvider: openai
+  useExecutorModel: false
   # Fallback model (faster, cheaper)
   fallbackModel: claude-3-5-haiku-20241022
   # Model provider: anthropic | openai | local
   provider: anthropic
   # OpenAI-compatible base URL (used for openai/local providers)
   apiBaseUrl: https://api.openai.com
+  # Optional llm-mux proxy
+  useProxy: false
+  proxyBaseUrl: http://localhost:8317
   # Workspace directory
   workspace: ~/.bijaz
   # Maximum thinking level

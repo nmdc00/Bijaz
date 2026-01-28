@@ -1,5 +1,10 @@
 import type { BijazConfig } from './config.js';
-import { createLlmClient, createOpenAiClient } from './llm.js';
+import {
+  createAgenticExecutorClient,
+  createExecutorClient,
+  createLlmClient,
+  OrchestratorClient,
+} from './llm.js';
 import { decideTrade } from './decision.js';
 import { Logger } from './logger.js';
 import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
@@ -22,8 +27,9 @@ import type { ToolExecutorContext } from './tool-executor.js';
 
 export class BijazAgent {
   private llm: ReturnType<typeof createLlmClient>;
-  private infoLlm: ReturnType<typeof createOpenAiClient>;
-  private executorLlm: ReturnType<typeof createOpenAiClient>;
+  private infoLlm: ReturnType<typeof createExecutorClient>;
+  private executorLlm: ReturnType<typeof createExecutorClient>;
+  private autonomyLlm: ReturnType<typeof createLlmClient>;
   private marketClient: PolymarketMarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
@@ -39,8 +45,8 @@ export class BijazAgent {
       process.env.BIJAZ_DB_PATH = config.memory.dbPath;
     }
     this.llm = createLlmClient(this.config);
-    this.infoLlm = createOpenAiClient(this.config, this.config.agent.openaiModel);
-    this.executorLlm = createOpenAiClient(this.config, this.config.agent.openaiModel);
+    this.infoLlm = createExecutorClient(this.config, this.config.agent.openaiModel, 'openai');
+    this.executorLlm = createExecutorClient(this.config);
     this.marketClient = new PolymarketMarketClient(this.config);
     this.executor = this.createExecutor(config);
 
@@ -62,11 +68,18 @@ export class BijazAgent {
       this.marketClient,
       this.config,
       this.infoLlm,
-      this.toolContext
+      this.toolContext,
+      this.logger
     );
 
+    this.autonomyLlm = this.llm;
+    if (this.config.agent.useExecutorModel) {
+      const executor = createAgenticExecutorClient(this.config, this.toolContext);
+      this.autonomyLlm = new OrchestratorClient(this.llm, executor, this.llm, this.logger);
+    }
+
     this.autonomous = new AutonomousManager(
-      this.llm,
+      this.autonomyLlm,
       this.marketClient,
       this.executor,
       this.limiter,

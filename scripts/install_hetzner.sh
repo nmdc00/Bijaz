@@ -180,6 +180,10 @@ pnpm install
 pnpm build
 sudo systemctl restart bijaz
 sudo systemctl status bijaz --no-pager
+if systemctl list-unit-files --type=service --no-legend | awk '{print \$1}' | grep -qx 'llm-mux.service'; then
+  sudo systemctl restart llm-mux
+  sudo systemctl status llm-mux --no-pager
+fi
 EOF
 sudo chmod +x /usr/local/bin/bijaz-update
 

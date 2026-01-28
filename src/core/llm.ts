@@ -4,6 +4,7 @@ import fetch from 'node-fetch';
 import type { BijazConfig } from './config.js';
 import { BIJAZ_TOOLS } from './tool-schemas.js';
 import { executeToolCall, type ToolExecutorContext } from './tool-executor.js';
+import { Logger } from './logger.js';
 import type {
   ContentBlock,
   MessageParam,
@@ -104,6 +105,245 @@ export function createOpenAiClient(
   return wrapWithLimiter(new OpenAiClient(config, modelOverride));
 }
 
+export function createExecutorClient(
+  config: BijazConfig,
+  modelOverride?: string,
+  providerOverride?: 'anthropic' | 'openai' | 'local'
+): LlmClient {
+  const provider = providerOverride ?? config.agent.executorProvider ?? 'openai';
+  const model =
+    modelOverride ??
+    config.agent.executorModel ??
+    config.agent.openaiModel ??
+    config.agent.model;
+  switch (provider) {
+    case 'anthropic':
+      return wrapWithLimiter(new AnthropicClient(config, model));
+    case 'local':
+      return wrapWithLimiter(new LocalClient(config, model));
+    case 'openai':
+    default:
+      return wrapWithLimiter(new OpenAiClient(config, model));
+  }
+}
+
+export function createAgenticExecutorClient(
+  config: BijazConfig,
+  toolContext: ToolExecutorContext,
+  modelOverride?: string
+): LlmClient {
+  const provider = config.agent.executorProvider ?? 'openai';
+  const model =
+    modelOverride ??
+    config.agent.executorModel ??
+    config.agent.openaiModel ??
+    config.agent.model;
+  if (provider === 'anthropic') {
+    return wrapWithLimiter(new AgenticAnthropicClient(config, toolContext, model));
+  }
+  return wrapWithLimiter(new AgenticOpenAiClient(config, toolContext, model));
+}
+
+function resolveOpenAiBaseUrl(config: BijazConfig): string {
+  if (config.agent.useProxy) {
+    return config.agent.proxyBaseUrl;
+  }
+  return config.agent.apiBaseUrl ?? 'https://api.openai.com';
+}
+
+function resolveAnthropicBaseUrl(config: BijazConfig): string | undefined {
+  if (config.agent.useProxy) {
+    return config.agent.proxyBaseUrl;
+  }
+  return undefined;
+}
+
+type ExecutionPlan = {
+  intent?: string;
+  toolCalls?: Array<{
+    tool: string;
+    params: Record<string, unknown>;
+    dependsOn?: string[];
+  }>;
+  context?: Record<string, unknown>;
+};
+
+const TOOL_LIST = BIJAZ_TOOLS.map((tool) => `- ${tool.name}: ${tool.description}`).join(
+  '\n'
+);
+
+const ORCHESTRATOR_PROMPT = `
+You are a planning agent. Analyze the user's request and create an execution plan.
+
+Output ONLY a JSON object with:
+- intent: what the user wants
+- toolCalls: array of tool calls needed (in order)
+- context: optional extra context for execution
+
+Available tools:
+${TOOL_LIST}
+
+Do NOT execute tools yourself. Only plan which tools are needed and in what order.
+`.trim();
+
+const EXECUTOR_PROMPT = `
+You are an execution agent. Execute the provided plan using tool calls as needed.
+
+Rules:
+- Follow the plan order.
+- Use tool calls to gather data.
+- Retry or adjust parameters if a tool fails.
+- Return ONLY a JSON object with "results" (array of tool outputs) and optional "notes".
+
+Available tools:
+${TOOL_LIST}
+`.trim();
+
+const SYNTHESIZER_PROMPT = `
+You are a synthesis agent. The executor has gathered data for the user's request.
+Analyze the results, apply reasoning, and respond to the user.
+Do not dump raw JSON; provide a concise, thoughtful answer.
+`.trim();
+
+export type OrchestratorMetrics = {
+  calls: number;
+  planFailures: number;
+  executorFailures: number;
+  synthFailures: number;
+  fallbacks: number;
+  toolCallsPlanned: number;
+};
+
+const orchestratorMetrics: OrchestratorMetrics = {
+  calls: 0,
+  planFailures: 0,
+  executorFailures: 0,
+  synthFailures: 0,
+  fallbacks: 0,
+  toolCallsPlanned: 0,
+};
+
+export function getOrchestratorMetrics(): OrchestratorMetrics {
+  return { ...orchestratorMetrics };
+}
+
+function extractJson<T>(text: string): T | null {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1] ?? text;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  try {
+    return JSON.parse(candidate.slice(start, end + 1)) as T;
+  } catch {
+    return null;
+  }
+}
+
+export class OrchestratorClient implements LlmClient {
+  constructor(
+    private orchestrator: LlmClient,
+    private executor: LlmClient,
+    private fallbackExecutor?: LlmClient,
+    private logger?: Logger
+  ) {}
+
+  async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
+    orchestratorMetrics.calls += 1;
+    const systemMessage = messages.find((msg) => msg.role === 'system')?.content ?? '';
+    const rest = messages.filter((msg) => msg.role !== 'system');
+
+    const plannerMessages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: `${ORCHESTRATOR_PROMPT}\n\n## Base Instructions\n${systemMessage}`,
+      },
+      ...rest,
+    ];
+
+    let planResponse: LlmResponse;
+    try {
+      planResponse = await this.orchestrator.complete(plannerMessages, options);
+    } catch (error) {
+      orchestratorMetrics.planFailures += 1;
+      if (this.fallbackExecutor) {
+        orchestratorMetrics.fallbacks += 1;
+        this.logger?.warn('Orchestrator: plan failed, using fallback', error);
+        return this.fallbackExecutor.complete(messages, options);
+      }
+      throw error;
+    }
+
+    const plan = extractJson<ExecutionPlan>(planResponse.content);
+    if (!plan?.toolCalls || plan.toolCalls.length === 0) {
+      this.logger?.debug('Orchestrator: no tool calls planned');
+      return this.fallbackExecutor
+        ? (orchestratorMetrics.fallbacks += 1,
+          this.logger?.debug('Orchestrator: using fallback for direct response'),
+          this.fallbackExecutor.complete(messages, options))
+        : this.orchestrator.complete(messages, options);
+    }
+
+    orchestratorMetrics.toolCallsPlanned += plan.toolCalls.length;
+    this.logger?.info('Orchestrator: tool plan created', {
+      intent: plan.intent,
+      toolCalls: plan.toolCalls.length,
+    });
+
+    const executorMessages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: EXECUTOR_PROMPT,
+      },
+      {
+        role: 'user',
+        content: `Execution plan:\n${JSON.stringify(plan)}`,
+      },
+    ];
+
+    let executorResponse: LlmResponse;
+    try {
+      executorResponse = await this.executor.complete(executorMessages, { temperature: 0.2 });
+    } catch (error) {
+      orchestratorMetrics.executorFailures += 1;
+      if (this.fallbackExecutor) {
+        orchestratorMetrics.fallbacks += 1;
+        this.logger?.warn('Orchestrator: executor failed, using fallback', error);
+        return this.fallbackExecutor.complete(messages, options);
+      }
+      throw error;
+    }
+
+    const execResults = extractJson<Record<string, unknown>>(executorResponse.content) ?? {
+      raw: executorResponse.content,
+    };
+
+    const synthMessages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: `${SYNTHESIZER_PROMPT}\n\n## Base Instructions\n${systemMessage}`,
+      },
+      ...rest,
+      {
+        role: 'assistant',
+        content: `Execution results:\n${JSON.stringify(execResults)}`,
+      },
+    ];
+
+    try {
+      return await this.orchestrator.complete(synthMessages, options);
+    } catch (error) {
+      orchestratorMetrics.synthFailures += 1;
+      if (this.fallbackExecutor) {
+        orchestratorMetrics.fallbacks += 1;
+        this.logger?.warn('Orchestrator: synth failed, using fallback', error);
+        return this.fallbackExecutor.complete(messages, options);
+      }
+      throw error;
+    }
+  }
+}
+
 export interface AgenticLlmOptions {
   maxToolCalls?: number;
   temperature?: number;
@@ -114,9 +354,17 @@ export class AgenticAnthropicClient implements LlmClient {
   private model: string;
   private toolContext: ToolExecutorContext;
 
-  constructor(config: BijazConfig, toolContext: ToolExecutorContext) {
-    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
-    this.model = config.agent.model;
+  constructor(
+    config: BijazConfig,
+    toolContext: ToolExecutorContext,
+    modelOverride?: string
+  ) {
+    const baseURL = resolveAnthropicBaseUrl(config);
+    this.client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY || 'unused',
+      baseURL,
+    });
+    this.model = modelOverride ?? config.agent.model;
     this.toolContext = toolContext;
   }
 
@@ -244,9 +492,13 @@ export class AgenticOpenAiClient implements LlmClient {
   private baseUrl: string;
   private toolContext: ToolExecutorContext;
 
-  constructor(config: BijazConfig, toolContext: ToolExecutorContext) {
-    this.model = config.agent.openaiModel ?? config.agent.model;
-    this.baseUrl = config.agent.apiBaseUrl ?? 'https://api.openai.com';
+  constructor(
+    config: BijazConfig,
+    toolContext: ToolExecutorContext,
+    modelOverride?: string
+  ) {
+    this.model = modelOverride ?? config.agent.openaiModel ?? config.agent.model;
+    this.baseUrl = resolveOpenAiBaseUrl(config);
     this.toolContext = toolContext;
   }
 
@@ -343,9 +595,12 @@ class AnthropicClient implements LlmClient {
   private client: Anthropic;
   private model: string;
 
-  constructor(config: BijazConfig) {
-    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
-    this.model = config.agent.model;
+  constructor(config: BijazConfig, modelOverride?: string) {
+    this.client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+      baseURL: resolveAnthropicBaseUrl(config),
+    });
+    this.model = modelOverride ?? config.agent.model;
   }
 
   async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
@@ -380,7 +635,7 @@ class OpenAiClient implements LlmClient {
 
   constructor(config: BijazConfig, modelOverride?: string) {
     this.model = modelOverride ?? config.agent.model;
-    this.baseUrl = config.agent.apiBaseUrl ?? 'https://api.openai.com';
+    this.baseUrl = resolveOpenAiBaseUrl(config);
   }
 
   async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
@@ -416,8 +671,8 @@ class LocalClient implements LlmClient {
   private model: string;
   private baseUrl: string;
 
-  constructor(config: BijazConfig) {
-    this.model = config.agent.model;
+  constructor(config: BijazConfig, modelOverride?: string) {
+    this.model = modelOverride ?? config.agent.model;
     this.baseUrl = config.agent.apiBaseUrl ?? 'http://localhost:11434';
   }
 
