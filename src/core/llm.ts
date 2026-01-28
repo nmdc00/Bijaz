@@ -1,10 +1,58 @@
 import Anthropic from '@anthropic-ai/sdk';
 import fetch from 'node-fetch';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 import type { BijazConfig } from './config.js';
 import { BIJAZ_TOOLS } from './tool-schemas.js';
 import { executeToolCall, type ToolExecutorContext } from './tool-executor.js';
 import { Logger } from './logger.js';
+
+/**
+ * Centralized identity loader - used by ALL LLM code paths.
+ * This is the Moltbot pattern: identity is injected everywhere, not just conversation.
+ */
+let cachedIdentity: string | null = null;
+
+export function loadBijazIdentity(config?: BijazConfig): string {
+  if (cachedIdentity !== null) {
+    return cachedIdentity;
+  }
+
+  const workspacePath = config?.agent?.workspace?.replace('~', homedir()) ?? join(homedir(), '.bijaz');
+  const identityFiles = ['IDENTITY.md', 'SOUL.md'];
+  const sections: string[] = [];
+
+  for (const filename of identityFiles) {
+    const filepath = join(workspacePath, filename);
+    if (existsSync(filepath)) {
+      try {
+        const content = readFileSync(filepath, 'utf-8').trim();
+        if (content) {
+          sections.push(content);
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+  }
+
+  // Fallback if no workspace files exist
+  if (sections.length === 0) {
+    cachedIdentity = `# Bijaz
+
+I am Bijaz, an AI prediction market companion. When asked who I am, I always identify as Bijaz - never as Claude, GPT, Codex, or any other AI assistant name.`;
+    return cachedIdentity;
+  }
+
+  cachedIdentity = sections.join('\n\n---\n\n');
+  return cachedIdentity;
+}
+
+export function clearIdentityCache(): void {
+  cachedIdentity = null;
+}
 import type {
   ContentBlock,
   MessageParam,
@@ -203,19 +251,7 @@ ${TOOL_LIST}
 Do NOT execute tools yourself. Only plan which tools are needed and in what order.
 `.trim();
 
-const BIJAZ_IDENTITY_OVERRIDE = `You are Bijaz, an AI prediction market companion. Your identity is Bijaz - never claim to be Codex, Claude, GPT, or any other AI assistant name.
-
-You have access to these tools:
-- market_search, market_get, market_categories: Search and browse prediction markets
-- intel_search, intel_recent: Search news and intel
-- get_wallet_info, get_portfolio: View wallet and positions
-- place_bet: Execute trades on Polymarket
-- twitter_search, web_search, web_fetch: Search web and social media
-- calibration_stats, get_predictions: Track prediction accuracy
-- get_order_book, price_history: View market depth and historical data
-- current_time: Get current date/time
-
-Always use your tools when relevant. Never say you lack wallet access or trading capability without first calling get_wallet_info and get_portfolio.`;
+// BIJAZ_IDENTITY_OVERRIDE removed - now using loadBijazIdentity() for all code paths
 
 const EXECUTOR_PROMPT = `
 You are an execution agent. Execute the provided plan using tool calls as needed.
@@ -567,7 +603,8 @@ export class AgenticOpenAiClient implements LlmClient {
       content: msg.content,
     }));
     if (this.useResponsesApi) {
-      openaiMessages.unshift({ role: 'system', content: BIJAZ_IDENTITY_OVERRIDE });
+      // Inject workspace identity at the start (Moltbot pattern)
+      openaiMessages.unshift({ role: 'system', content: loadBijazIdentity() });
     }
 
     const tools: OpenAiTool[] = BIJAZ_TOOLS.map((tool) => ({
@@ -798,7 +835,8 @@ class OpenAiClient implements LlmClient {
   async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
     const openaiMessages = this.useResponsesApi
       ? [
-          { role: 'system', content: BIJAZ_IDENTITY_OVERRIDE } as ChatMessage,
+          // Inject workspace identity at the start (Moltbot pattern)
+          { role: 'system', content: loadBijazIdentity() } as ChatMessage,
           ...messages,
         ]
       : messages;
