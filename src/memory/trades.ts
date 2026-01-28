@@ -220,7 +220,7 @@ export function listOpenPositionsFromTrades(limit = 50): OpenTradePosition[] {
           SUM(CASE WHEN side = 'buy' THEN amount ELSE 0 END) as totalBuy,
           SUM(CASE WHEN side = 'buy' THEN shares ELSE 0 END) as totalBuyShares,
           SUM(CASE WHEN side = 'sell' THEN amount ELSE 0 END) as totalSell,
-          MAX(created_at) as lastTradeAt,
+          MAX(t.created_at) as lastTradeAt,
           m.prices as currentPrices
         FROM trades t
         LEFT JOIN market_cache m ON t.market_id = m.id
