@@ -540,7 +540,15 @@ export class AgenticOpenAiClient implements LlmClient {
       );
 
       if (!response.ok) {
-        throw new Error(`OpenAI request failed: ${response.status}`);
+        let detail = '';
+        try {
+          detail = await response.text();
+        } catch {
+          detail = '';
+        }
+        throw new Error(
+          `OpenAI request failed: ${response.status}${detail ? ` ${detail}` : ''}`
+        );
       }
 
       const data = (await response.json()) as {
@@ -655,7 +663,15 @@ class OpenAiClient implements LlmClient {
     );
 
     if (!response.ok) {
-      throw new Error(`OpenAI request failed: ${response.status}`);
+      let detail = '';
+      try {
+        detail = await response.text();
+      } catch {
+        detail = '';
+      }
+      throw new Error(
+        `OpenAI request failed: ${response.status}${detail ? ` ${detail}` : ''}`
+      );
     }
 
     const data = (await response.json()) as {
