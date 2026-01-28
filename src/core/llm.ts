@@ -586,6 +586,7 @@ export class AgenticOpenAiClient implements LlmClient {
           };
         }>;
         output?: Array<{
+          type?: string;
           content?: Array<
             | { type: 'output_text'; text?: string }
             | { type: 'function_call'; name: string; arguments: string; call_id?: string }
@@ -594,8 +595,9 @@ export class AgenticOpenAiClient implements LlmClient {
       };
 
       if (this.useResponsesApi) {
-        const output = data.output?.[0]?.content ?? [];
-        const toolCalls = output
+        const contentParts =
+          data.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
+        const toolCalls = contentParts
           .filter((part) => part.type === 'function_call')
           .map((part) => ({
             id: 'call_id' in part && part.call_id ? part.call_id : `call_${Date.now()}`,
@@ -607,7 +609,7 @@ export class AgenticOpenAiClient implements LlmClient {
           }));
 
         if (toolCalls.length === 0) {
-          const text = output
+          const text = contentParts
             .filter((part) => part.type === 'output_text')
             .map((part) => (part as { text?: string }).text ?? '')
             .join('')
@@ -769,11 +771,16 @@ class OpenAiClient implements LlmClient {
 
     const data = (await response.json()) as {
       choices?: Array<{ message: { content: string } }>;
-      output?: Array<{ content?: Array<{ type: string; text?: string }> }>;
+      output?: Array<{ type?: string; content?: Array<{ type: string; text?: string }> }>;
     };
 
     const text = this.useResponsesApi
-      ? data.output?.[0]?.content?.map((part) => part.text ?? '').join('').trim() ?? ''
+      ? (data.output
+          ?.flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+          .filter((part) => part.type === 'output_text')
+          .map((part) => part.text ?? '')
+          .join('')
+          .trim() ?? '')
       : data.choices?.[0]?.message?.content?.trim() ?? '';
     return { content: text, model: this.model };
   }
