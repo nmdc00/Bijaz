@@ -431,6 +431,11 @@ export class ConversationHandler {
     // Call LLM
     const response = await this.completeWithFallback(messages, { temperature: 0.7 });
 
+    // Don't store empty responses (prevents history corruption from failed calls)
+    if (!response.content || response.content.trim() === '') {
+      throw new Error('LLM returned empty response');
+    }
+
     const userEntry: ChatMessage = { role: 'user', content: message };
     const assistantEntry: ChatMessage = { role: 'assistant', content: response.content };
 
