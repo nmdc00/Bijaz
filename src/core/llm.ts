@@ -492,6 +492,7 @@ export class AgenticOpenAiClient implements LlmClient {
   private baseUrl: string;
   private toolContext: ToolExecutorContext;
   private includeTemperature: boolean;
+  private useResponsesApi: boolean;
 
   constructor(
     config: BijazConfig,
@@ -502,6 +503,7 @@ export class AgenticOpenAiClient implements LlmClient {
     this.baseUrl = resolveOpenAiBaseUrl(config);
     this.toolContext = toolContext;
     this.includeTemperature = !config.agent.useProxy;
+    this.useResponsesApi = config.agent.useProxy;
   }
 
   async complete(messages: ChatMessage[], options?: AgenticLlmOptions): Promise<LlmResponse> {
@@ -526,18 +528,41 @@ export class AgenticOpenAiClient implements LlmClient {
     while (iteration < maxIterations) {
       iteration += 1;
       const response = await fetchWithRetry(() =>
-        fetch(`${this.baseUrl}/v1/chat/completions`, {
+        fetch(`${this.baseUrl}${this.useResponsesApi ? '/v1/responses' : '/v1/chat/completions'}`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            model: this.model,
-            ...(this.includeTemperature ? { temperature } : {}),
-            messages: openaiMessages,
-            tools,
-          }),
+          body: JSON.stringify(
+            this.useResponsesApi
+              ? {
+                  model: this.model,
+                  input: openaiMessages.map((msg) => ({
+                    role: msg.role,
+                    content:
+                      msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
+                        ? msg.tool_calls.map((call) => ({
+                            type: 'function_call',
+                            name: call.function.name,
+                            arguments: call.function.arguments,
+                          }))
+                        : [{ type: 'text', text: msg.content ?? '' }],
+                  })),
+                  tools: BIJAZ_TOOLS.map((tool) => ({
+                    type: 'function',
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.input_schema as Record<string, unknown>,
+                  })),
+                }
+              : {
+                  model: this.model,
+                  ...(this.includeTemperature ? { temperature } : {}),
+                  messages: openaiMessages,
+                  tools,
+                }
+          ),
         })
       );
 
@@ -554,13 +579,65 @@ export class AgenticOpenAiClient implements LlmClient {
       }
 
       const data = (await response.json()) as {
-        choices: Array<{
+        choices?: Array<{
           message: {
             content: string | null;
             tool_calls?: OpenAiToolCall[];
           };
         }>;
+        output?: Array<{
+          content?: Array<
+            | { type: 'output_text'; text?: string }
+            | { type: 'function_call'; name: string; arguments: string; call_id?: string }
+          >;
+        }>;
       };
+
+      if (this.useResponsesApi) {
+        const output = data.output?.[0]?.content ?? [];
+        const toolCalls = output
+          .filter((part) => part.type === 'function_call')
+          .map((part) => ({
+            id: 'call_id' in part && part.call_id ? part.call_id : `call_${Date.now()}`,
+            type: 'function' as const,
+            function: {
+              name: (part as { name: string }).name,
+              arguments: (part as { arguments: string }).arguments,
+            },
+          }));
+
+        if (toolCalls.length === 0) {
+          const text = output
+            .filter((part) => part.type === 'output_text')
+            .map((part) => (part as { text?: string }).text ?? '')
+            .join('')
+            .trim();
+          return { content: text, model: this.model };
+        }
+
+        openaiMessages.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: toolCalls,
+        });
+
+        for (const toolCall of toolCalls) {
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = JSON.parse(toolCall.function.arguments ?? '{}');
+          } catch {
+            parsed = {};
+          }
+          const result = await executeToolCall(toolCall.function.name, parsed, this.toolContext);
+          openaiMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result.success ? result.data : { error: result.error }),
+          });
+        }
+
+        continue;
+      }
 
       const message = data.choices?.[0]?.message;
       if (!message) {
@@ -643,26 +720,38 @@ class OpenAiClient implements LlmClient {
   private model: string;
   private baseUrl: string;
   private includeTemperature: boolean;
+  private useResponsesApi: boolean;
 
   constructor(config: BijazConfig, modelOverride?: string) {
     this.model = modelOverride ?? config.agent.model;
     this.baseUrl = resolveOpenAiBaseUrl(config);
     this.includeTemperature = !config.agent.useProxy;
+    this.useResponsesApi = config.agent.useProxy;
   }
 
   async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
     const response = await fetchWithRetry(() =>
-      fetch(`${this.baseUrl}/v1/chat/completions`, {
+      fetch(`${this.baseUrl}${this.useResponsesApi ? '/v1/responses' : '/v1/chat/completions'}`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model: this.model,
-          ...(this.includeTemperature ? { temperature: options?.temperature ?? 0.2 } : {}),
-          messages,
-        }),
+        body: JSON.stringify(
+          this.useResponsesApi
+            ? {
+                model: this.model,
+                input: messages.map((msg) => ({
+                  role: msg.role,
+                  content: [{ type: 'text', text: msg.content }],
+                })),
+              }
+            : {
+                model: this.model,
+                ...(this.includeTemperature ? { temperature: options?.temperature ?? 0.2 } : {}),
+                messages,
+              }
+        ),
       })
     );
 
@@ -679,10 +768,13 @@ class OpenAiClient implements LlmClient {
     }
 
     const data = (await response.json()) as {
-      choices: Array<{ message: { content: string } }>;
+      choices?: Array<{ message: { content: string } }>;
+      output?: Array<{ content?: Array<{ type: string; text?: string }> }>;
     };
 
-    const text = data.choices?.[0]?.message?.content?.trim() ?? '';
+    const text = this.useResponsesApi
+      ? data.output?.[0]?.content?.map((part) => part.text ?? '').join('').trim() ?? ''
+      : data.choices?.[0]?.message?.content?.trim() ?? '';
     return { content: text, model: this.model };
   }
 }
