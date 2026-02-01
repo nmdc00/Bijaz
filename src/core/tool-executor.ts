@@ -20,6 +20,7 @@ export interface ToolSpendingLimiter {
 import { getCashBalance } from '../memory/portfolio.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
+import { PolymarketCLOBClient } from '../execution/polymarket/clob.js';
 import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import { isIP } from 'node:net';
@@ -90,6 +91,15 @@ export async function executeToolCall(
           ? summaries.filter((summary) => summary.domain === domain)
           : summaries;
         return { success: true, data: filtered };
+      }
+
+      case 'evaluation_summary': {
+        const { getEvaluationSummary } = await import('./evaluation.js');
+        const windowDays =
+          toolInput.window_days !== undefined ? Number(toolInput.window_days) : undefined;
+        const domain = toolInput.domain ? String(toolInput.domain) : undefined;
+        const summary = getEvaluationSummary({ windowDays, domain });
+        return { success: true, data: summary };
       }
 
       case 'current_time': {
@@ -304,7 +314,7 @@ export async function executeToolCall(
             0.5;
           const price = outcome === 'YES' ? yesPrice : 1 - yesPrice;
 
-          createPrediction({
+          const predictionId = createPrediction({
             marketId: market.id,
             marketTitle: market.question ?? marketId,
             predictedOutcome: outcome,
@@ -325,6 +335,7 @@ export async function executeToolCall(
               market_title: market.question,
               outcome,
               amount,
+              prediction_id: predictionId,
               message: result.message,
             },
           };
@@ -477,58 +488,198 @@ function getWalletInfo(ctx: ToolExecutorContext): ToolResult {
   }
 }
 
+async function getClobPositions(ctx: ToolExecutorContext): Promise<{
+  positions: Array<{
+    market_id: string;
+    market_question: string;
+    outcome: string;
+    shares: number;
+    avg_price: number | null;
+    current_price: number | null;
+    cost_basis: number | null;
+    current_value: number | null;
+    unrealized_pnl: number | null;
+    pnl_percent: string | null;
+  }>;
+} | null> {
+  if (ctx.config.execution?.mode !== 'live') {
+    return null;
+  }
+
+  const password = process.env.THUFIR_WALLET_PASSWORD;
+  if (!password) {
+    return null;
+  }
+
+  try {
+    const wallet = loadWallet(ctx.config, password);
+    const clobClient = new PolymarketCLOBClient(ctx.config);
+    clobClient.setWallet(wallet);
+
+    try {
+      await clobClient.deriveApiKey();
+    } catch {
+      await clobClient.createApiKey();
+    }
+
+    const trades = await clobClient.getTrades({ limit: 500 });
+    if (!trades || trades.length === 0) {
+      return { positions: [] };
+    }
+
+    const marketCache = new Map<string, Market>();
+    const positionByToken = new Map<string, {
+      marketId: string;
+      netShares: number;
+      netCost: number;
+    }>();
+
+    for (const trade of trades) {
+      const size = Number(trade.size);
+      const price = Number(trade.price);
+      if (!Number.isFinite(size) || !Number.isFinite(price)) continue;
+      const cost = size * price;
+      const entry = positionByToken.get(trade.asset_id) ?? {
+        marketId: trade.market,
+        netShares: 0,
+        netCost: 0,
+      };
+      if (trade.side === 'BUY') {
+        entry.netShares += size;
+        entry.netCost += cost;
+      } else {
+        entry.netShares -= size;
+        entry.netCost -= cost;
+      }
+      entry.marketId = trade.market;
+      positionByToken.set(trade.asset_id, entry);
+    }
+
+    const positions: Array<{
+      market_id: string;
+      market_question: string;
+      outcome: string;
+      shares: number;
+      avg_price: number | null;
+      current_price: number | null;
+      cost_basis: number | null;
+      current_value: number | null;
+      unrealized_pnl: number | null;
+      pnl_percent: string | null;
+    }> = [];
+
+    for (const [tokenId, entry] of positionByToken.entries()) {
+      if (entry.netShares <= 0) continue;
+
+      let market = marketCache.get(entry.marketId);
+      if (!market) {
+        try {
+          market = await ctx.marketClient.getMarket(entry.marketId);
+          marketCache.set(entry.marketId, market);
+        } catch {
+          continue;
+        }
+      }
+
+      const token = market.tokens?.find((t) => t.token_id === tokenId);
+      const outcome = token?.outcome?.toUpperCase() === 'NO' ? 'NO' : 'YES';
+      const currentPrice =
+        market.prices?.[outcome] ??
+        market.prices?.[outcome.toUpperCase()] ??
+        (Array.isArray(market.prices)
+          ? outcome === 'YES'
+            ? market.prices[0]
+            : market.prices[1]
+          : null) ??
+        null;
+
+      const avgPrice = entry.netCost > 0 && entry.netShares > 0
+        ? entry.netCost / entry.netShares
+        : null;
+      const currentValue =
+        currentPrice != null ? entry.netShares * currentPrice : null;
+      const costBasis = entry.netCost > 0 ? entry.netCost : null;
+      const unrealizedPnl =
+        currentValue != null && costBasis != null ? currentValue - costBasis : null;
+      const pnlPercent =
+        avgPrice && currentPrice != null
+          ? `${(((currentPrice - avgPrice) / avgPrice) * 100).toFixed(1)}%`
+          : null;
+
+      positions.push({
+        market_id: market.id,
+        market_question: market.question ?? entry.marketId,
+        outcome,
+        shares: entry.netShares,
+        avg_price: avgPrice,
+        current_price: currentPrice,
+        cost_basis: costBasis,
+        current_value: currentValue,
+        unrealized_pnl: unrealizedPnl,
+        pnl_percent: pnlPercent,
+      });
+    }
+
+    return { positions };
+  } catch {
+    return null;
+  }
+}
+
 async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
   try {
-    const positions = listOpenPositions(50);
-    const positionRows = await Promise.all(
-      positions.map(async (position) => {
-        const outcome = (position.predictedOutcome ?? 'YES').toUpperCase();
-        let currentPrice = resolveCurrentPrice(position);
+    const clobPositions = await getClobPositions(ctx);
+    const positionRows = clobPositions
+      ? clobPositions.positions
+      : await Promise.all(
+          listOpenPositions(50).map(async (position) => {
+            const outcome = (position.predictedOutcome ?? 'YES').toUpperCase();
+            let currentPrice = resolveCurrentPrice(position);
 
-        if (currentPrice == null) {
-          try {
-            const market = await ctx.marketClient.getMarket(position.marketId);
-            currentPrice =
-              market.prices?.[outcome] ??
-              market.prices?.[outcome.toUpperCase()] ??
-              (Array.isArray(market.prices)
-                ? outcome === 'YES'
-                  ? market.prices[0]
-                  : market.prices[1]
-                : null) ??
-              null;
-          } catch {
-            currentPrice = null;
-          }
-        }
+            if (currentPrice == null) {
+              try {
+                const market = await ctx.marketClient.getMarket(position.marketId);
+                currentPrice =
+                  market.prices?.[outcome] ??
+                  market.prices?.[outcome.toUpperCase()] ??
+                  (Array.isArray(market.prices)
+                    ? outcome === 'YES'
+                      ? market.prices[0]
+                      : market.prices[1]
+                    : null) ??
+                  null;
+              } catch {
+                currentPrice = null;
+              }
+            }
 
-        const executionPrice = position.executionPrice ?? null;
-        const positionSize = position.positionSize ?? 0;
-        const shares =
-          executionPrice && executionPrice > 0 ? positionSize / executionPrice : null;
-        const currentValue =
-          shares != null && currentPrice != null ? shares * currentPrice : null;
-        const costBasis = positionSize;
-        const unrealizedPnl =
-          currentValue != null ? currentValue - costBasis : null;
+            const executionPrice = position.executionPrice ?? null;
+            const positionSize = position.positionSize ?? 0;
+            const shares =
+              executionPrice && executionPrice > 0 ? positionSize / executionPrice : null;
+            const currentValue =
+              shares != null && currentPrice != null ? shares * currentPrice : null;
+            const costBasis = positionSize;
+            const unrealizedPnl =
+              currentValue != null ? currentValue - costBasis : null;
 
-        return {
-          market_id: position.marketId,
-          market_question: position.marketTitle,
-          outcome,
-          shares,
-          avg_price: executionPrice,
-          current_price: currentPrice,
-          cost_basis: costBasis,
-          current_value: currentValue,
-          unrealized_pnl: unrealizedPnl,
-          pnl_percent:
-            executionPrice && currentPrice != null
-              ? `${(((currentPrice - executionPrice) / executionPrice) * 100).toFixed(1)}%`
-              : null,
-        };
-      })
-    );
+            return {
+              market_id: position.marketId,
+              market_question: position.marketTitle,
+              outcome,
+              shares,
+              avg_price: executionPrice,
+              current_price: currentPrice,
+              cost_basis: costBasis,
+              current_value: currentValue,
+              unrealized_pnl: unrealizedPnl,
+              pnl_percent:
+                executionPrice && currentPrice != null
+                  ? `${(((currentPrice - executionPrice) / executionPrice) * 100).toFixed(1)}%`
+                  : null,
+            };
+          })
+        );
 
     const totals = positionRows.reduce(
       (acc, position) => {
@@ -561,6 +712,7 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
           unrealized_pnl: totals.totalValue - totals.totalCost,
           available_balance: balances.usdc ?? 0,
           remaining_daily_limit: remainingDaily,
+          positions_source: clobPositions ? 'clob' : 'local',
         },
       },
     };

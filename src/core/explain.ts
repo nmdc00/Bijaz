@@ -4,6 +4,7 @@ import { createLlmClient } from './llm.js';
 import { getPrediction } from '../memory/predictions.js';
 import { listIntelByIds } from '../intel/store.js';
 import { listCalibrationSummaries } from '../memory/calibration.js';
+import { withExecutionContextIfMissing } from './llm_infra.js';
 
 export async function explainPrediction(params: {
   predictionId: string;
@@ -77,12 +78,16 @@ export async function explainPrediction(params: {
   ].join('\n');
 
   const llm = params.llm ?? createLlmClient(params.config);
-  const response = await llm.complete(
-    [
-      { role: 'system', content: 'You are a precise forecasting explainer.' },
-      { role: 'user', content: prompt },
-    ],
-    { temperature: 0.3 }
+  const response = await withExecutionContextIfMissing(
+    { mode: 'LIGHT_REASONING', critical: false, reason: 'explain_prediction', source: 'core' },
+    () =>
+      llm.complete(
+        [
+          { role: 'system', content: 'You are a precise forecasting explainer.' },
+          { role: 'user', content: prompt },
+        ],
+        { temperature: 0.3 }
+      )
   );
 
   return response.content.trim();

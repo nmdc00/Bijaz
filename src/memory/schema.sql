@@ -255,6 +255,18 @@ CREATE TABLE IF NOT EXISTS mechanism_deltas (
 
 CREATE INDEX IF NOT EXISTS idx_mechanism_deltas_id ON mechanism_deltas(mechanism_id);
 
+CREATE TABLE IF NOT EXISTS system_maps (
+    id TEXT PRIMARY KEY,
+    system TEXT,
+    nodes TEXT,             -- JSON array
+    edges TEXT,             -- JSON array
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_maps_system ON system_maps(system);
+CREATE INDEX IF NOT EXISTS idx_system_maps_updated ON system_maps(updated_at);
+
 CREATE TABLE IF NOT EXISTS fragility_cards (
     id TEXT PRIMARY KEY,
     system TEXT,
@@ -289,6 +301,39 @@ CREATE INDEX IF NOT EXISTS idx_fragility_card_deltas_id ON fragility_card_deltas
 
 CREATE INDEX IF NOT EXISTS idx_market_category ON market_cache(category);
 CREATE INDEX IF NOT EXISTS idx_market_resolved ON market_cache(resolved);
+
+-- ============================================================================
+-- Decision Audit (Evaluation)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS decision_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT (datetime('now')),
+    source TEXT,
+    user_id TEXT,
+    session_id TEXT,
+    mode TEXT,
+    goal TEXT,
+    market_id TEXT,
+    prediction_id TEXT,
+    trade_action TEXT,
+    trade_outcome TEXT,
+    trade_amount REAL,
+    confidence REAL,
+    edge REAL,
+    critic_approved INTEGER,
+    critic_issues TEXT,         -- JSON array
+    fragility_score REAL,
+    tool_calls INTEGER,
+    iterations INTEGER,
+    tool_trace TEXT,            -- JSON
+    plan_trace TEXT,            -- JSON
+    notes TEXT                  -- JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_audit_created ON decision_audit(created_at);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_market ON decision_audit(market_id);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_prediction ON decision_audit(prediction_id);
 
 -- ============================================================================
 -- Intel Embeddings

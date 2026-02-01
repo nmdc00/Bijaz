@@ -69,6 +69,29 @@ goal -> memory -> plan -> (tool -> reflect)* -> synthesize -> critic -> result
 
 ---
 
+## Step 14: Evaluation Dashboard + Decision Audit - COMPLETE
+
+**Status:** Done
+
+**Files modified/added:**
+- [x] `src/core/evaluation.ts` - Live evaluation summary aggregation
+- [x] `src/memory/schema.sql` - Added `decision_audit` table
+- [x] `src/memory/decision_audit.ts` - Decision audit logger
+- [x] `src/agent/tools/adapters/memory-tools.ts` - `evaluation.summary` tool
+- [x] `src/core/tool-executor.ts` - `evaluation_summary` tool + prediction_id in trade result
+- [x] `src/core/tool-schemas.ts` - Tool schema for `evaluation_summary`
+- [x] `src/cli/index.ts` - `thufir eval` dashboard command
+- [x] `docs/EVALUATION.md` - Design doc
+
+**Implemented:**
+1. CLI evaluation dashboard (live-mode metrics)
+2. Decision audit log for trade/process metrics
+3. Agent/tool access to evaluation summary
+
+**Blocking:** Nothing
+
+---
+
 ## Step 12: QMD Knowledge Base Integration - COMPLETE
 
 **Status:** Done
@@ -270,7 +293,7 @@ goal -> memory -> plan -> (tool -> reflect)* -> synthesize -> critic -> result
 5. Autonomous manager reuses orchestrator assets for scans/reports when enabled
 
 **Remaining:**
-1. Integrate orchestrator into any remaining non-chat LLM flows (if new ones are added)
+1. None identified; non-chat LLM flows now run under execution context and identity injection.
 
 **Blocking:** All modules (1-8)
 
@@ -328,6 +351,8 @@ After implementation, verify:
 - [ ] **QMD auto-index test:** Web search results appear in QMD
 - [ ] **Mentat storage test:** Store assumption via tool, query it back
 - [ ] **Orchestrator memory test:** QMD context appears in planning phase
+- [ ] **Plan persistence test:** `thufir agent run --resume "continue"` resumes prior plan
+- [ ] **Tool/plan trace test:** `thufir agent run --show-tools --show-plan "..."` displays traces
 
 ---
 

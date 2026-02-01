@@ -167,11 +167,15 @@ Copy `config/default.yaml` to `~/.thufir/config.yaml` and edit.
 #### LLM Providers
 ```yaml
 agent:
-  provider: anthropic    # anthropic | openai | local
+  provider: anthropic    # anthropic | openai
   model: claude-sonnet-4-5-20251101
   fallbackModel: claude-3-5-haiku-20241022
-  apiBaseUrl: https://api.openai.com  # for openai/local
+  apiBaseUrl: https://api.openai.com  # for openai provider
+  localBaseUrl: http://localhost:11434  # local (Ollama) for trivial tasks/embeddings
+  trivialTaskProvider: local  # local | openai | anthropic
+  trivialTaskModel: qwen2.5:1.5b-instruct
 ```
+Note: `agent.provider` does not support `local`; local models are reserved for trivial tasks/embeddings.
 
 #### Execution Modes
 ```yaml
@@ -230,7 +234,7 @@ memory:
   retentionDays: 90
   embeddings:
     enabled: true
-    provider: openai     # openai | google
+    provider: openai     # openai | google | local
     model: text-embedding-3-small
     apiBaseUrl: https://api.openai.com
 ```
@@ -240,7 +244,7 @@ memory:
 intel:
   embeddings:
     enabled: true
-    provider: openai     # openai | google
+    provider: openai     # openai | google | local
     model: text-embedding-3-small
     apiBaseUrl: https://api.openai.com
   retentionDays: 30
@@ -421,6 +425,13 @@ thufir predictions resolve
 ```bash
 thufir pnl
 thufir pnl --date 2026-01-26
+```
+
+### Evaluation (CLI)
+```bash
+thufir eval
+thufir eval --window 30
+thufir eval --json
 ```
 
 ### Memory (CLI)

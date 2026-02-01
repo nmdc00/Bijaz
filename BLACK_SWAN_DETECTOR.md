@@ -28,8 +28,8 @@ Implemented:
 
 Not yet implemented:
 
-- Continuous multi-timescale monitoring + alerting pipeline
-- System map builder (explicit dependency graph)
+- Continuous multi-timescale monitoring + alerting pipeline (implemented via mentat schedules)
+- System map builder (explicit dependency graph) (implemented + stored in DB)
 
 ---
 

@@ -1,5 +1,5 @@
 import type { DetectorBundle, MentatReport } from './types.js';
-import { listAssumptions, listFragilityCards, listMechanisms } from '../memory/mentat.js';
+import { listAssumptions, listFragilityCards, listMechanisms, listSystemMaps } from '../memory/mentat.js';
 
 function uniq(items: string[]): string[] {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)));
@@ -19,6 +19,7 @@ export function generateMentatReport(options: {
   const assumptions = listAssumptions({ system: options.system, limit: limit * 2, orderBy: 'stress' });
   const mechanisms = listMechanisms({ system: options.system, limit: limit * 2, orderBy: 'updated' });
   const cards = listFragilityCards({ system: options.system, limit: limit * 2, orderBy: 'score' });
+  const systemMap = listSystemMaps({ system: options.system, limit: 1 })[0] ?? null;
 
   const mechanismById = new Map(mechanisms.map((mech) => [mech.id, mech]));
 
@@ -69,6 +70,7 @@ export function generateMentatReport(options: {
     generatedAt: new Date().toISOString(),
     fragilityScore: options.detectors?.overall ?? fallbackFragilityScore,
     detectors: options.detectors,
+    systemMap: systemMap ? { nodes: systemMap.nodes, edges: systemMap.edges } : null,
     topFragilityCards: topCards,
     assumptionsUnderStress,
     mechanisms: mechanismItems,
@@ -91,6 +93,20 @@ export function formatMentatReport(report: MentatReport): string {
     lines.push(`- Illiquidity: ${formatScore(report.detectors.illiquidity.score)}`);
     lines.push(`- Consensus: ${formatScore(report.detectors.consensus.score)}`);
     lines.push(`- Irreversibility: ${formatScore(report.detectors.irreversibility.score)}`);
+  }
+
+  if (report.systemMap) {
+    lines.push('');
+    lines.push('System Map');
+    lines.push(`- Nodes: ${report.systemMap.nodes.length}`);
+    lines.push(`- Edges: ${report.systemMap.edges.length}`);
+    const edgePreview = report.systemMap.edges.slice(0, 5);
+    if (edgePreview.length > 0) {
+      lines.push('  Top Links:');
+      for (const edge of edgePreview) {
+        lines.push(`  - ${edge.from} -> ${edge.to} (${edge.relation})`);
+      }
+    }
   }
 
   lines.push('');

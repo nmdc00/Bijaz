@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import type { ChatMessage } from '../core/llm.js';
 import type { LlmClient } from '../core/llm.js';
 import type { ThufirConfig } from '../core/config.js';
+import type { AgentPlan } from '../agent/planning/types.js';
+import { withExecutionContext } from '../core/llm_infra.js';
 
 export interface SessionMeta {
   sessionId: string;
@@ -25,6 +27,7 @@ export class SessionStore {
   private baseDir: string;
   private sessionsPath: string;
   private transcriptsDir: string;
+  private plansDir: string;
   private meta: Record<string, SessionMeta> = {};
 
   constructor(_config: ThufirConfig) {
@@ -33,6 +36,7 @@ export class SessionStore {
     this.baseDir = base;
     this.sessionsPath = join(base, 'sessions.json');
     this.transcriptsDir = join(base, 'transcripts');
+    this.plansDir = join(base, 'plans');
     this.ensureDirs();
     this.meta = this.loadMeta();
   }
@@ -170,12 +174,16 @@ New content to summarize:
 ${messagesText}
 `.trim();
 
-    const response = await llm.complete(
-      [
-        { role: 'system', content: 'You are a precise summarizer.' },
-        { role: 'user', content: prompt },
-      ],
-      { temperature: 0.2 }
+    const response = await withExecutionContext(
+      { mode: 'LIGHT_REASONING', critical: false, reason: 'session_compaction', source: 'memory' },
+      () =>
+        llm.complete(
+          [
+            { role: 'system', content: 'You are a precise summarizer.' },
+            { role: 'user', content: prompt },
+          ],
+          { temperature: 0.2 }
+        )
     );
 
     const summary = response.content.trim();
@@ -211,9 +219,46 @@ ${messagesText}
     if (existsSync(path)) {
       writeFileSync(path, '', 'utf-8');
     }
+    const planPath = this.planPath(sessionId);
+    if (existsSync(planPath)) {
+      writeFileSync(planPath, '', 'utf-8');
+    }
     if (this.meta[userId]) {
       delete this.meta[userId];
       this.saveMeta();
+    }
+  }
+
+  getPlan(userId: string): AgentPlan | null {
+    const sessionId = this.getSessionId(userId);
+    const path = this.planPath(sessionId);
+    if (!existsSync(path)) {
+      return null;
+    }
+    try {
+      const raw = readFileSync(path, 'utf-8');
+      const parsed = JSON.parse(raw) as AgentPlan;
+      if (!parsed || !parsed.goal || !Array.isArray(parsed.steps)) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  setPlan(userId: string, plan: AgentPlan): void {
+    const sessionId = this.getSessionId(userId);
+    const path = this.planPath(sessionId);
+    writeFileSync(path, JSON.stringify(plan, null, 2), 'utf-8');
+    this.touch(userId);
+  }
+
+  clearPlan(userId: string): void {
+    const sessionId = this.getSessionId(userId);
+    const path = this.planPath(sessionId);
+    if (existsSync(path)) {
+      writeFileSync(path, '', 'utf-8');
     }
   }
 
@@ -240,6 +285,10 @@ ${messagesText}
     return join(this.transcriptsDir, `${sessionId}.jsonl`);
   }
 
+  private planPath(sessionId: string): string {
+    return join(this.plansDir, `${sessionId}.json`);
+  }
+
   private loadMeta(): Record<string, SessionMeta> {
     if (!existsSync(this.sessionsPath)) {
       return {};
@@ -260,6 +309,7 @@ ${messagesText}
   private ensureDirs(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.transcriptsDir, { recursive: true });
+    mkdirSync(this.plansDir, { recursive: true });
   }
 }
 

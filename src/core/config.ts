@@ -31,6 +31,7 @@ const ConfigSchema = z.object({
     showCriticNotes: z.boolean().default(false),
     showPlanTrace: z.boolean().default(false),
     showFragilityTrace: z.boolean().default(false),
+    persistPlans: z.boolean().default(true),
     identityPromptMode: z.enum(['full', 'minimal', 'none']).default('full'),
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
     mentatAutoScan: z.boolean().default(false),
@@ -39,8 +40,30 @@ const ConfigSchema = z.object({
     mentatMarketLimit: z.number().optional(),
     mentatIntelLimit: z.number().optional(),
     enablePreTradeFragility: z.boolean().default(true),
+    trivialTaskProvider: z.enum(['local', 'openai', 'anthropic']).default('local'),
+    trivialTaskModel: z.string().default('qwen2.5:1.5b-instruct'),
+    trivial: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxTokens: z.number().default(256),
+        temperature: z.number().default(0.2),
+        timeoutMs: z.number().default(30000),
+      })
+      .default({}),
+    llmBudget: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxCallsPerHour: z.number().default(120),
+        maxTokensPerHour: z.number().default(120000),
+        reserveCalls: z.number().default(10),
+        reserveTokens: z.number().default(10000),
+        includeLocal: z.boolean().default(false),
+        storagePath: z.string().optional(),
+      })
+      .default({}),
     provider: z.enum(['anthropic', 'openai', 'local']).default('anthropic'),
     apiBaseUrl: z.string().optional(),
+    localBaseUrl: z.string().optional(),
     workspace: z.string().optional(),
     useProxy: z.boolean().default(false),
     proxyBaseUrl: z.string().default('http://localhost:8317'),
@@ -92,7 +115,7 @@ const ConfigSchema = z.object({
       embeddings: z
         .object({
           enabled: z.boolean().default(false),
-          provider: z.enum(['openai', 'google']).default('openai'),
+          provider: z.enum(['openai', 'google', 'local']).default('openai'),
           model: z.string().default('text-embedding-3-small'),
           apiBaseUrl: z.string().optional(),
         })
@@ -180,7 +203,7 @@ const ConfigSchema = z.object({
     embeddings: z
       .object({
         enabled: z.boolean().default(false),
-        provider: z.enum(['openai', 'google']).default('openai'),
+        provider: z.enum(['openai', 'google', 'local']).default('openai'),
         model: z.string().default('text-embedding-3-small'),
         apiBaseUrl: z.string().optional(),
       })
@@ -222,9 +245,31 @@ const ConfigSchema = z.object({
                   useExecutorModel: z.boolean().optional(),
                   provider: z.enum(['anthropic', 'openai', 'local']).optional(),
                   apiBaseUrl: z.string().optional(),
+                  localBaseUrl: z.string().optional(),
                   workspace: z.string().optional(),
                   useProxy: z.boolean().optional(),
                   proxyBaseUrl: z.string().optional(),
+                  trivialTaskProvider: z.enum(['local', 'openai', 'anthropic']).optional(),
+                  trivialTaskModel: z.string().optional(),
+                  trivial: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      maxTokens: z.number().optional(),
+                      temperature: z.number().optional(),
+                      timeoutMs: z.number().optional(),
+                    })
+                    .default({}),
+                  llmBudget: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      maxCallsPerHour: z.number().optional(),
+                      maxTokensPerHour: z.number().optional(),
+                      reserveCalls: z.number().optional(),
+                      reserveTokens: z.number().optional(),
+                      includeLocal: z.boolean().optional(),
+                      storagePath: z.string().optional(),
+                    })
+                    .default({}),
                 })
                 .default({}),
               memory: z
@@ -391,6 +436,22 @@ const ConfigSchema = z.object({
           intelLimit: z.number().default(40),
           minOverallScore: z.number().default(0.7),
           minDeltaScore: z.number().default(0.15),
+          schedules: z
+            .array(
+              z.object({
+                name: z.string().optional(),
+                time: z.string().optional(),
+                intervalMinutes: z.number().optional(),
+                channels: z.array(z.string()).default([]),
+                system: z.string().optional(),
+                marketQuery: z.string().optional(),
+                marketLimit: z.number().optional(),
+                intelLimit: z.number().optional(),
+                minOverallScore: z.number().optional(),
+                minDeltaScore: z.number().optional(),
+              })
+            )
+            .default([]),
         })
         .default({}),
     })
@@ -447,6 +508,9 @@ export function loadConfig(configPath?: string): ThufirConfig {
   if (cfg.agent.workspace) {
     cfg.agent.workspace = expandHome(cfg.agent.workspace);
   }
+  if (cfg.agent?.llmBudget?.storagePath) {
+    cfg.agent.llmBudget.storagePath = expandHome(cfg.agent.llmBudget.storagePath);
+  }
   if (cfg.memory.dbPath) {
     cfg.memory.dbPath = expandHome(cfg.memory.dbPath);
   }
@@ -460,6 +524,9 @@ export function loadConfig(configPath?: string): ThufirConfig {
     for (const override of Object.values(cfg.agents.overrides)) {
       if (override.agent?.workspace) {
         override.agent.workspace = expandHome(override.agent.workspace);
+      }
+      if (override.agent?.llmBudget?.storagePath) {
+        override.agent.llmBudget.storagePath = expandHome(override.agent.llmBudget.storagePath);
       }
       if (override.memory?.sessionsPath) {
         override.memory.sessionsPath = expandHome(override.memory.sessionsPath);

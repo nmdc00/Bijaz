@@ -32,6 +32,7 @@ import {
   isRateLimitError,
   wrapWithLimiter,
   shouldUseExecutorModel,
+  wrapWithInfra,
 } from './llm.js';
 import { loadIdentityPrelude } from '../agent/identity/identity.js';
 import { runOrchestrator } from '../agent/orchestrator/orchestrator.js';
@@ -45,6 +46,7 @@ import type { AgentPlan } from '../agent/planning/types.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
 import { Logger } from './logger.js';
+import { withExecutionContext } from './llm_infra.js';
 
 export interface ConversationContext {
   userId: string;
@@ -268,13 +270,19 @@ export class ConversationHandler {
       const primary = new AgenticAnthropicClient(config, context);
       const fallbackModel = config.agent?.openaiModel ?? config.agent?.fallbackModel ?? 'gpt-5.2';
       const fallback = new AgenticOpenAiClient(config, context, fallbackModel);
-      this.agenticLlm = wrapWithLimiter(new FallbackLlmClient(primary, fallback, isRateLimitError));
+      this.agenticLlm = wrapWithLimiter(
+        wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+      );
     }
     if (provider === 'openai' && hasAgentModel) {
-      this.agenticLlm = wrapWithLimiter(new AgenticOpenAiClient(config, context));
+      this.agenticLlm = wrapWithLimiter(
+        wrapWithInfra(new AgenticOpenAiClient(config, context), config)
+      );
     }
     if (config.agent?.model || config.agent?.openaiModel) {
-      this.agenticOpenAi = wrapWithLimiter(new AgenticOpenAiClient(config, context));
+      this.agenticOpenAi = wrapWithLimiter(
+        wrapWithInfra(new AgenticOpenAiClient(config, context), config)
+      );
     }
     if (shouldUseExecutorModel(config)) {
       const executor = createAgenticExecutorClient(config, context);
@@ -306,182 +314,200 @@ export class ConversationHandler {
    * Handle a conversational message from the user
    */
   async chat(userId: string, message: string): Promise<string> {
-    const alertResponse = await this.handleIntelAlertSetup(userId, message);
-    if (alertResponse) {
-      return alertResponse;
-    }
+    return withExecutionContext(
+      { mode: 'FULL_AGENT', critical: false, reason: 'chat', source: 'conversation' },
+      async () => {
+        const alertResponse = await this.handleIntelAlertSetup(userId, message);
+        if (alertResponse) {
+          return alertResponse;
+        }
 
-    if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
-      const memorySystem = {
-        getRelevantContext: (query: string) => this.getMemoryContextForOrchestrator(userId, query),
-      };
+        if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
+          const memorySystem = {
+            getRelevantContext: (query: string) => this.getMemoryContextForOrchestrator(userId, query),
+          };
 
-      const tradeToolNames = new Set(['place_bet', 'trade.place']);
-      const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
+          const tradeToolNames = new Set(['place_bet', 'trade.place']);
+          const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
+          const resumePlan = this.shouldResumePlan(message);
+          const priorPlan = resumePlan ? this.sessions.getPlan(userId) : null;
 
-      const result = await runOrchestrator(message, {
-        llm: this.llm,
-        toolRegistry: this.orchestratorRegistry,
-        identity: this.orchestratorIdentity,
-        toolContext: this.toolContext,
-        memorySystem,
-        onConfirmation: async (_prompt, toolName) => {
-          if (tradeToolNames.has(toolName)) {
-            return autoApproveTrades;
+          const result = await runOrchestrator(message, {
+            llm: this.llm,
+            toolRegistry: this.orchestratorRegistry,
+            identity: this.orchestratorIdentity,
+            toolContext: this.toolContext,
+            memorySystem,
+            onConfirmation: async (_prompt, toolName) => {
+              if (tradeToolNames.has(toolName)) {
+                return autoApproveTrades;
+              }
+              return false;
+            },
+          }, {
+            initialPlan: priorPlan ?? undefined,
+            resumePlan,
+          });
+
+          if (result.state.plan && !result.state.plan.complete) {
+            this.sessions.setPlan(userId, result.state.plan);
+          } else {
+            this.sessions.clearPlan(userId);
           }
-          return false;
-        },
-      });
 
-      let response = this.maybeAttachOrchestratorNotes(
-        result.response,
-        result.state.toolExecutions,
-        result.state.criticResult,
-        result.state.plan,
-        result.summary.fragility
-      );
-      response = await this.maybeAttachMentatReport(response, result.state.mode);
+          let response = this.maybeAttachOrchestratorNotes(
+            result.response,
+            result.state.toolExecutions,
+            result.state.criticResult,
+            result.state.plan,
+            result.summary.fragility
+          );
+          response = await this.maybeAttachMentatReport(response, result.state.mode);
 
-      if (!response || response.trim() === '') {
-        throw new Error('Orchestrator returned empty response');
+          if (!response || response.trim() === '') {
+            throw new Error('Orchestrator returned empty response');
+          }
+
+          this.sessions.appendEntry(userId, {
+            type: 'message',
+            role: 'user',
+            content: message,
+            timestamp: new Date().toISOString(),
+          });
+          this.sessions.appendEntry(userId, {
+            type: 'message',
+            role: 'assistant',
+            content: response,
+            timestamp: new Date().toISOString(),
+          });
+
+          const sessionId = this.sessions.getSessionId(userId);
+          const userMessageId = storeChatMessage({
+            sessionId,
+            role: 'user',
+            content: message,
+          });
+          const assistantMessageId = storeChatMessage({
+            sessionId,
+            role: 'assistant',
+            content: response,
+          });
+
+          await this.chatVectorStore.add({
+            id: userMessageId,
+            text: message,
+          });
+          await this.chatVectorStore.add({
+            id: assistantMessageId,
+            text: response,
+          });
+
+          return response;
+        }
+
+        const forcedToolContext = await this.runForcedTooling(message);
+        const toolFirstContext = await this.runToolFirstGuard(message);
+        const summary = this.sessions.getSummary(userId);
+        const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
+        const compactAfterTokens = this.config.memory?.compactAfterTokens ?? 12000;
+        const keepRecent = this.config.memory?.keepRecentMessages ?? 12;
+
+        await this.sessions.compactIfNeeded({
+          userId,
+          llm: this.llm,
+          maxMessages: maxHistory,
+          compactAfterTokens,
+          keepRecent,
+        });
+
+        const history = this.sessions.buildContextMessages(userId, maxHistory);
+
+        // Build context
+        const userContext = buildUserContext(userId, this.config);
+        const intelContext = buildIntelContext();
+        const semanticIntelContext = await buildSemanticIntelContext(message, this.config);
+        const semanticChatContext = await this.buildSemanticChatContext(message, userId);
+
+        // Build the full context for this turn
+        const contextBlock = [
+          userContext,
+          forcedToolContext,
+          toolFirstContext,
+          summary ? `## Conversation Summary\n${summary}` : '',
+          intelContext,
+          semanticIntelContext,
+          semanticChatContext,
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        const systemMessage = await this.buildPlannerSystemMessage({
+          basePrompt: this.getSystemPrompt(userId),
+          contextBlock,
+          userMessage: message,
+        });
+
+        // Build messages array
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemMessage },
+          ...history,
+          { role: 'user', content: message },
+        ];
+
+        // Call LLM
+        const response = await this.completeWithFallback(messages, { temperature: 0.7 });
+
+        // Don't store empty responses (prevents history corruption from failed calls)
+        if (!response.content || response.content.trim() === '') {
+          throw new Error('LLM returned empty response');
+        }
+
+        const userEntry: ChatMessage = { role: 'user', content: message };
+        const assistantEntry: ChatMessage = { role: 'assistant', content: response.content };
+
+        this.sessions.appendEntry(userId, {
+          type: 'message',
+          role: 'user',
+          content: message,
+          timestamp: new Date().toISOString(),
+        });
+        this.sessions.appendEntry(userId, {
+          type: 'message',
+          role: 'assistant',
+          content: response.content,
+          timestamp: new Date().toISOString(),
+        });
+
+        const sessionId = this.sessions.getSessionId(userId);
+        const userMessageId = storeChatMessage({
+          sessionId,
+          role: 'user',
+          content: message,
+        });
+        const assistantMessageId = storeChatMessage({
+          sessionId,
+          role: 'assistant',
+          content: response.content,
+        });
+
+        await this.chatVectorStore.add({
+          id: userMessageId,
+          text: userEntry.content,
+        });
+        await this.chatVectorStore.add({
+          id: assistantMessageId,
+          text: assistantEntry.content,
+        });
+
+        let reply = response.content;
+        const prompt = this.maybePromptIntelAlerts(userId);
+        if (prompt) {
+          reply = `${reply}\n\n${prompt}`;
+        }
+
+        return reply;
       }
-
-      this.sessions.appendEntry(userId, {
-        type: 'message',
-        role: 'user',
-        content: message,
-        timestamp: new Date().toISOString(),
-      });
-      this.sessions.appendEntry(userId, {
-        type: 'message',
-        role: 'assistant',
-        content: response,
-        timestamp: new Date().toISOString(),
-      });
-
-      const sessionId = this.sessions.getSessionId(userId);
-      const userMessageId = storeChatMessage({
-        sessionId,
-        role: 'user',
-        content: message,
-      });
-      const assistantMessageId = storeChatMessage({
-        sessionId,
-        role: 'assistant',
-        content: response,
-      });
-
-      await this.chatVectorStore.add({
-        id: userMessageId,
-        text: message,
-      });
-      await this.chatVectorStore.add({
-        id: assistantMessageId,
-        text: response,
-      });
-
-      return response;
-    }
-
-    const forcedToolContext = await this.runForcedTooling(message);
-    const summary = this.sessions.getSummary(userId);
-    const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
-    const compactAfterTokens = this.config.memory?.compactAfterTokens ?? 12000;
-    const keepRecent = this.config.memory?.keepRecentMessages ?? 12;
-
-    await this.sessions.compactIfNeeded({
-      userId,
-      llm: this.llm,
-      maxMessages: maxHistory,
-      compactAfterTokens,
-      keepRecent,
-    });
-
-    const history = this.sessions.buildContextMessages(userId, maxHistory);
-
-    // Build context
-    const userContext = buildUserContext(userId, this.config);
-    const intelContext = buildIntelContext();
-    const semanticIntelContext = await buildSemanticIntelContext(message, this.config);
-    const semanticChatContext = await this.buildSemanticChatContext(message, userId);
-
-    // Build the full context for this turn
-    const contextBlock = [
-      userContext,
-      forcedToolContext,
-      summary ? `## Conversation Summary\n${summary}` : '',
-      intelContext,
-      semanticIntelContext,
-      semanticChatContext,
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    const systemMessage = await this.buildPlannerSystemMessage({
-      basePrompt: this.getSystemPrompt(userId),
-      contextBlock,
-      userMessage: message,
-    });
-
-    // Build messages array
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemMessage },
-      ...history,
-      { role: 'user', content: message },
-    ];
-
-    // Call LLM
-    const response = await this.completeWithFallback(messages, { temperature: 0.7 });
-
-    // Don't store empty responses (prevents history corruption from failed calls)
-    if (!response.content || response.content.trim() === '') {
-      throw new Error('LLM returned empty response');
-    }
-
-    const userEntry: ChatMessage = { role: 'user', content: message };
-    const assistantEntry: ChatMessage = { role: 'assistant', content: response.content };
-
-    this.sessions.appendEntry(userId, {
-      type: 'message',
-      role: 'user',
-      content: message,
-      timestamp: new Date().toISOString(),
-    });
-    this.sessions.appendEntry(userId, {
-      type: 'message',
-      role: 'assistant',
-      content: response.content,
-      timestamp: new Date().toISOString(),
-    });
-
-    const sessionId = this.sessions.getSessionId(userId);
-    const userMessageId = storeChatMessage({
-      sessionId,
-      role: 'user',
-      content: message,
-    });
-    const assistantMessageId = storeChatMessage({
-      sessionId,
-      role: 'assistant',
-      content: response.content,
-    });
-
-    await this.chatVectorStore.add({
-      id: userMessageId,
-      text: userEntry.content,
-    });
-    await this.chatVectorStore.add({
-      id: assistantMessageId,
-      text: assistantEntry.content,
-    });
-
-    let reply = response.content;
-    const prompt = this.maybePromptIntelAlerts(userId);
-    if (prompt) {
-      reply = `${reply}\n\n${prompt}`;
-    }
-
-    return reply;
+    );
   }
 
   private async runForcedTooling(message: string): Promise<string> {
@@ -510,6 +536,58 @@ export class ConversationHandler {
 
     lines.push('');
     return lines.join('\n');
+  }
+
+  private shouldResumePlan(message: string): boolean {
+    if (this.config.agent?.persistPlans === false) {
+      return false;
+    }
+    const text = message.toLowerCase();
+    return /\b(continue|resume|next step|next|progress|status|carry on)\b/.test(text);
+  }
+
+  private async runToolFirstGuard(message: string): Promise<string> {
+    const text = message.toLowerCase();
+    const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
+    const wantsMarket = /\b(price|odds|market|polymarket|probability|volume|liquidity|bid|ask)\b/.test(text);
+    const wantsTime = /\b(time|date|day)\b/.test(text);
+
+    if (!wantsNews && !wantsMarket && !wantsTime) {
+      return '';
+    }
+
+    const sections: string[] = ['## Tool Snapshot'];
+
+    if (wantsTime) {
+      const timeResult = await executeToolCall('current_time', {}, this.toolContext);
+      if (timeResult.success) {
+        sections.push(`### current_time\n${JSON.stringify(timeResult.data, null, 2)}`);
+      }
+    }
+
+    if (wantsNews) {
+      const intelResult = await executeToolCall('intel_search', { query: message, limit: 5 }, this.toolContext);
+      if (intelResult.success) {
+        sections.push(`### intel_search\n${JSON.stringify(intelResult.data, null, 2)}`);
+      }
+      const webResult = await executeToolCall('web_search', { query: message, limit: 5 }, this.toolContext);
+      if (webResult.success) {
+        sections.push(`### web_search\n${JSON.stringify(webResult.data, null, 2)}`);
+      }
+    }
+
+    if (wantsMarket) {
+      const marketResult = await executeToolCall('market_search', { query: message, limit: 5 }, this.toolContext);
+      if (marketResult.success) {
+        sections.push(`### market_search\n${JSON.stringify(marketResult.data, null, 2)}`);
+      }
+    }
+
+    if (sections.length === 1) {
+      return '';
+    }
+
+    return sections.join('\n\n') + '\n';
   }
 
   /**
@@ -572,12 +650,16 @@ ${contextBlock}`.trim();
       const systemPrompt = identityPrelude
         ? `${identityPrelude}\n\n---\n\nYou are a concise information gatherer.`
         : 'You are a concise information gatherer.';
-      const response = await this.infoLlm.complete(
-        [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt },
-        ],
-        { temperature: 0.1 }
+      const response = await withExecutionContext(
+        { mode: 'LIGHT_REASONING', critical: false, reason: 'info_digest', source: 'conversation' },
+        () =>
+          this.infoLlm.complete(
+            [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: prompt },
+            ],
+            { temperature: 0.1 }
+          )
       );
       const digest = response.content.trim();
       if (!digest) {
@@ -994,33 +1076,36 @@ ${contextBlock}`.trim();
    * Get a specific market analysis
    */
   async analyzeMarket(userId: string, marketId: string): Promise<string> {
-    try {
-      const market = await this.marketClient.getMarket(marketId);
-      const userContext = buildUserContext(userId, this.config);
-      const intelContext = buildIntelContext();
-      const summary = this.sessions.getSummary(userId);
-      const semanticChatContext = await this.buildSemanticChatContext(
-        market.question ?? marketId,
-        userId
-      );
-      const tools = new ToolRegistry();
-      const plan = await createResearchPlan({
-        llm: this.llm,
-        subject: market.question ?? marketId,
-      });
-      const research = await runResearchPlan({
-        config: this.config,
-        marketClient: this.marketClient,
-        subject: {
-          id: market.id,
-          question: market.question ?? marketId,
-          category: market.category,
-        },
-        plan,
-        tools,
-      });
+    return withExecutionContext(
+      { mode: 'FULL_AGENT', critical: false, reason: 'analyze_market', source: 'conversation' },
+      async () => {
+        try {
+          const market = await this.marketClient.getMarket(marketId);
+          const userContext = buildUserContext(userId, this.config);
+          const intelContext = buildIntelContext();
+          const summary = this.sessions.getSummary(userId);
+          const semanticChatContext = await this.buildSemanticChatContext(
+            market.question ?? marketId,
+            userId
+          );
+          const tools = new ToolRegistry();
+          const plan = await createResearchPlan({
+            llm: this.llm,
+            subject: market.question ?? marketId,
+          });
+          const research = await runResearchPlan({
+            config: this.config,
+            marketClient: this.marketClient,
+            subject: {
+              id: market.id,
+              question: market.question ?? marketId,
+              category: market.category,
+            },
+            plan,
+            tools,
+          });
 
-      const prompt = `Please analyze this prediction market and give me your probability estimate with reasoning:
+          const prompt = `Please analyze this prediction market and give me your probability estimate with reasoning:
 
 **${market.question}**
 - Outcomes: ${market.outcomes.join(', ')}
@@ -1034,33 +1119,35 @@ Give me:
 3. What would change your mind
 4. Whether you see edge vs. the market price`;
 
-      const contextBlock = [
-        userContext,
-        summary ? `## Conversation Summary\n${summary}` : '',
-        semanticChatContext,
-        intelContext,
-        research.context,
-      ]
-        .filter(Boolean)
-        .join('\n');
-      const systemMessage = await this.buildPlannerSystemMessage({
-        basePrompt: this.getSystemPrompt(userId),
-        contextBlock,
-        userMessage: market.question ?? marketId,
-      });
+          const contextBlock = [
+            userContext,
+            summary ? `## Conversation Summary\n${summary}` : '',
+            semanticChatContext,
+            intelContext,
+            research.context,
+          ]
+            .filter(Boolean)
+            .join('\n');
+          const systemMessage = await this.buildPlannerSystemMessage({
+            basePrompt: this.getSystemPrompt(userId),
+            contextBlock,
+            userMessage: market.question ?? marketId,
+          });
 
-      const response = await this.completeWithFallback(
-        [
-          { role: 'system', content: systemMessage },
-          { role: 'user', content: prompt },
-        ],
-        { temperature: 0.5 }
-      );
+          const response = await this.completeWithFallback(
+            [
+              { role: 'system', content: systemMessage },
+              { role: 'user', content: prompt },
+            ],
+            { temperature: 0.5 }
+          );
 
-      return response.content;
-    } catch (error) {
-      return `Failed to analyze market: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    }
+          return response.content;
+        } catch (error) {
+          return `Failed to analyze market: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      }
+    );
   }
 
   /**
@@ -1076,32 +1163,35 @@ Give me:
     analysis: Record<string, unknown>;
     context: string;
   }> {
-    const market = await this.marketClient.getMarket(marketId);
-    const summary = this.sessions.getSummary(userId);
-    const userContext = buildUserContext(userId, this.config);
-    const intelContext = buildIntelContext();
-    const semanticChatContext = await this.buildSemanticChatContext(
-      market.question ?? marketId,
-      userId
-    );
-    const tools = new ToolRegistry();
-    const plan = await createResearchPlan({
-      llm: this.llm,
-      subject: market.question ?? marketId,
-    });
-    const research = await runResearchPlan({
-      config: this.config,
-      marketClient: this.marketClient,
-      subject: {
-        id: market.id,
-        question: market.question ?? marketId,
-        category: market.category,
-      },
-      plan,
-      tools,
-    });
+    return withExecutionContext(
+      { mode: 'FULL_AGENT', critical: false, reason: 'analyze_market_structured', source: 'conversation' },
+      async () => {
+        const market = await this.marketClient.getMarket(marketId);
+        const summary = this.sessions.getSummary(userId);
+        const userContext = buildUserContext(userId, this.config);
+        const intelContext = buildIntelContext();
+        const semanticChatContext = await this.buildSemanticChatContext(
+          market.question ?? marketId,
+          userId
+        );
+        const tools = new ToolRegistry();
+        const plan = await createResearchPlan({
+          llm: this.llm,
+          subject: market.question ?? marketId,
+        });
+        const research = await runResearchPlan({
+          config: this.config,
+          marketClient: this.marketClient,
+          subject: {
+            id: market.id,
+            question: market.question ?? marketId,
+            category: market.category,
+          },
+          plan,
+          tools,
+        });
 
-    const prompt = `Return JSON only with fields:
+        const prompt = `Return JSON only with fields:
 {
   "probability": number,          // 0-1
   "summary": string,              // 1-2 sentences
@@ -1119,77 +1209,82 @@ Volume: $${(market.volume ?? 0).toLocaleString()}
 Category: ${market.category ?? 'unknown'}
 `;
 
-    const contextBlock = [
-      userContext,
-      summary ? `## Conversation Summary\n${summary}` : '',
-      semanticChatContext,
-      intelContext,
-      research.context,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const systemMessage = await this.buildPlannerSystemMessage({
-      basePrompt: this.getSystemPrompt(userId),
-      contextBlock,
-      userMessage: market.question ?? marketId,
-    });
+        const contextBlock = [
+          userContext,
+          summary ? `## Conversation Summary\n${summary}` : '',
+          semanticChatContext,
+          intelContext,
+          research.context,
+        ]
+          .filter(Boolean)
+          .join('\n');
+        const systemMessage = await this.buildPlannerSystemMessage({
+          basePrompt: this.getSystemPrompt(userId),
+          contextBlock,
+          userMessage: market.question ?? marketId,
+        });
 
-    const response = await this.completeWithFallback(
-      [
-        { role: 'system', content: systemMessage },
-        { role: 'user', content: prompt },
-      ],
-      { temperature: 0.3 }
+        const response = await this.completeWithFallback(
+          [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: prompt },
+          ],
+          { temperature: 0.3 }
+        );
+
+        const analysis = safeParseJson(response.content) ?? {
+          summary: response.content.trim(),
+        };
+
+        return {
+          marketId: market.id,
+          question: market.question ?? marketId,
+          plan: research.plan,
+          analysis,
+          context: research.context,
+        };
+      }
     );
-
-    const analysis = safeParseJson(response.content) ?? {
-      summary: response.content.trim(),
-    };
-
-    return {
-      marketId: market.id,
-      question: market.question ?? marketId,
-      plan: research.plan,
-      analysis,
-      context: research.context,
-    };
   }
 
   /**
    * Ask about a topic and find relevant markets
    */
   async askAbout(userId: string, topic: string): Promise<string> {
-    // Search for markets
-    let markets: Market[] = [];
-    try {
-      markets = await this.marketClient.searchMarkets(topic, 5);
-    } catch {
-      // Continue without markets
-    }
+    return withExecutionContext(
+      { mode: 'FULL_AGENT', critical: false, reason: 'ask_about', source: 'conversation' },
+      async () => {
+        // Search for markets
+        let markets: Market[] = [];
+        try {
+          markets = await this.marketClient.searchMarkets(topic, 5);
+        } catch {
+          // Continue without markets
+        }
 
-    const userContext = buildUserContext(userId, this.config);
-    const summary = this.sessions.getSummary(userId);
-    const semanticChatContext = await this.buildSemanticChatContext(topic, userId);
-    const tools = new ToolRegistry();
-    const plan = await createResearchPlan({
-      llm: this.llm,
-      subject: topic,
-    });
-    const research = await runResearchPlan({
-      config: this.config,
-      marketClient: this.marketClient,
-      subject: {
-        question: topic,
-      },
-      plan,
-      tools,
-    });
-    const marketContext =
-      markets.length > 0
-        ? `\n## Relevant Prediction Markets\n${formatMarketsForChat(markets)}`
-        : '\n(No prediction markets found for this topic)';
+        const userContext = buildUserContext(userId, this.config);
+        const summary = this.sessions.getSummary(userId);
+        const semanticChatContext = await this.buildSemanticChatContext(topic, userId);
+        const tools = new ToolRegistry();
+        const plan = await createResearchPlan({
+          llm: this.llm,
+          subject: topic,
+        });
+        const research = await runResearchPlan({
+          config: this.config,
+          marketClient: this.marketClient,
+          subject: {
+            question: topic,
+          },
+          plan,
+          tools,
+        });
+        const marketContext =
+          markets.length > 0
+            ? `\n## Relevant Prediction Markets\n${formatMarketsForChat(markets)}`
+            : '\n(No prediction markets found for this topic)';
 
-    const prompt = `The user wants to know about: "${topic}"
+        const prompt = `The user wants to know about: "${topic}"
 
 Please:
 1. Share your analysis and probability estimates for outcomes related to this topic
@@ -1199,30 +1294,32 @@ Please:
 
 ${marketContext}`;
 
-    const systemContext = [
-      userContext,
-      summary ? `## Conversation Summary\n${summary}` : '',
-      semanticChatContext,
-      research.context,
-    ]
-      .filter(Boolean)
-      .join('\n');
+        const systemContext = [
+          userContext,
+          summary ? `## Conversation Summary\n${summary}` : '',
+          semanticChatContext,
+          research.context,
+        ]
+          .filter(Boolean)
+          .join('\n');
 
-    const systemMessage = await this.buildPlannerSystemMessage({
-      basePrompt: this.getSystemPrompt(userId),
-      contextBlock: systemContext,
-      userMessage: topic,
-    });
+        const systemMessage = await this.buildPlannerSystemMessage({
+          basePrompt: this.getSystemPrompt(userId),
+          contextBlock: systemContext,
+          userMessage: topic,
+        });
 
-    const response = await this.completeWithFallback(
-      [
-        { role: 'system', content: systemMessage },
-        { role: 'user', content: prompt },
-      ],
-      { temperature: 0.6 }
+        const response = await this.completeWithFallback(
+          [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: prompt },
+          ],
+          { temperature: 0.6 }
+        );
+
+        return response.content;
+      }
     );
-
-    return response.content;
   }
 }
 

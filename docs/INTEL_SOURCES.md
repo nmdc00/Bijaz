@@ -176,12 +176,14 @@ quality for long-running conversations.
 intel:
   embeddings:
     enabled: true
-    provider: openai   # or google
+    provider: openai   # openai | google | local
     model: text-embedding-3-small
     apiBaseUrl: https://api.openai.com
+agent:
+  localBaseUrl: http://localhost:11434  # used when provider=local
 ```
 
-**Keys:** set `OPENAI_API_KEY` (or `GEMINI_API_KEY` for Google).
+**Keys:** set `OPENAI_API_KEY` (or `GEMINI_API_KEY` for Google). Local embeddings do not require a key.
 
 ## Custom Sources
 

@@ -17,6 +17,7 @@ import { AgentToolRegistry } from '../agent/tools/registry.js';
 import { registerAllTools } from '../agent/tools/adapters/index.js';
 import { loadThufirIdentity } from '../agent/identity/identity.js';
 import type { AgentIdentity } from '../agent/identity/types.js';
+import { withExecutionContextIfMissing } from './llm_infra.js';
 
 export interface Opportunity {
   market: Market;
@@ -121,49 +122,57 @@ Analyze these markets. For each one, estimate the true probability and identify 
 Focus on markets where the news gives you an informational edge.
 Return a JSON array with your analysis.`;
 
-  let responseContent: string;
+  const responseContent = await withExecutionContextIfMissing(
+    {
+      mode: config.agent?.useOrchestrator ? 'FULL_AGENT' : 'LIGHT_REASONING',
+      critical: false,
+      reason: 'opportunity_scan',
+      source: 'opportunities',
+    },
+    async () => {
+      if (config.agent?.useOrchestrator) {
+        const registry = options?.orchestrator?.registry ?? new AgentToolRegistry();
+        if (!options?.orchestrator) {
+          registerAllTools(registry);
+        }
+        const identity =
+          options?.orchestrator?.identity ??
+          loadThufirIdentity({
+            workspacePath: config.agent?.workspace,
+          }).identity;
 
-  if (config.agent?.useOrchestrator) {
-    const registry = options?.orchestrator?.registry ?? new AgentToolRegistry();
-    if (!options?.orchestrator) {
-      registerAllTools(registry);
-    }
-    const identity =
-      options?.orchestrator?.identity ??
-      loadThufirIdentity({
-        workspacePath: config.agent?.workspace,
-      }).identity;
-
-    const result = await runOrchestrator(
-      'Generate opportunity analysis JSON for the provided markets.',
-      {
-        llm,
-        toolRegistry: registry,
-        identity,
-        toolContext: { config, marketClient },
-        memorySystem: {
-          getRelevantContext: async () => prompt,
-        },
-      },
-      {
-        skipPlanning: true,
-        skipCritic: true,
-        maxIterations: 1,
-        synthesisSystemPrompt:
-          'Return ONLY a JSON array matching the requested schema. No markdown, no commentary.',
+        const result = await runOrchestrator(
+          'Generate opportunity analysis JSON for the provided markets.',
+          {
+            llm,
+            toolRegistry: registry,
+            identity,
+            toolContext: { config, marketClient },
+            memorySystem: {
+              getRelevantContext: async () => prompt,
+            },
+          },
+          {
+            skipPlanning: true,
+            skipCritic: true,
+            maxIterations: 1,
+            synthesisSystemPrompt:
+              'Return ONLY a JSON array matching the requested schema. No markdown, no commentary.',
+          }
+        );
+        return result.response;
       }
-    );
-    responseContent = result.response;
-  } else {
-    const response = await llm.complete(
-      [
-        { role: 'system', content: OPPORTUNITY_SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      { temperature: 0.3 }
-    );
-    responseContent = response.content;
-  }
+
+      const response = await llm.complete(
+        [
+          { role: 'system', content: OPPORTUNITY_SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+        { temperature: 0.3 }
+      );
+      return response.content;
+    }
+  );
 
   // Parse response
   const analyses = parseAnalyses(responseContent);

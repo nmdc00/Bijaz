@@ -76,9 +76,29 @@ export const memoryQueryTool: ToolDefinition = {
 };
 
 /**
+ * Evaluation summary tool - live performance and calibration snapshot.
+ */
+export const evaluationSummaryTool: ToolDefinition = {
+  name: 'evaluation.summary',
+  description: 'Get evaluation summary metrics (PnL, calibration, edge, domain performance).',
+  category: 'memory',
+  schema: z.object({
+    window_days: z.number().optional().describe('Window length in days (omit for all-time).'),
+    domain: z.string().optional().describe('Optional domain filter (e.g., politics, crypto).'),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('evaluation_summary', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  sideEffects: false,
+  requiresConfirmation: false,
+  cacheTtlMs: DEFAULT_CACHE_TTL,
+};
+
+/**
  * All memory tools.
  */
 export const memoryTools: ToolDefinition[] = [
   calibrationStatsTool,
   memoryQueryTool,
+  evaluationSummaryTool,
 ];

@@ -1,4 +1,5 @@
 import type { LlmClient } from './llm.js';
+import { withExecutionContextIfMissing } from './llm_infra.js';
 import type { ThufirConfig } from './config.js';
 import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
 import { listWatchlist } from '../memory/watchlist.js';
@@ -64,12 +65,16 @@ export async function createResearchPlan(params: {
   ].join('\n');
 
   try {
-    const response = await params.llm.complete(
-      [
-        { role: 'system', content: 'You are a precise planner that outputs JSON only.' },
-        { role: 'user', content: prompt },
-      ],
-      { temperature: 0.2 }
+    const response = await withExecutionContextIfMissing(
+      { mode: 'LIGHT_REASONING', critical: false, reason: 'research_plan', source: 'research' },
+      () =>
+        params.llm.complete(
+          [
+            { role: 'system', content: 'You are a precise planner that outputs JSON only.' },
+            { role: 'user', content: prompt },
+          ],
+          { temperature: 0.2 }
+        )
     );
     const parsed = JSON.parse(response.content) as ResearchPlan;
     if (parsed && Array.isArray(parsed.steps)) {

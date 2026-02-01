@@ -10,6 +10,15 @@ import {
   injectIdentity,
   clearIdentityCache as clearIdentityPreludeCache,
 } from '../agent/identity/identity.js';
+import { IDENTITY_MARKER } from '../agent/identity/types.js';
+import {
+  getExecutionContext,
+  estimateTokensFromMessages,
+  estimateTokensFromText,
+  getLlmBudgetManager,
+  isCooling,
+  recordCooldown,
+} from './llm_infra.js';
 
 export const clearIdentityCache = clearIdentityPreludeCache;
 import type {
@@ -29,8 +38,31 @@ export interface LlmResponse {
   model: string;
 }
 
+export type LlmClientOptions = {
+  temperature?: number;
+  timeoutMs?: number;
+  maxTokens?: number;
+};
+
+export type LlmClientMeta = {
+  provider: 'anthropic' | 'openai' | 'local';
+  model: string;
+  kind?: 'primary' | 'executor' | 'agentic' | 'trivial';
+};
+
 export interface LlmClient {
-  complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse>;
+  complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse>;
+  meta?: LlmClientMeta;
+}
+
+function resolveIdentityPromptMode(
+  config: ThufirConfig,
+  kind?: LlmClientMeta['kind']
+): 'full' | 'minimal' | 'none' {
+  if (kind === 'trivial') {
+    return config.agent?.internalPromptMode ?? 'minimal';
+  }
+  return config.agent?.identityPromptMode ?? 'full';
 }
 
 class LlmQueue {
@@ -78,7 +110,7 @@ class LlmQueue {
 class LimitedLlmClient implements LlmClient {
   constructor(private inner: LlmClient, private limiter: LlmQueue) {}
 
-  complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
+  complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
     return this.limiter.enqueue(() => this.inner.complete(messages, options));
   }
 }
@@ -92,16 +124,111 @@ export function wrapWithLimiter(client: LlmClient): LlmClient {
   return new LimitedLlmClient(client, globalLimiter);
 }
 
+class InfraLlmClient implements LlmClient {
+  meta?: LlmClientMeta;
+  private logger: Logger;
+  private config: ThufirConfig;
+  private inner: LlmClient;
+
+  constructor(inner: LlmClient, config: ThufirConfig, logger?: Logger) {
+    this.inner = inner;
+    this.config = config;
+    this.logger = logger ?? new Logger('info');
+    this.meta = inner.meta;
+  }
+
+  async complete(
+    messages: ChatMessage[],
+    options?: LlmClientOptions
+  ): Promise<LlmResponse> {
+    const meta = this.meta ?? { provider: 'openai', model: 'unknown' };
+    const ctx = getExecutionContext();
+    const context = ctx ?? {
+      mode: 'FULL_AGENT' as const,
+      critical: false,
+      reason: 'default',
+    };
+    if (!ctx) {
+      this.logger.warn('LLM execution context missing; defaulting to FULL_AGENT');
+    }
+
+    if (context.mode === 'MONITOR_ONLY') {
+      return { content: '', model: meta.model };
+    }
+
+    const budget = getLlmBudgetManager(this.config);
+    const estimatedTokens = estimateTokensFromMessages(messages);
+    if (!budget.canConsume(estimatedTokens, !!context.critical, meta.provider)) {
+      this.logger.warn('LLM budget exceeded; degrading to MONITOR_ONLY', {
+        provider: meta.provider,
+        model: meta.model,
+        reason: context.reason,
+      });
+      return { content: '', model: meta.model };
+    }
+
+    const cooldown = isCooling(meta.provider, meta.model);
+    if (cooldown) {
+      if (context.critical) {
+        const error = new Error(
+          `LLM provider in cooldown until ${new Date(cooldown.until).toISOString()}`
+        );
+        (error as { code?: string }).code = 'model_cooldown';
+        throw error;
+      }
+      this.logger.warn('LLM provider cooling down; skipping call', {
+        provider: meta.provider,
+        model: meta.model,
+        until: new Date(cooldown.until).toISOString(),
+      });
+      return { content: '', model: meta.model };
+    }
+
+    try {
+      const response = await this.inner.complete(messages, options);
+      const totalTokens = estimatedTokens + estimateTokensFromText(response.content);
+      budget.record(totalTokens, meta.provider);
+      return response;
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        const state = recordCooldown(meta.provider, meta.model);
+        this.logger.warn('LLM rate limit detected; entering cooldown', {
+          provider: meta.provider,
+          model: meta.model,
+          until: new Date(state.until).toISOString(),
+        });
+      }
+      throw error;
+    }
+  }
+}
+
+export function wrapWithInfra(client: LlmClient, config: ThufirConfig, logger?: Logger): LlmClient {
+  return new InfraLlmClient(client, config, logger);
+}
+
+function assertLocalProviderNotAllowed(
+  provider: 'anthropic' | 'openai' | 'local',
+  context: string
+): void {
+  if (provider === 'local') {
+    throw new Error(
+      `Local provider is reserved for trivial tasks. Set agent.trivialTaskProvider/localBaseUrl for ${context}.`
+    );
+  }
+}
+
 export function createLlmClient(config: ThufirConfig): LlmClient {
+  assertLocalProviderNotAllowed(config.agent.provider, 'primary LLM usage');
   switch (config.agent.provider) {
     case 'anthropic':
-      return wrapWithLimiter(createAnthropicClientWithFallback(config));
+      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
     case 'openai':
-      return wrapWithLimiter(new OpenAiClient(config));
+      return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config), config));
     case 'local':
-      return wrapWithLimiter(new LocalClient(config));
+      return wrapWithLimiter(wrapWithInfra(new LocalClient(config), config));
     default:
-      return wrapWithLimiter(createAnthropicClientWithFallback(config));
+      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
   }
 }
 
@@ -109,7 +236,7 @@ export function createOpenAiClient(
   config: ThufirConfig,
   modelOverride?: string
 ): LlmClient {
-  return wrapWithLimiter(new OpenAiClient(config, modelOverride));
+  return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config, modelOverride), config));
 }
 
 export function createExecutorClient(
@@ -118,6 +245,7 @@ export function createExecutorClient(
   providerOverride?: 'anthropic' | 'openai' | 'local'
 ): LlmClient {
   const provider = providerOverride ?? config.agent.executorProvider ?? 'openai';
+  assertLocalProviderNotAllowed(provider, 'executor usage');
   const model =
     modelOverride ??
     config.agent.executorModel ??
@@ -125,12 +253,12 @@ export function createExecutorClient(
     config.agent.model;
   switch (provider) {
     case 'anthropic':
-      return wrapWithLimiter(new AnthropicClient(config, model));
+      return wrapWithLimiter(wrapWithInfra(new AnthropicClient(config, model), config));
     case 'local':
-      return wrapWithLimiter(new LocalClient(config, model));
+      return wrapWithLimiter(wrapWithInfra(new LocalClient(config, model), config));
     case 'openai':
     default:
-      return wrapWithLimiter(new OpenAiClient(config, model));
+      return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config, model), config));
   }
 }
 
@@ -140,6 +268,7 @@ export function createAgenticExecutorClient(
   modelOverride?: string
 ): LlmClient {
   const provider = config.agent.executorProvider ?? 'openai';
+  assertLocalProviderNotAllowed(provider, 'agentic executor usage');
   const model =
     modelOverride ??
     config.agent.executorModel ??
@@ -149,9 +278,43 @@ export function createAgenticExecutorClient(
     const primary = new AgenticAnthropicClient(config, toolContext, model);
     const fallbackModel = config.agent.openaiModel ?? config.agent.fallbackModel ?? 'gpt-5.2';
     const fallback = new AgenticOpenAiClient(config, toolContext, fallbackModel);
-    return wrapWithLimiter(new FallbackLlmClient(primary, fallback, isRateLimitError));
+    return wrapWithLimiter(
+      wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+    );
   }
-  return wrapWithLimiter(new AgenticOpenAiClient(config, toolContext, model));
+  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config));
+}
+
+export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null {
+  const trivialConfig = config.agent?.trivial;
+  if (!trivialConfig?.enabled) return null;
+  const provider = config.agent?.trivialTaskProvider ?? 'local';
+  const model = config.agent?.trivialTaskModel ?? 'qwen2.5:1.5b-instruct';
+  const defaults: LlmClientOptions = {
+    temperature: trivialConfig.temperature ?? 0.2,
+    timeoutMs: trivialConfig.timeoutMs,
+    maxTokens: trivialConfig.maxTokens,
+  };
+  if (provider === 'local') {
+    const baseUrl = resolveLocalBaseUrl(config);
+    const inner = new LocalClient(config, model, 'trivial');
+    const guarded = new LocalHealthGuard(inner, {
+      baseUrl,
+      model,
+      timeoutMs: trivialConfig.timeoutMs,
+    });
+    return wrapWithLimiter(
+      wrapWithInfra(new TrivialTaskClient(guarded, defaults), config)
+    );
+  }
+  if (provider === 'anthropic') {
+    return wrapWithLimiter(
+      wrapWithInfra(new TrivialTaskClient(new AnthropicClient(config, model, 'trivial'), defaults), config)
+    );
+  }
+  return wrapWithLimiter(
+    wrapWithInfra(new TrivialTaskClient(new OpenAiClient(config, model, 'trivial'), defaults), config)
+  );
 }
 
 export function shouldUseExecutorModel(config: ThufirConfig): boolean {
@@ -183,6 +346,135 @@ function resolveAnthropicBaseUrl(config: ThufirConfig): string | undefined {
     return config.agent.proxyBaseUrl;
   }
   return undefined;
+}
+
+function resolveLocalBaseUrl(config: ThufirConfig): string {
+  return config.agent.localBaseUrl ?? 'http://localhost:11434';
+}
+
+const LOCAL_HEALTH_TTL_MS = 2 * 60 * 1000;
+const LOCAL_HEALTH_COOLDOWN_MS = 5 * 60 * 1000;
+const LOCAL_HEALTH_TIMEOUT_MS = 1500;
+
+type LocalHealthState = {
+  lastChecked: number;
+  cooldownUntil: number;
+  ok: boolean;
+  reason?: string;
+};
+
+const localHealthState = new Map<string, LocalHealthState>();
+
+function getLocalHealthState(baseUrl: string): LocalHealthState {
+  const existing = localHealthState.get(baseUrl);
+  if (existing) return existing;
+  const state = { lastChecked: 0, cooldownUntil: 0, ok: true };
+  localHealthState.set(baseUrl, state);
+  return state;
+}
+
+async function checkLocalHealth(
+  baseUrl: string,
+  model?: string,
+  timeoutMs: number = LOCAL_HEALTH_TIMEOUT_MS
+): Promise<{ ok: boolean; reason?: string }> {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let timeout: NodeJS.Timeout | null = null;
+  if (controller && timeoutMs > 0) {
+    timeout = setTimeout(() => controller.abort(), timeoutMs);
+  }
+  try {
+    const response = await fetch(`${baseUrl}/v1/models`, {
+      method: 'GET',
+      signal: controller?.signal,
+    });
+    if (!response.ok) {
+      return { ok: false, reason: `status ${response.status}` };
+    }
+    try {
+      const data = (await response.json()) as { data?: Array<{ id?: string }> };
+      if (model && Array.isArray(data?.data)) {
+        const found = data.data.some((item) => item?.id === model);
+        if (!found) {
+          return { ok: false, reason: `model ${model} not found` };
+        }
+      }
+    } catch {
+      // If model list isn't parseable, treat endpoint as alive.
+    }
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unreachable';
+    return { ok: false, reason: message };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+class LocalHealthGuard implements LlmClient {
+  meta?: LlmClientMeta;
+  private logger: Logger;
+  private baseUrl: string;
+  private model: string;
+  private timeoutMs: number;
+
+  constructor(
+    private inner: LlmClient,
+    params: { baseUrl: string; model: string; timeoutMs?: number; logger?: Logger }
+  ) {
+    this.baseUrl = params.baseUrl;
+    this.model = params.model;
+    this.timeoutMs = params.timeoutMs ?? LOCAL_HEALTH_TIMEOUT_MS;
+    this.logger = params.logger ?? new Logger('info');
+    this.meta = inner.meta;
+  }
+
+  async complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
+    const now = Date.now();
+    const state = getLocalHealthState(this.baseUrl);
+    if (state.cooldownUntil > now) {
+      throw new Error('Local LLM unavailable; skipping trivial task');
+    }
+    if (now - state.lastChecked > LOCAL_HEALTH_TTL_MS) {
+      const result = await checkLocalHealth(this.baseUrl, this.model, this.timeoutMs);
+      state.lastChecked = now;
+      state.ok = result.ok;
+      state.reason = result.reason;
+      state.cooldownUntil = result.ok ? 0 : now + LOCAL_HEALTH_COOLDOWN_MS;
+      if (!result.ok) {
+        this.logger.warn('Local LLM health check failed; skipping trivial task', {
+          baseUrl: this.baseUrl,
+          model: this.model,
+          reason: result.reason,
+        });
+        throw new Error(`Local LLM unavailable: ${result.reason ?? 'unreachable'}`);
+      }
+    }
+    return this.inner.complete(messages, options);
+  }
+}
+
+class TrivialTaskClient implements LlmClient {
+  meta?: LlmClientMeta;
+  private defaults: LlmClientOptions;
+
+  constructor(inner: LlmClient, defaults: LlmClientOptions) {
+    this.inner = inner;
+    this.defaults = defaults;
+    this.meta = inner.meta;
+  }
+
+  private inner: LlmClient;
+
+  complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
+    return this.inner.complete(messages, {
+      temperature: options?.temperature ?? this.defaults.temperature,
+      timeoutMs: options?.timeoutMs ?? this.defaults.timeoutMs,
+      maxTokens: options?.maxTokens ?? this.defaults.maxTokens,
+    });
+  }
 }
 
 type ExecutionPlan = {
@@ -277,7 +569,7 @@ export class OrchestratorClient implements LlmClient {
     private logger?: Logger
   ) {}
 
-  async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
+  async complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
     orchestratorMetrics.calls += 1;
     const systemMessage = messages.find((msg) => msg.role === 'system')?.content ?? '';
     const rest = messages.filter((msg) => msg.role !== 'system');
@@ -373,15 +665,15 @@ export class OrchestratorClient implements LlmClient {
   }
 }
 
-export interface AgenticLlmOptions {
+export interface AgenticLlmOptions extends LlmClientOptions {
   maxToolCalls?: number;
-  temperature?: number;
 }
 
 export class AgenticAnthropicClient implements LlmClient {
   private client: Anthropic;
   private model: string;
   private toolContext: ToolExecutorContext;
+  meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
@@ -395,6 +687,7 @@ export class AgenticAnthropicClient implements LlmClient {
     });
     this.model = modelOverride ?? config.agent.model;
     this.toolContext = toolContext;
+    this.meta = { provider: 'anthropic', model: this.model, kind: 'agentic' };
   }
 
   async complete(messages: ChatMessage[], options?: AgenticLlmOptions): Promise<LlmResponse> {
@@ -402,6 +695,14 @@ export class AgenticAnthropicClient implements LlmClient {
     const temperature = options?.temperature ?? 0.2;
 
     const system = messages.find((msg) => msg.role === 'system')?.content ?? '';
+    const prelude = loadIdentityPrelude({
+      workspacePath: this.toolContext.config.agent?.workspace,
+      promptMode: resolveIdentityPromptMode(this.toolContext.config, this.meta?.kind),
+    }).prelude;
+    const systemPrompt =
+      prelude && !system.includes(IDENTITY_MARKER)
+        ? `${prelude}${system ? '\n\n---\n\n' + system : ''}`
+        : system;
     let anthropicMessages: MessageParam[] = messages
       .filter((msg) => msg.role !== 'system')
       .map((msg) => ({
@@ -417,7 +718,7 @@ export class AgenticAnthropicClient implements LlmClient {
         model: this.model,
         max_tokens: 4096,
         temperature,
-        system,
+        system: systemPrompt,
         messages: anthropicMessages,
         tools: THUFIR_TOOLS,
       });
@@ -497,8 +798,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const MAX_RETRY_DELAY_MS = 30_000; // Cap retry delay at 30 seconds
-
 function parseProxyError(detail: string): string {
   try {
     const outer = JSON.parse(detail);
@@ -512,29 +811,8 @@ function parseProxyError(detail: string): string {
   }
 }
 
-async function fetchWithRetry(
-  factory: () => Promise<FetchResponse>,
-  maxRetries = 3
-): Promise<FetchResponse> {
-  let attempt = 0;
-  while (true) {
-    const response = await factory();
-    if (response.ok || response.status !== 429 || attempt >= maxRetries) {
-      return response;
-    }
-
-    const retryAfter = Number(response.headers.get('retry-after') ?? '');
-    // If retry-after is longer than our max, don't wait - just return the 429
-    if (Number.isFinite(retryAfter) && retryAfter * 1000 > MAX_RETRY_DELAY_MS) {
-      return response;
-    }
-    const baseDelay = Number.isFinite(retryAfter)
-      ? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS)
-      : Math.min(500 * 2 ** attempt, MAX_RETRY_DELAY_MS);
-    const jitter = Math.floor(Math.random() * 250);
-    await sleep(baseDelay + jitter);
-    attempt += 1;
-  }
+async function fetchWithRetry(factory: () => Promise<FetchResponse>): Promise<FetchResponse> {
+  return factory();
 }
 
 export class AgenticOpenAiClient implements LlmClient {
@@ -543,6 +821,7 @@ export class AgenticOpenAiClient implements LlmClient {
   private toolContext: ToolExecutorContext;
   private includeTemperature: boolean;
   private useResponsesApi: boolean;
+  meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
@@ -554,24 +833,24 @@ export class AgenticOpenAiClient implements LlmClient {
     this.toolContext = toolContext;
     this.includeTemperature = !config.agent.useProxy;
     this.useResponsesApi = config.agent.useProxy;
+    this.meta = { provider: 'openai', model: this.model, kind: 'agentic' };
   }
 
   async complete(messages: ChatMessage[], options?: AgenticLlmOptions): Promise<LlmResponse> {
     const maxIterations = options?.maxToolCalls ?? 6;
     const temperature = options?.temperature ?? 0.2;
 
-    let openaiMessages: OpenAiMessage[] = messages.map((msg) => ({
+    const prelude = loadIdentityPrelude({
+      workspacePath: this.toolContext.config.agent?.workspace,
+      promptMode: resolveIdentityPromptMode(this.toolContext.config, this.meta?.kind),
+    }).prelude;
+    let openaiMessages: OpenAiMessage[] = injectIdentity(
+      messages,
+      prelude
+    ).map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
-    if (this.useResponsesApi) {
-      const prelude = loadIdentityPrelude({
-        workspacePath: this.toolContext.config.agent?.workspace,
-        promptMode: this.toolContext.config.agent?.identityPromptMode ?? 'full',
-      }).prelude;
-      // Inject workspace identity at the start (Moltbot pattern)
-      openaiMessages = injectIdentity(openaiMessages, prelude);
-    }
 
     const tools: OpenAiTool[] = THUFIR_TOOLS.map((tool) => ({
       type: 'function',
@@ -750,17 +1029,27 @@ export class AgenticOpenAiClient implements LlmClient {
 class AnthropicClient implements LlmClient {
   private client: Anthropic;
   private model: string;
+  meta?: LlmClientMeta;
 
-  constructor(config: ThufirConfig, modelOverride?: string) {
+  constructor(config: ThufirConfig, modelOverride?: string, kind?: LlmClientMeta['kind']) {
     this.client = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY ?? '',
       baseURL: resolveAnthropicBaseUrl(config),
     });
     this.model = modelOverride ?? config.agent.model;
+    this.meta = { provider: 'anthropic', model: this.model, kind };
   }
 
-  async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
+  async complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
     const system = messages.find((msg) => msg.role === 'system')?.content ?? '';
+    const prelude = loadIdentityPrelude({
+      workspacePath: this.config.agent?.workspace,
+      promptMode: resolveIdentityPromptMode(this.config, this.meta?.kind),
+    }).prelude;
+    const systemPrompt =
+      prelude && !system.includes(IDENTITY_MARKER)
+        ? `${prelude}${system ? '\n\n---\n\n' + system : ''}`
+        : system;
     const converted = messages
       .filter((msg) => msg.role !== 'system')
       .map((msg) => ({
@@ -770,9 +1059,9 @@ class AnthropicClient implements LlmClient {
 
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: 1024,
+      max_tokens: options?.maxTokens ?? 1024,
       temperature: options?.temperature ?? 0.2,
-      system,
+      system: systemPrompt,
       messages: converted,
     });
 
@@ -791,25 +1080,25 @@ class OpenAiClient implements LlmClient {
   private baseUrl: string;
   private includeTemperature: boolean;
   private useResponsesApi: boolean;
+  meta?: LlmClientMeta;
 
-  constructor(config: ThufirConfig, modelOverride?: string) {
+  constructor(config: ThufirConfig, modelOverride?: string, kind?: LlmClientMeta['kind']) {
     this.config = config;
     this.model = modelOverride ?? config.agent.model;
     this.baseUrl = resolveOpenAiBaseUrl(config);
     this.includeTemperature = !config.agent.useProxy;
     this.useResponsesApi = config.agent.useProxy;
+    this.meta = { provider: 'openai', model: this.model, kind };
   }
 
-  async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
-    let openaiMessages = messages;
-    if (this.useResponsesApi) {
-      const prelude = loadIdentityPrelude({
-        workspacePath: this.config.agent?.workspace,
-        promptMode: this.config.agent?.identityPromptMode ?? 'full',
-      }).prelude;
-      // Inject workspace identity at the start (Moltbot pattern)
-      openaiMessages = injectIdentity(openaiMessages, prelude);
-    }
+  async complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
+    const prelude = loadIdentityPrelude({
+      workspacePath: this.config.agent?.workspace,
+      promptMode: resolveIdentityPromptMode(this.config, this.meta?.kind),
+    }).prelude;
+    // Inject workspace identity at the start (Moltbot pattern)
+    const openaiMessages = injectIdentity(messages, prelude);
+    const maxTokens = options?.maxTokens;
     const response = await fetchWithRetry(() =>
       fetch(`${this.baseUrl}${this.useResponsesApi ? '/v1/responses' : '/v1/chat/completions'}`, {
         method: 'POST',
@@ -821,6 +1110,7 @@ class OpenAiClient implements LlmClient {
           this.useResponsesApi
             ? {
                 model: this.model,
+                ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
                 input: openaiMessages.map((msg) => ({
                   role: msg.role,
                   content: [{ type: 'text', text: msg.content }],
@@ -829,7 +1119,8 @@ class OpenAiClient implements LlmClient {
             : {
                 model: this.model,
                 ...(this.includeTemperature ? { temperature: options?.temperature ?? 0.2 } : {}),
-                messages,
+                ...(typeof maxTokens === 'number' ? { max_completion_tokens: maxTokens } : {}),
+                messages: openaiMessages,
               }
         ),
       })
@@ -869,24 +1160,43 @@ class OpenAiClient implements LlmClient {
 class LocalClient implements LlmClient {
   private model: string;
   private baseUrl: string;
+  meta?: LlmClientMeta;
 
-  constructor(config: ThufirConfig, modelOverride?: string) {
+  constructor(config: ThufirConfig, modelOverride?: string, kind?: LlmClientMeta['kind']) {
     this.model = modelOverride ?? config.agent.model;
-    this.baseUrl = config.agent.apiBaseUrl ?? 'http://localhost:11434';
+    this.baseUrl = resolveLocalBaseUrl(config);
+    this.meta = { provider: 'local', model: this.model, kind };
   }
 
-  async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
+  async complete(
+    messages: ChatMessage[],
+    options?: LlmClientOptions
+  ): Promise<LlmResponse> {
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutMs = options?.timeoutMs;
+    let timeout: NodeJS.Timeout | null = null;
+    if (controller && timeoutMs && timeoutMs > 0) {
+      timeout = setTimeout(() => controller.abort(), timeoutMs);
+    }
+
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
+      signal: controller?.signal,
       body: JSON.stringify({
         model: this.model,
         temperature: options?.temperature ?? 0.2,
+        ...(typeof options?.maxTokens === 'number' ? { max_tokens: options.maxTokens } : {}),
         messages,
       }),
     });
+
+    if (timeout) {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       throw new Error(`Local model request failed: ${response.status}`);
@@ -902,18 +1212,35 @@ class LocalClient implements LlmClient {
 }
 
 export class FallbackLlmClient implements LlmClient {
+  meta?: LlmClientMeta;
   constructor(
     private primary: LlmClient,
     private fallback: LlmClient,
-    private shouldFallback: (error: unknown) => boolean
+    private shouldFallback: (error: unknown) => boolean,
+    private config?: ThufirConfig
   ) {}
 
-  async complete(messages: ChatMessage[], options?: { temperature?: number }): Promise<LlmResponse> {
+  async complete(
+    messages: ChatMessage[],
+    options?: LlmClientOptions
+  ): Promise<LlmResponse> {
     try {
       return await this.primary.complete(messages, options);
     } catch (error) {
       if (!this.shouldFallback(error)) {
         throw error;
+      }
+      const ctx = getExecutionContext();
+      if (!ctx?.critical) {
+        throw error;
+      }
+      if (this.config) {
+        const budget = getLlmBudgetManager(this.config);
+        const meta = this.fallback.meta ?? { provider: 'openai', model: 'unknown' };
+        const tokens = estimateTokensFromMessages(messages);
+        if (!budget.canConsume(tokens, true, meta.provider)) {
+          throw error;
+        }
       }
       return this.fallback.complete(messages, options);
     }
@@ -947,5 +1274,5 @@ function createAnthropicClientWithFallback(config: ThufirConfig): LlmClient {
   const primary = new AnthropicClient(config);
   const fallbackModel = config.agent.openaiModel ?? config.agent.fallbackModel ?? 'gpt-5.2';
   const fallback = new OpenAiClient(config, fallbackModel);
-  return new FallbackLlmClient(primary, fallback, isRateLimitError);
+  return new FallbackLlmClient(primary, fallback, isRateLimitError, config);
 }

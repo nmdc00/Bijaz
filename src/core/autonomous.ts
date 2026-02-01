@@ -24,6 +24,7 @@ import {
 } from './opportunities.js';
 import { getDailyPnLRollup } from './daily_pnl.js';
 import { createPrediction, listOpenPositions } from '../memory/predictions.js';
+import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { openDatabase } from '../memory/db.js';
 import { Logger } from './logger.js';
 import { AgentToolRegistry } from '../agent/tools/registry.js';
@@ -329,7 +330,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       this.emit('trade-executed', trade);
 
       // Record prediction for calibration
-      createPrediction({
+      const predictionId = createPrediction({
         marketId: opp.market.id,
         marketTitle: opp.market.question,
         predictedOutcome: decision.outcome,
@@ -340,6 +341,28 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         executed: true,
         executionPrice: opp.marketPrice,
         positionSize: amount,
+      });
+
+      recordDecisionAudit({
+        source: 'autonomous',
+        mode: 'trade',
+        goal: opp.market.question,
+        marketId: opp.market.id,
+        predictionId,
+        tradeAction: decision.action,
+        tradeOutcome: decision.outcome,
+        tradeAmount: amount,
+        confidence: mapConfidence(opp.confidence),
+        edge: typeof opp.edge === 'number' ? opp.edge : null,
+        criticApproved: null,
+        fragilityScore: null,
+        toolCalls: null,
+        iterations: null,
+        notes: {
+          marketPrice: opp.marketPrice,
+          myEstimate: opp.myEstimate,
+          direction: opp.direction,
+        },
       });
 
       return `✅ ${opp.market.question.slice(0, 40)}... | ${decision.action.toUpperCase()} ${decision.outcome} $${amount} | Edge: ${(opp.edge * 100).toFixed(1)}%`;
@@ -583,5 +606,18 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON autonomous_trades(timestamp);
       CREATE INDEX IF NOT EXISTS idx_trades_outcome ON autonomous_trades(outcome);
     `);
+  }
+}
+
+function mapConfidence(confidence?: string): number | null {
+  switch ((confidence ?? '').toLowerCase()) {
+    case 'low':
+      return 0.3;
+    case 'medium':
+      return 0.6;
+    case 'high':
+      return 0.85;
+    default:
+      return null;
   }
 }
