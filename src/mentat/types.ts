@@ -76,6 +76,7 @@ export interface MentatReport {
   generatedAt: string;
   fragilityScore: number | null;
   detectors?: DetectorBundle;
+  systemMap?: SystemMap | null;
   topFragilityCards: Array<{
     id: string;
     mechanism: string;

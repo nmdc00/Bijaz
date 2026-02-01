@@ -5,6 +5,7 @@ import type { Logger } from './logger.js';
 import type { Market } from '../execution/polymarket/markets.js';
 import { listCalibrationSummaries, type CalibrationSummary } from '../memory/calibration.js';
 import { listPredictions } from '../memory/predictions.js';
+import { withExecutionContextIfMissing } from './llm_infra.js';
 
 const DecisionSchema = z.object({
   action: z.enum(['buy', 'sell', 'hold']),
@@ -277,45 +278,48 @@ export async function decideTrade(
   remainingDaily: number,
   logger?: Logger
 ): Promise<Decision> {
-  const { plannerPrompt, positionSuggestion } = buildDecisionPrompts(
-    market,
-    remainingDaily
-  );
-  let plan = '';
-  try {
-    const plannerResponse = await plannerLlm.complete(
-      [
-        { role: 'system', content: 'You are a concise trading planner.' },
-        { role: 'user', content: plannerPrompt },
-      ],
-      { temperature: 0.2 }
-    );
-    plan = plannerResponse.content.trim();
-  } catch {
-    plan = '';
-  }
-  const { executorPrompt: finalExecutorPrompt } = buildDecisionPrompts(
-    market,
-    remainingDaily,
-    plan
-  );
+  return withExecutionContextIfMissing(
+    { mode: 'FULL_AGENT', critical: true, reason: 'trade_decision', source: 'decision' },
+    async () => {
+      const { plannerPrompt, positionSuggestion } = buildDecisionPrompts(
+        market,
+        remainingDaily
+      );
+      let plan = '';
+      try {
+        const plannerResponse = await plannerLlm.complete(
+          [
+            { role: 'system', content: 'You are a concise trading planner.' },
+            { role: 'user', content: plannerPrompt },
+          ],
+          { temperature: 0.2 }
+        );
+        plan = plannerResponse.content.trim();
+      } catch {
+        plan = '';
+      }
+      const { executorPrompt: finalExecutorPrompt } = buildDecisionPrompts(
+        market,
+        remainingDaily,
+        plan
+      );
 
-  const response = await executorLlm.complete(
-    [
-      { role: 'system', content: EXECUTOR_PROMPT },
-      { role: 'user', content: finalExecutorPrompt },
-    ],
-    { temperature: 0.1 }
-  );
+      const response = await executorLlm.complete(
+        [
+          { role: 'system', content: EXECUTOR_PROMPT },
+          { role: 'user', content: finalExecutorPrompt },
+        ],
+        { temperature: 0.1 }
+      );
 
-  let decision = parseDecision(response.content);
+      let decision = parseDecision(response.content);
 
-  if (!decision) {
-    logger?.warn('Decision parse failed, attempting repair', {
-      marketId: market.id,
-      preview: response.content.slice(0, 400),
-    });
-    const repairPrompt = `Convert the following content into ONLY valid JSON matching this schema:
+      if (!decision) {
+        logger?.warn('Decision parse failed, attempting repair', {
+          marketId: market.id,
+          preview: response.content.slice(0, 400),
+        });
+        const repairPrompt = `Convert the following content into ONLY valid JSON matching this schema:
 {
   "action": "buy" | "sell" | "hold",
   "outcome": "YES" | "NO" (required if action is buy/sell),
@@ -326,33 +330,35 @@ export async function decideTrade(
 
 Content:
 ${response.content}`.trim();
-    const repaired = await executorLlm.complete(
-      [
-        { role: 'system', content: 'Return ONLY valid JSON. No markdown, no commentary.' },
-        { role: 'user', content: repairPrompt },
-      ],
-      { temperature: 0 }
-    );
-    decision = parseDecision(repaired.content);
-  }
+        const repaired = await executorLlm.complete(
+          [
+            { role: 'system', content: 'Return ONLY valid JSON. No markdown, no commentary.' },
+            { role: 'user', content: repairPrompt },
+          ],
+          { temperature: 0 }
+        );
+        decision = parseDecision(repaired.content);
+      }
 
-  if (!decision) {
-    return { action: 'hold', reasoning: 'Failed to parse decision JSON' };
-  }
+      if (!decision) {
+        return { action: 'hold', reasoning: 'Failed to parse decision JSON' };
+      }
 
-  if (decision.action !== 'hold') {
-    if (!decision.outcome) {
-      return { action: 'hold', reasoning: 'Missing outcome in decision' };
+      if (decision.action !== 'hold') {
+        if (!decision.outcome) {
+          return { action: 'hold', reasoning: 'Missing outcome in decision' };
+        }
+        if (!decision.amount || Number.isNaN(decision.amount) || decision.amount <= 0) {
+          const fallbackAmount = Math.max(1, positionSuggestion.suggested || 1);
+          return {
+            ...decision,
+            amount: Math.min(fallbackAmount, remainingDaily),
+            reasoning: `${decision.reasoning ?? ''} (amount auto-filled)`.trim(),
+          };
+        }
+      }
+
+      return decision;
     }
-    if (!decision.amount || Number.isNaN(decision.amount) || decision.amount <= 0) {
-      const fallbackAmount = Math.max(1, positionSuggestion.suggested || 1);
-      return {
-        ...decision,
-        amount: Math.min(fallbackAmount, remainingDaily),
-        reasoning: `${decision.reasoning ?? ''} (amount auto-filled)`.trim(),
-      };
-    }
-  }
-
-  return decision;
+  );
 }

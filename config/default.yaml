@@ -22,6 +22,8 @@ agent:
   showToolTrace: false
   showCriticNotes: false
   showPlanTrace: false
+  showFragilityTrace: false
+  persistPlans: true
   identityPromptMode: full
   internalPromptMode: minimal
   mentatAutoScan: false
@@ -34,8 +36,10 @@ agent:
   fallbackModel: claude-3-5-haiku-20241022
   # Model provider: anthropic | openai | local
   provider: anthropic
-  # OpenAI-compatible base URL (used for openai/local providers)
+  # OpenAI-compatible base URL (used for openai provider)
   apiBaseUrl: https://api.openai.com
+  # Local (Ollama) base URL for local provider
+  localBaseUrl: http://localhost:11434
   # Optional llm-mux proxy
   useProxy: false
   proxyBaseUrl: http://localhost:8317
@@ -43,6 +47,22 @@ agent:
   workspace: ~/.thufir
   # Maximum thinking level
   thinkingLevel: high
+  # Trivial task offload (local LLM)
+  trivialTaskProvider: local
+  trivialTaskModel: qwen2.5:1.5b-instruct
+  trivial:
+    enabled: true
+    maxTokens: 256
+    temperature: 0.2
+    timeoutMs: 30000
+  # Global LLM budget (rolling hour)
+  llmBudget:
+    enabled: true
+    maxCallsPerHour: 120
+    maxTokensPerHour: 120000
+    reserveCalls: 10
+    reserveTokens: 10000
+    includeLocal: false
 
 # Wallet configuration
 wallet:
@@ -231,6 +251,15 @@ notifications:
     intelLimit: 40
     minOverallScore: 0.7
     minDeltaScore: 0.15
+    # schedules:
+    #   - name: hourly
+    #     intervalMinutes: 60
+    #     marketLimit: 15
+    #     intelLimit: 20
+    #   - name: daily
+    #     time: "09:00"
+    #     marketLimit: 25
+    #     intelLimit: 40
 
 # QMD local knowledge search
 # QMD provides hybrid search (BM25 + vector + LLM reranking) for local knowledge

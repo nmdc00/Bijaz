@@ -285,6 +285,25 @@ export const THUFIR_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'evaluation_summary',
+    description:
+      'Get evaluation summary metrics (PnL, calibration, edge, domain performance).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        window_days: {
+          type: 'number',
+          description: 'Window length in days for the report (omit for all-time).',
+        },
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter (e.g., politics, crypto).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'qmd_query',
     description:
       'Search the local knowledge base using QMD hybrid search (BM25 + vector + LLM reranking). Use to recall past research, articles, and notes.',

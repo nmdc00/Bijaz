@@ -187,6 +187,12 @@ export interface OrchestratorOptions {
 
   /** Initial assumptions */
   initialAssumptions?: string[];
+
+  /** Resume an existing plan if provided */
+  resumePlan?: boolean;
+
+  /** Prior plan to resume (if any) */
+  initialPlan?: AgentPlan;
 }
 
 /**

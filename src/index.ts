@@ -5,7 +5,7 @@
  */
 
 import { loadConfig, type ThufirConfig } from './core/config.js';
-import { createLlmClient } from './core/llm.js';
+import { createLlmClient, createTrivialTaskClient } from './core/llm.js';
 import { ConversationHandler } from './core/conversation.js';
 import { PolymarketMarketClient } from './execution/polymarket/markets.js';
 import { PaperExecutor } from './execution/modes/paper.js';
@@ -105,7 +105,8 @@ export class Thufir {
       perTrade: config.wallet?.limits?.perTrade ?? 25,
       confirmationThreshold: config.wallet?.limits?.confirmationThreshold ?? 10,
     });
-    this.conversation = new ConversationHandler(this.llm, this.marketClient, config);
+    const infoLlm = createTrivialTaskClient(config) ?? undefined;
+    this.conversation = new ConversationHandler(this.llm, this.marketClient, config, infoLlm);
 
     this.started = true;
   }

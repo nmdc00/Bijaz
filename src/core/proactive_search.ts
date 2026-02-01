@@ -1,5 +1,6 @@
 import type { ThufirConfig } from './config.js';
 import { createLlmClient } from './llm.js';
+import { withExecutionContextIfMissing } from './llm_infra.js';
 import { listWatchlist } from '../memory/watchlist.js';
 import { listRecentIntel, type StoredIntel } from '../intel/store.js';
 import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
@@ -138,10 +139,14 @@ async function refineQueriesWithLlm(
   ].join('\n');
 
   try {
-    const response = await llm.complete([
-      { role: 'system', content: 'You are a concise query generator.' },
-      { role: 'user', content: prompt },
-    ]);
+    const response = await withExecutionContextIfMissing(
+      { mode: 'LIGHT_REASONING', critical: false, reason: 'proactive_query_refine', source: 'proactive' },
+      () =>
+        llm.complete([
+          { role: 'system', content: 'You are a concise query generator.' },
+          { role: 'user', content: prompt },
+        ])
+    );
     const raw = response.content.trim();
     const parsed = JSON.parse(raw) as string[];
     if (Array.isArray(parsed)) {

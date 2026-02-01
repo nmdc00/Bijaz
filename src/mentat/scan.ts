@@ -1,7 +1,8 @@
 import type { LlmClient } from '../core/llm.js';
 import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
 import { listRecentIntel } from '../intel/store.js';
-import { upsertAssumption, upsertMechanism, upsertFragilityCard } from '../memory/mentat.js';
+import { upsertAssumption, upsertMechanism, upsertFragilityCard, upsertSystemMap } from '../memory/mentat.js';
+import { withExecutionContextIfMissing } from '../core/llm_infra.js';
 
 import {
   type MentatAssumptionInput,
@@ -291,142 +292,153 @@ export async function collectMentatSignals(options: {
 }
 
 export async function runMentatScan(options: MentatScanOptions): Promise<MentatScanOutput> {
-  const now = new Date().toISOString();
-  const signals = await collectMentatSignals({
-    system: options.system,
-    marketClient: options.marketClient,
-    marketIds: options.marketIds,
-    marketQuery: options.marketQuery,
-    limit: options.limit,
-    intelLimit: options.intelLimit,
-  });
-
-  const signalsSummary = summarizeSignals(signals.markets, signals.intel);
-  const detectors = computeDetectorBundle(signals);
-
-  const rolePrompts = [
-    {
-      role: 'Cartographer',
-      focus: 'Map the system structure and dependencies. Emphasize system map, key nodes, and coupling paths.',
-    },
-    {
-      role: 'Skeptic',
-      focus: 'Stress-test assumptions. Highlight weak evidence, missing falsifiers, and fragility in beliefs.',
-    },
-    {
-      role: 'Risk Officer',
-      focus: 'Focus on exposure surfaces, convexity, downside, recovery capacity, and fragility scores.',
-    },
-  ];
-
-  const roleOutputs: Array<{
-    systemMap: SystemMap;
-    assumptions: MentatAssumptionInput[];
-    mechanisms: MentatMechanismInput[];
-    fragilityCards: MentatFragilityCardInput[];
-  }> = [];
-
-  for (const role of rolePrompts) {
-    const prompt = buildMentatPrompt(
-      options.system,
-      signalsSummary,
-      signals.markets,
-      signals.intel.map((item) => ({
-        title: item.title,
-        source: item.source,
-        timestamp: item.timestamp,
-      })),
-      now,
-      role.focus
-    );
-
-    const response = await options.llm.complete(
-      [
-        { role: 'system', content: `You are the ${role.role} in a mentat team. Provide structured JSON only.` },
-        { role: 'user', content: prompt },
-      ],
-      { temperature: 0.2 }
-    );
-
-    const parsed = parseJsonBlock(response.content) ?? {};
-    roleOutputs.push({
-      systemMap: normalizeSystemMap(parsed.system_map),
-      assumptions: normalizeAssumptions(parsed.assumptions, now),
-      mechanisms: normalizeMechanisms(parsed.mechanisms),
-      fragilityCards: normalizeFragilityCards(parsed.fragility_cards),
-    });
-  }
-
-  const systemMap = mergeSystemMaps(roleOutputs.map((o) => o.systemMap));
-  const assumptions = mergeAssumptions(roleOutputs.flatMap((o) => o.assumptions));
-  const mechanisms = mergeMechanisms(roleOutputs.flatMap((o) => o.mechanisms));
-  const fragilityCards = mergeFragilityCards(roleOutputs.flatMap((o) => o.fragilityCards));
-
-  const storedAssumptions: string[] = [];
-  const storedMechanisms: string[] = [];
-  const storedCards: string[] = [];
-
-  const storeEnabled = options.store !== false;
-  const mechanismIdByName = new Map<string, string>();
-
-  if (storeEnabled) {
-    for (const mechanism of mechanisms) {
-      const id = upsertMechanism({
+  return withExecutionContextIfMissing(
+    { mode: 'FULL_AGENT', critical: false, reason: 'mentat_scan', source: 'mentat' },
+    async () => {
+      const now = new Date().toISOString();
+      const signals = await collectMentatSignals({
         system: options.system,
-        name: mechanism.name,
-        causalChain: mechanism.causal_chain ?? null,
-        triggerClass: mechanism.trigger_class ?? null,
-        propagationPath: mechanism.propagation_path ?? null,
+        marketClient: options.marketClient,
+        marketIds: options.marketIds,
+        marketQuery: options.marketQuery,
+        limit: options.limit,
+        intelLimit: options.intelLimit,
       });
-      storedMechanisms.push(id);
-      mechanismIdByName.set(mechanism.name.toLowerCase(), id);
-    }
 
-    for (const assumption of assumptions) {
-      const id = upsertAssumption({
+      const signalsSummary = summarizeSignals(signals.markets, signals.intel);
+      const detectors = computeDetectorBundle(signals);
+
+      const rolePrompts = [
+        {
+          role: 'Cartographer',
+          focus: 'Map the system structure and dependencies. Emphasize system map, key nodes, and coupling paths.',
+        },
+        {
+          role: 'Skeptic',
+          focus: 'Stress-test assumptions. Highlight weak evidence, missing falsifiers, and fragility in beliefs.',
+        },
+        {
+          role: 'Risk Officer',
+          focus: 'Focus on exposure surfaces, convexity, downside, recovery capacity, and fragility scores.',
+        },
+      ];
+
+      const roleOutputs: Array<{
+        systemMap: SystemMap;
+        assumptions: MentatAssumptionInput[];
+        mechanisms: MentatMechanismInput[];
+        fragilityCards: MentatFragilityCardInput[];
+      }> = [];
+
+      for (const role of rolePrompts) {
+        const prompt = buildMentatPrompt(
+          options.system,
+          signalsSummary,
+          signals.markets,
+          signals.intel.map((item) => ({
+            title: item.title,
+            source: item.source,
+            timestamp: item.timestamp,
+          })),
+          now,
+          role.focus
+        );
+
+        const response = await options.llm.complete(
+          [
+            { role: 'system', content: `You are the ${role.role} in a mentat team. Provide structured JSON only.` },
+            { role: 'user', content: prompt },
+          ],
+          { temperature: 0.2 }
+        );
+
+        const parsed = parseJsonBlock(response.content) ?? {};
+        roleOutputs.push({
+          systemMap: normalizeSystemMap(parsed.system_map),
+          assumptions: normalizeAssumptions(parsed.assumptions, now),
+          mechanisms: normalizeMechanisms(parsed.mechanisms),
+          fragilityCards: normalizeFragilityCards(parsed.fragility_cards),
+        });
+      }
+
+      const systemMap = mergeSystemMaps(roleOutputs.map((o) => o.systemMap));
+      const assumptions = mergeAssumptions(roleOutputs.flatMap((o) => o.assumptions));
+      const mechanisms = mergeMechanisms(roleOutputs.flatMap((o) => o.mechanisms));
+      const fragilityCards = mergeFragilityCards(roleOutputs.flatMap((o) => o.fragilityCards));
+
+      const storedAssumptions: string[] = [];
+      const storedMechanisms: string[] = [];
+      const storedCards: string[] = [];
+
+      const storeEnabled = options.store !== false;
+      const mechanismIdByName = new Map<string, string>();
+
+      if (storeEnabled) {
+        upsertSystemMap({
+          system: options.system,
+          nodes: systemMap.nodes,
+          edges: systemMap.edges,
+        });
+
+        for (const mechanism of mechanisms) {
+          const id = upsertMechanism({
+            system: options.system,
+            name: mechanism.name,
+            causalChain: mechanism.causal_chain ?? null,
+            triggerClass: mechanism.trigger_class ?? null,
+            propagationPath: mechanism.propagation_path ?? null,
+          });
+          storedMechanisms.push(id);
+          mechanismIdByName.set(mechanism.name.toLowerCase(), id);
+        }
+
+        for (const assumption of assumptions) {
+          const id = upsertAssumption({
+            system: options.system,
+            statement: assumption.statement,
+            dependencies: assumption.dependencies ?? null,
+            evidenceFor: assumption.evidence_for ?? null,
+            evidenceAgainst: assumption.evidence_against ?? null,
+            stressScore: assumption.stress_score ?? null,
+            lastTested: assumption.last_tested ?? null,
+          });
+          storedAssumptions.push(id);
+        }
+
+        for (const card of fragilityCards) {
+          const mechanismId = mechanismIdByName.get(card.mechanism.toLowerCase()) ?? null;
+          const id = upsertFragilityCard({
+            system: options.system,
+            mechanismId,
+            exposureSurface: card.exposure_surface,
+            convexity: card.convexity ?? null,
+            earlySignals: card.early_signals ?? null,
+            falsifiers: card.falsifiers ?? null,
+            downside: card.downside ?? null,
+            recoveryCapacity: card.recovery_capacity ?? null,
+            score: card.score ?? null,
+          });
+          storedCards.push(id);
+        }
+      }
+
+      return {
         system: options.system,
-        statement: assumption.statement,
-        dependencies: assumption.dependencies ?? null,
-        evidenceFor: assumption.evidence_for ?? null,
-        evidenceAgainst: assumption.evidence_against ?? null,
-        stressScore: assumption.stress_score ?? null,
-        lastTested: assumption.last_tested ?? null,
-      });
-      storedAssumptions.push(id);
+        generatedAt: now,
+        signalsSummary,
+        detectors,
+        systemMap,
+        assumptions,
+        mechanisms,
+        fragilityCards,
+        stored: {
+          assumptions: storedAssumptions,
+          mechanisms: storedMechanisms,
+          fragilityCards: storedCards,
+        },
+      };
     }
-
-    for (const card of fragilityCards) {
-      const mechanismId = mechanismIdByName.get(card.mechanism.toLowerCase()) ?? null;
-      const id = upsertFragilityCard({
-        system: options.system,
-        mechanismId,
-        exposureSurface: card.exposure_surface,
-        convexity: card.convexity ?? null,
-        earlySignals: card.early_signals ?? null,
-        falsifiers: card.falsifiers ?? null,
-        downside: card.downside ?? null,
-        recoveryCapacity: card.recovery_capacity ?? null,
-        score: card.score ?? null,
-      });
-      storedCards.push(id);
-    }
-  }
-
-  return {
-    system: options.system,
-    generatedAt: now,
-    signalsSummary,
-    detectors,
-    systemMap,
-    assumptions,
-    mechanisms,
-    fragilityCards,
-    stored: {
-      assumptions: storedAssumptions,
-      mechanisms: storedMechanisms,
-      fragilityCards: storedCards,
-    },
-  };
+  );
 }
 
 /**
@@ -472,35 +484,38 @@ interface QuickFragilityScanOptions {
 export async function runQuickFragilityScan(
   options: QuickFragilityScanOptions
 ): Promise<QuickFragilityScan> {
-  const now = new Date().toISOString();
+  return withExecutionContextIfMissing(
+    { mode: 'FULL_AGENT', critical: true, reason: 'pre_trade_fragility', source: 'mentat' },
+    async () => {
+      const now = new Date().toISOString();
 
-  // Fetch the specific market
-  let market: Market;
-  try {
-    market = await options.marketClient.getMarket(options.marketId);
-  } catch (error) {
-    // Return minimal scan if market fetch fails
-    return {
-      marketId: options.marketId,
-      fragilityScore: 0.5,
-      riskSignals: ['Unable to fetch market data for fragility analysis'],
-      fragilityCards: [],
-      stressedAssumptions: [],
-      falsifiers: ['Market data unavailable - proceed with caution'],
-      detectors: {
-        leverage: 0.5,
-        coupling: 0.5,
-        illiquidity: 0.5,
-        consensus: 0.5,
-        irreversibility: 0.5,
-      },
-      generatedAt: now,
-    };
-  }
+      // Fetch the specific market
+      let market: Market;
+      try {
+        market = await options.marketClient.getMarket(options.marketId);
+      } catch (error) {
+        // Return minimal scan if market fetch fails
+        return {
+          marketId: options.marketId,
+          fragilityScore: 0.5,
+          riskSignals: ['Unable to fetch market data for fragility analysis'],
+          fragilityCards: [],
+          stressedAssumptions: [],
+          falsifiers: ['Market data unavailable - proceed with caution'],
+          detectors: {
+            leverage: 0.5,
+            coupling: 0.5,
+            illiquidity: 0.5,
+            consensus: 0.5,
+            irreversibility: 0.5,
+          },
+          generatedAt: now,
+        };
+      }
 
-  // Get recent intel (limited for speed)
-  const intelLimit = options.intelLimit ?? 10;
-  const intel = listRecentIntel(intelLimit);
+      // Get recent intel (limited for speed)
+      const intelLimit = options.intelLimit ?? 10;
+      const intel = listRecentIntel(intelLimit);
 
   // Compute detector bundle for single market
   const signals: MentatSignals = {
@@ -559,32 +574,34 @@ export async function runQuickFragilityScan(
     ...detectors.irreversibility.signals,
   ].slice(0, 10);
 
-  return {
-    marketId: options.marketId,
-    fragilityScore: detectors.overall,
-    riskSignals: allRiskSignals,
-    fragilityCards: llmResult.fragilityCards.map((card) => ({
-      mechanism: card.mechanism,
-      exposure: card.exposure_surface,
-      score: card.score ?? null,
-      downside: card.downside ?? null,
-    })),
-    stressedAssumptions: llmResult.assumptions
-      .filter((a) => (a.stress_score ?? 0) > 0.5)
-      .map((a) => ({
-        statement: a.statement,
-        stressScore: a.stress_score ?? null,
-      })),
-    falsifiers: llmResult.falsifiers,
-    detectors: {
-      leverage: detectors.leverage.score,
-      coupling: detectors.coupling.score,
-      illiquidity: detectors.illiquidity.score,
-      consensus: detectors.consensus.score,
-      irreversibility: detectors.irreversibility.score,
-    },
-    generatedAt: now,
-  };
+      return {
+        marketId: options.marketId,
+        fragilityScore: detectors.overall,
+        riskSignals: allRiskSignals,
+        fragilityCards: llmResult.fragilityCards.map((card) => ({
+          mechanism: card.mechanism,
+          exposure: card.exposure_surface,
+          score: card.score ?? null,
+          downside: card.downside ?? null,
+        })),
+        stressedAssumptions: llmResult.assumptions
+          .filter((a) => (a.stress_score ?? 0) > 0.5)
+          .map((a) => ({
+            statement: a.statement,
+            stressScore: a.stress_score ?? null,
+          })),
+        falsifiers: llmResult.falsifiers,
+        detectors: {
+          leverage: detectors.leverage.score,
+          coupling: detectors.coupling.score,
+          illiquidity: detectors.illiquidity.score,
+          consensus: detectors.consensus.score,
+          irreversibility: detectors.irreversibility.score,
+        },
+        generatedAt: now,
+      };
+    }
+  );
 }
 
 function buildQuickFragilityPrompt(

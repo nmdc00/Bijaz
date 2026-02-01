@@ -24,6 +24,7 @@ import { reflect, createReflectionState, applyReflection } from '../reflection/r
 import { runCritic, shouldRunCritic } from '../critic/critic.js';
 import { buildIdentityPrompt, buildMinimalIdentityPrompt } from '../identity/identity.js';
 import type { QuickFragilityScan } from '../../mentat/scan.js';
+import { recordDecisionAudit } from '../../memory/decision_audit.js';
 import {
   createAgentState,
   updatePlan,
@@ -204,11 +205,24 @@ export async function runOrchestrator(
 
   const modeConfig = getModeConfig(modeResult.mode);
   const maxIterations = options?.maxIterations ?? modeConfig.maxIterations;
+  const canResumePlan = Boolean(
+    options?.resumePlan && options?.initialPlan && options.initialPlan.goal === goal
+  );
+  const skipPlanning = options?.skipPlanning || canResumePlan;
 
   // Initialize state
   let state = createAgentState(goal, modeResult.mode, modeConfig, options);
 
   ctx.onUpdate?.(state);
+
+  if (options?.resumePlan && options?.initialPlan) {
+    if (!canResumePlan) {
+      state = addWarning(state, 'Prior plan goal does not match current goal; starting fresh');
+    } else {
+      state = updatePlan(state, options.initialPlan, 'Resumed prior plan');
+      ctx.onUpdate?.(state);
+    }
+  }
 
   // Phase 2: Memory Context (Memory-First Rule)
   const memoryParts: string[] = [];
@@ -241,7 +255,7 @@ export async function runOrchestrator(
   }
 
   // Phase 3: Planning (unless skipped)
-  if (!options?.skipPlanning) {
+  if (!skipPlanning) {
     try {
       const allowedTools = getAllowedTools(modeResult.mode);
       const planResult = await createPlan(
@@ -473,6 +487,44 @@ export async function runOrchestrator(
       }
     : undefined;
 
+  if (state.mode === 'trade' || state.toolExecutions.some((t) => tradeToolNames.has(t.toolName))) {
+    try {
+      const tradeAudit = extractTradeAudit(state);
+      recordDecisionAudit({
+        source: 'orchestrator',
+        sessionId: state.sessionId,
+        mode: state.mode,
+        goal,
+        marketId: tradeAudit.marketId,
+        predictionId: tradeAudit.predictionId,
+        tradeAction: tradeAudit.tradeAction,
+        tradeOutcome: tradeAudit.tradeOutcome,
+        tradeAmount: tradeAudit.tradeAmount,
+        confidence: state.confidence,
+        edge: null,
+        criticApproved: criticResult?.approved ?? null,
+        criticIssues: criticResult?.issues?.map((issue) => ({
+          type: issue.type,
+          severity: issue.severity,
+          description: issue.description,
+        })),
+        fragilityScore: tradeFragilityScan?.fragilityScore ?? null,
+        toolCalls: state.toolExecutions.length,
+        iterations: state.iteration,
+        toolTrace: state.toolExecutions.map((t) => ({
+          toolName: t.toolName,
+          input: t.input,
+          success: t.result.success,
+        })),
+        planTrace: state.plan,
+      });
+    } catch (error) {
+      debugLog('decision audit failed', {
+        error: error instanceof Error ? error.message : 'Unknown',
+      });
+    }
+  }
+
   return {
     state,
     response: state.response!,
@@ -491,6 +543,43 @@ export async function runOrchestrator(
       completedAt,
       durationMs,
     },
+  };
+}
+
+function extractTradeAudit(state: AgentState): {
+  marketId?: string;
+  predictionId?: string;
+  tradeAction?: string;
+  tradeOutcome?: string;
+  tradeAmount?: number;
+} {
+  const trade = state.toolExecutions.find(
+    (t) => t.toolName === 'place_bet' || t.toolName === 'trade.place'
+  );
+  if (!trade) {
+    return {};
+  }
+
+  const input = trade.input as Record<string, unknown> | undefined;
+  const marketId =
+    (input?.marketId as string | undefined) ??
+    (input?.market_id as string | undefined) ??
+    (input?.conditionId as string | undefined);
+  const tradeOutcome = (input?.outcome as string | undefined)?.toUpperCase();
+  const tradeAmount = input?.amount !== undefined ? Number(input?.amount) : undefined;
+
+  let predictionId: string | undefined;
+  if (trade.result.success) {
+    const data = (trade.result as { success: true; data: Record<string, unknown> }).data;
+    predictionId = data?.prediction_id ? String(data.prediction_id) : undefined;
+  }
+
+  return {
+    marketId,
+    predictionId,
+    tradeAction: 'buy',
+    tradeOutcome,
+    tradeAmount,
   };
 }
 

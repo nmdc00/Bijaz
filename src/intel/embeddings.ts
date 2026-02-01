@@ -20,6 +20,9 @@ export function createEmbedder(config: ThufirConfig, scope: EmbeddingScope): Emb
   if (provider === 'google') {
     return new GoogleGeminiEmbedder(config, { model, apiBaseUrl });
   }
+  if (provider === 'local') {
+    return new LocalEmbedder(config, { model, apiBaseUrl });
+  }
   return new OpenAiEmbedder(config, { model, apiBaseUrl });
 }
 
@@ -121,5 +124,45 @@ export class GoogleGeminiEmbedder implements Embedder {
     };
 
     return (data.embeddings ?? []).map((item) => item.values ?? []);
+  }
+}
+
+export class LocalEmbedder implements Embedder {
+  private model: string;
+  private baseUrl: string;
+
+  constructor(config: ThufirConfig, options?: EmbedderOptions) {
+    const fallbackModel =
+      config.intel?.embeddings?.model ??
+      config.memory?.embeddings?.model ??
+      'text-embedding-3-small';
+    this.model = options?.model ?? fallbackModel;
+    this.baseUrl =
+      options?.apiBaseUrl ??
+      config.agent?.localBaseUrl ??
+      'http://localhost:11434';
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    const response = await fetch(`${this.baseUrl}/v1/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        input: texts,
+      }),
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = (await response.json()) as {
+      data?: Array<{ embedding: number[] }>;
+    };
+
+    return (data.data ?? []).map((item) => item.embedding);
   }
 }

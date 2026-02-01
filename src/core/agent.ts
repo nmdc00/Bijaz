@@ -6,6 +6,7 @@ import {
   createAgenticExecutorClient,
   createExecutorClient,
   createLlmClient,
+  createTrivialTaskClient,
   clearIdentityCache,
   OrchestratorClient,
 } from './llm.js';
@@ -32,10 +33,11 @@ import { runOrchestrator } from '../agent/orchestrator/orchestrator.js';
 import { AgentToolRegistry } from '../agent/tools/registry.js';
 import { registerAllTools } from '../agent/tools/adapters/index.js';
 import { loadThufirIdentity } from '../agent/identity/identity.js';
+import { withExecutionContext } from './llm_infra.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
-  private infoLlm: ReturnType<typeof createExecutorClient>;
+  private infoLlm: ReturnType<typeof createTrivialTaskClient>;
   private executorLlm: ReturnType<typeof createExecutorClient>;
   private autonomyLlm: ReturnType<typeof createLlmClient>;
   private marketClient: PolymarketMarketClient;
@@ -54,7 +56,7 @@ export class ThufirAgent {
     }
     bootstrapWorkspaceIdentity(this.config);
     this.llm = createLlmClient(this.config);
-    this.infoLlm = createExecutorClient(this.config, this.config.agent.openaiModel, 'openai');
+    this.infoLlm = createTrivialTaskClient(this.config);
     this.executorLlm = createExecutorClient(this.config);
     this.marketClient = new PolymarketMarketClient(this.config);
     this.executor = this.createExecutor(config);
@@ -480,101 +482,106 @@ Just type naturally to chat about predictions, events, or markets.
 
 
   private async autonomousScan(): Promise<string> {
-    const markets = await this.getMarketsForScan();
-    if (markets.length === 0) {
-      return 'No markets found to scan.';
-    }
-
-    const useOrchestrator = this.config.agent?.useOrchestrator === true;
-    let orchestratorRegistry: AgentToolRegistry | null = null;
-    let orchestratorIdentity: ReturnType<typeof loadThufirIdentity>['identity'] | null = null;
-    if (useOrchestrator) {
-      orchestratorRegistry = new AgentToolRegistry();
-      registerAllTools(orchestratorRegistry);
-      orchestratorIdentity = loadThufirIdentity({
-        workspacePath: this.config.agent?.workspace,
-      }).identity;
-    }
-
-    const decisions: string[] = [];
-    for (const market of markets) {
-      const remaining = this.limiter.getRemainingDaily();
-      if (remaining <= 0) {
-        decisions.push('Daily limit reached; skipping remaining markets.');
-        break;
-      }
-
-      let decision: Awaited<ReturnType<typeof decideTrade>>;
-      if (useOrchestrator && orchestratorRegistry && orchestratorIdentity) {
-        const { plannerPrompt } = buildDecisionPrompts(market, remaining);
-        let plan = '';
-        try {
-          const plannerResponse = await this.llm.complete(
-            [
-              { role: 'system', content: 'You are a concise trading planner.' },
-              { role: 'user', content: plannerPrompt },
-            ],
-            { temperature: 0.2 }
-          );
-          plan = plannerResponse.content.trim();
-        } catch {
-          plan = '';
+    return withExecutionContext(
+      { mode: 'FULL_AGENT', critical: true, reason: 'autonomous_scan', source: 'agent' },
+      async () => {
+        const markets = await this.getMarketsForScan();
+        if (markets.length === 0) {
+          return 'No markets found to scan.';
         }
 
-        const { executorPrompt } = buildDecisionPrompts(market, remaining, plan);
-        const result = await runOrchestrator(
-          'Return a trade decision JSON for the provided market.',
-          {
-            llm: this.executorLlm,
-            toolRegistry: orchestratorRegistry,
-            identity: orchestratorIdentity,
-            toolContext: this.toolContext,
-          },
-          {
-            skipPlanning: true,
-            skipCritic: true,
-            maxIterations: 1,
-            synthesisSystemPrompt: `${EXECUTOR_PROMPT}\n\nUser Prompt:\n${executorPrompt}`,
+        const useOrchestrator = this.config.agent?.useOrchestrator === true;
+        let orchestratorRegistry: AgentToolRegistry | null = null;
+        let orchestratorIdentity: ReturnType<typeof loadThufirIdentity>['identity'] | null = null;
+        if (useOrchestrator) {
+          orchestratorRegistry = new AgentToolRegistry();
+          registerAllTools(orchestratorRegistry);
+          orchestratorIdentity = loadThufirIdentity({
+            workspacePath: this.config.agent?.workspace,
+          }).identity;
+        }
+
+        const decisions: string[] = [];
+        for (const market of markets) {
+          const remaining = this.limiter.getRemainingDaily();
+          if (remaining <= 0) {
+            decisions.push('Daily limit reached; skipping remaining markets.');
+            break;
           }
-        );
 
-        decision = parseDecisionFromText(result.response) ?? {
-          action: 'hold',
-          reasoning: 'Failed to parse orchestrator decision JSON',
-        };
-      } else {
-        decision = await decideTrade(this.llm, this.executorLlm, market, remaining, this.logger);
+          let decision: Awaited<ReturnType<typeof decideTrade>>;
+          if (useOrchestrator && orchestratorRegistry && orchestratorIdentity) {
+            const { plannerPrompt } = buildDecisionPrompts(market, remaining);
+            let plan = '';
+            try {
+              const plannerResponse = await this.llm.complete(
+                [
+                  { role: 'system', content: 'You are a concise trading planner.' },
+                  { role: 'user', content: plannerPrompt },
+                ],
+                { temperature: 0.2 }
+              );
+              plan = plannerResponse.content.trim();
+            } catch {
+              plan = '';
+            }
+
+            const { executorPrompt } = buildDecisionPrompts(market, remaining, plan);
+            const result = await runOrchestrator(
+              'Return a trade decision JSON for the provided market.',
+              {
+                llm: this.executorLlm,
+                toolRegistry: orchestratorRegistry,
+                identity: orchestratorIdentity,
+                toolContext: this.toolContext,
+              },
+              {
+                skipPlanning: true,
+                skipCritic: true,
+                maxIterations: 1,
+                synthesisSystemPrompt: `${EXECUTOR_PROMPT}\n\nUser Prompt:\n${executorPrompt}`,
+              }
+            );
+
+            decision = parseDecisionFromText(result.response) ?? {
+              action: 'hold',
+              reasoning: 'Failed to parse orchestrator decision JSON',
+            };
+          } else {
+            decision = await decideTrade(this.llm, this.executorLlm, market, remaining, this.logger);
+          }
+          if (decision.action === 'hold') {
+            decisions.push(`${market.id}: hold`);
+            continue;
+          }
+
+          const amount = decision.amount ?? Math.min(10, remaining);
+          const limitCheck = await this.limiter.checkAndReserve(amount);
+          if (!limitCheck.allowed) {
+            decisions.push(`${market.id}: blocked (${limitCheck.reason})`);
+            continue;
+          }
+
+          const result = await this.executor.execute(market, {
+            action: decision.action,
+            outcome: decision.outcome,
+            amount,
+            confidence: decision.confidence,
+            reasoning: decision.reasoning,
+          });
+
+          if (result.executed) {
+            this.limiter.confirm(amount);
+            decisions.push(`${market.id}: executed (${decision.action} ${decision.outcome})`);
+          } else {
+            this.limiter.release(amount);
+            decisions.push(`${market.id}: ${result.message}`);
+          }
+        }
+
+        return decisions.join('\n');
       }
-      if (decision.action === 'hold') {
-        decisions.push(`${market.id}: hold`);
-        continue;
-      }
-
-      const amount = decision.amount ?? Math.min(10, remaining);
-      const limitCheck = await this.limiter.checkAndReserve(amount);
-      if (!limitCheck.allowed) {
-        decisions.push(`${market.id}: blocked (${limitCheck.reason})`);
-        continue;
-      }
-
-      const result = await this.executor.execute(market, {
-        action: decision.action,
-        outcome: decision.outcome,
-        amount,
-        confidence: decision.confidence,
-        reasoning: decision.reasoning,
-      });
-
-      if (result.executed) {
-        this.limiter.confirm(amount);
-        decisions.push(`${market.id}: executed (${decision.action} ${decision.outcome})`);
-      } else {
-        this.limiter.release(amount);
-        decisions.push(`${market.id}: ${result.message}`);
-      }
-    }
-
-    return decisions.join('\n');
+    );
   }
 
   private async getMarketsForScan() {

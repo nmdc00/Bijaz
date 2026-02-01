@@ -176,8 +176,12 @@ Implemented:
 - **Pre-trade fragility analysis** (automatic mentat scan before trades)
 - **Fragility-aware critic** (stricter review for high-fragility trades)
 - **Fragility trace in responses** (auto-shown for high fragility, optional otherwise)
+- **Evaluation dashboard** (CLI + agent tool for live-mode metrics)
+- **Decision audit log** (trade/process metrics for iteration)
+- Persistent plan state across sessions (resume on request)
+- User-visible plan/tool/critic traces (config in chat; CLI agent run flags)
+- Tool-first guardrails on non-orchestrator chat paths (tool snapshot)
 
 Not yet implemented:
 
-- User-visible plan/tool trace by default (optional via config)
-- Tool-first rule enforced on non-orchestrator paths
+- User-visible plan/tool trace by default (still opt-in)

@@ -31,6 +31,14 @@ These docs formalize Thufir’s next evolution: from “autonomous trader + chat
   - Defines orchestration rules, tool invocation contract, multi-agent roles, and loop semantics.
   - Should be kept in sync with `AGENTIC_THUFIR.md` (same design, implementation-focused framing).
 
+- `LLM_INFRASTRUCTURE_AND_EXECUTION_CONTROL.md`
+  - Treats LLMs as shared infrastructure with explicit budgets and cooldowns.
+  - Introduces execution modes (`MONITOR_ONLY`, `LIGHT_REASONING`, `FULL_AGENT`) enforced before any LLM call.
+  - Defines backpressure, retry suppression, and provider cooldown behavior.
+  - Collapses multi-call chains and gates critic execution.
+  - Offloads trivial tasks (summarization, compression, extraction) to free local LLMs (Ollama).
+  - Ensures graceful degradation under rate limits instead of cascading failures.
+
 ## Plan (from Claude feedback, adjusted for autonomous trading)
 
 ### V1: Autonomous Core (Week 1-2) - MOSTLY COMPLETE
@@ -86,14 +94,60 @@ These docs formalize Thufir’s next evolution: from “autonomous trader + chat
   - Implemented: mentat auto-scan/report appended in chat, daily reports, and autonomous P&L report (config-gated)
   - Implemented: scheduled mentat monitoring + alerts (gateway)
   - **Implemented: pre-trade fragility analysis + fragility-aware critic**
-  - Remaining: continuous multi-timescale monitoring beyond scheduled scans
+  - Implemented: multi-timescale monitoring via mentat schedules + system map persistence
+- [x] **Evaluation dashboard + decision audit**
+  - Implemented: CLI `thufir eval` summary (live-mode metrics)
+  - Implemented: decision_audit table + logger for trade/process metrics
+  - Implemented: evaluation summary tool for agent/CLI consumption
 
-- [~] **Identity invariance enforcement**
+- [x] **Identity invariance enforcement**
   - Guarantee identity injection on every LLM call regardless of provider/path
   - Ensure tool calls and multi-agent flows cannot bypass identity prelude
-  - Remaining: audit non-user-facing LLM paths (e.g., info digest) for identity injection
+  - Implemented across Anthropic/OpenAI + internal/trivial paths
+
+- [x] **LLM Infrastructure & Execution Control**
+  - Global call/token budget with critical reserves
+  - Provider cooldown + backpressure (no retry spirals)
+  - Execution mode selection enforced before any LLM call
+  - Deterministic fast-path scans (idle cycles = 0 LLM calls)
+  - Trivial task offload to local LLM (Ollama)
+  - Enforced across non-user-facing and background paths
 
 ## Current Work Log
+
+### 2026-02-01 (Session 12)
+- **LLM infrastructure hardening**
+  - Identified rate-limit failures as execution-shape issue (not provider tier)
+  - Designed execution-mode gating (MONITOR_ONLY / LIGHT_REASONING / FULL_AGENT)
+  - Added local LLM path for trivial tasks (Ollama-compatible)
+  - Consolidated budget, cooldown, and backpressure rules into
+    `LLM_INFRASTRUCTURE_AND_EXECUTION_CONTROL.md`
+  - Began refactor to eliminate LLM calls from idle scans and low-signal paths
+- **Evaluation dashboard + decision audit**
+  - Added CLI evaluation dashboard (`thufir eval`) for live-mode metrics
+  - Added decision_audit table + logger for trade/process metrics
+  - Added evaluation summary tool for agent/CLI consumption
+- **OpenClaw gateway vendor + launcher**
+  - Vendored OpenClaw repo in `vendor/openclaw`
+  - Added `thufir gateway --openclaw` to launch OpenClaw gateway
+  - Added `scripts/start-all.sh` to start OpenClaw + Thufir gateways with logs/pids
+  - Updated `scripts/update.sh` to pull/install OpenClaw and restart `openclaw-gateway` when present
+
+### 2026-02-01 (Session 13)
+- **Agentic UX + persistence**
+  - Added plan persistence + resume (session store, orchestrator resume)
+  - Added CLI `thufir agent run` with tool/plan/critic/fragility traces
+  - Tool-first guardrails for non-orchestrator chat (tool snapshot)
+- **Mentat monitoring upgrades**
+  - System map persistence + report inclusion
+  - Multi-timescale mentat schedules (gateway)
+- **LLM infra enforcement**
+  - Execution contexts for non-chat/background LLM calls (decision, explain, research, proactive, mentat)
+  - Identity prelude enforced for all providers/paths
+- **CLOB positions**
+  - Portfolio tool uses CLOB trade history in live mode
+- **Tests**
+  - `pnpm test` timed out (120s). Failures in `vendor/openclaw` tests (discord monitor, gateway agent e2e, embedded runner chdir in workers) and `vendor` suites. Node 22 installed via nvm; rerun still fails in vendor.
 
 ### 2026-02-01 (Session 11)
 - **Pre-Trade Fragility Integration**

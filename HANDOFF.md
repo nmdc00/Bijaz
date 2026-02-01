@@ -2,7 +2,33 @@
 
 This document provides everything needed to continue development on Thufir.
 
-## Latest Session (2026-01-27, Session 7)
+## Latest Session (2026-02-01, Session 13)
+
+### What Was Done
+1. **Agentic UX + persistence**
+   - Added plan persistence + resume (session store + orchestrator resume)
+   - Added CLI `thufir agent run` with tool/plan/critic/fragility traces
+   - Tool-first guardrails for non-orchestrator chat (tool snapshot)
+
+2. **Mentat monitoring upgrades**
+   - System map persistence + report inclusion
+   - Multi-timescale mentat schedules (gateway)
+
+3. **LLM infra enforcement**
+   - Execution contexts for non-chat/background LLM calls
+   - Identity prelude enforced across Anthropic/OpenAI + internal/trivial paths
+
+4. **CLOB positions**
+   - Portfolio tool uses CLOB trade history in live mode
+
+### What's Ready to Use
+- `thufir agent run "<goal>"` with `--show-tools/--show-plan/--show-critic/--show-fragility`
+- Mentat schedules via `notifications.mentat.schedules` in config
+- Live-mode portfolio now surfaces CLOB positions (when wallet configured)
+
+---
+
+## Prior Session (2026-01-27, Session 7)
 
 ### What Was Done
 1. **Polymarket CLOB execution adapter**
@@ -51,8 +77,7 @@ This document provides everything needed to continue development on Thufir.
 
 ### Immediate Next Steps
 1. Execute a $1 live trade via CLOB (verify end-to-end)
-2. Add position tracking from CLOB API
-3. Decide on Clawdbot fork scope (skills/plugin lifecycle vs lightweight gateway)
+2. Decide on Clawdbot fork scope (skills/plugin lifecycle vs lightweight gateway)
 
 ---
 

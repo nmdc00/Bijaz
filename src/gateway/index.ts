@@ -456,24 +456,61 @@ if (heartbeatConfig?.enabled) {
 }
 
 const mentatConfig = config.notifications?.mentat;
-let lastMentatDate = '';
-let lastMentatRunAt = '';
 if (mentatConfig?.enabled) {
   const llm = createLlmClient(config);
   const mentatMarketClient = new PolymarketMarketClient(config);
+  const schedules =
+    mentatConfig.schedules && mentatConfig.schedules.length > 0
+      ? mentatConfig.schedules
+      : [
+          {
+            name: 'default',
+            time: mentatConfig.time,
+            intervalMinutes: mentatConfig.intervalMinutes,
+            channels: mentatConfig.channels,
+            system: mentatConfig.system,
+            marketQuery: mentatConfig.marketQuery,
+            marketLimit: mentatConfig.marketLimit,
+            intelLimit: mentatConfig.intelLimit,
+            minOverallScore: mentatConfig.minOverallScore,
+            minDeltaScore: mentatConfig.minDeltaScore,
+          },
+        ];
 
-  const runMentatMonitor = async () => {
+  const lastMentatDateBySchedule = new Map<string, string>();
+  const lastMentatRunAtBySchedule = new Map<string, string>();
+
+  const runMentatMonitor = async (schedule: {
+    name?: string;
+    time?: string;
+    intervalMinutes?: number;
+    channels?: string[];
+    system?: string;
+    marketQuery?: string;
+    marketLimit?: number;
+    intelLimit?: number;
+    minOverallScore?: number;
+    minDeltaScore?: number;
+  }) => {
     const { runMentatScan } = await import('../mentat/scan.js');
     const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
     const { listFragilityCardDeltas } = await import('../memory/mentat.js');
 
+    const system = schedule.system ?? mentatConfig.system ?? 'Polymarket';
+    const marketQuery = schedule.marketQuery ?? mentatConfig.marketQuery;
+    const marketLimit = schedule.marketLimit ?? mentatConfig.marketLimit;
+    const intelLimit = schedule.intelLimit ?? mentatConfig.intelLimit;
+    const minOverallScore = schedule.minOverallScore ?? mentatConfig.minOverallScore ?? 0.7;
+    const minDeltaScore = schedule.minDeltaScore ?? mentatConfig.minDeltaScore ?? 0.15;
+    const scheduleId = schedule.name ?? `${system}-${marketQuery ?? 'all'}`;
+
     const scan = await runMentatScan({
-      system: mentatConfig.system ?? 'Polymarket',
+      system,
       llm,
       marketClient: mentatMarketClient,
-      marketQuery: mentatConfig.marketQuery,
-      limit: mentatConfig.marketLimit,
-      intelLimit: mentatConfig.intelLimit,
+      marketQuery,
+      limit: marketLimit,
+      intelLimit,
     });
 
     const report = generateMentatReport({
@@ -483,16 +520,19 @@ if (mentatConfig?.enabled) {
     const reportText = formatMentatReport(report);
 
     const deltas = listFragilityCardDeltas({ limit: 100 })
-      .filter((delta) => (lastMentatRunAt ? delta.changedAt > lastMentatRunAt : true));
+      .filter((delta) => {
+        const lastRunAt = lastMentatRunAtBySchedule.get(scheduleId);
+        return lastRunAt ? delta.changedAt > lastRunAt : true;
+      });
     const maxDelta = deltas.reduce((max, delta) => {
       const value = delta.scoreDelta ?? 0;
       return value > max ? value : max;
     }, 0);
 
-    const triggerOverall = (report.fragilityScore ?? 0) >= (mentatConfig.minOverallScore ?? 0.7);
-    const triggerDelta = maxDelta >= (mentatConfig.minDeltaScore ?? 0.15);
+    const triggerOverall = (report.fragilityScore ?? 0) >= minOverallScore;
+    const triggerDelta = maxDelta >= minDeltaScore;
     if (!(triggerOverall || triggerDelta)) {
-      lastMentatRunAt = new Date().toISOString();
+      lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());
       return;
     }
 
@@ -502,7 +542,9 @@ if (mentatConfig?.enabled) {
       `Max Score Delta: ${(maxDelta * 100).toFixed(1)}%`;
     const message = `${header}\n\n${reportText}`;
 
-    const channels = mentatConfig.channels ?? [];
+    const channels = (schedule.channels && schedule.channels.length > 0)
+      ? schedule.channels
+      : (mentatConfig.channels ?? []);
     if (channels.includes('telegram') && telegram) {
       for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
         try {
@@ -524,29 +566,36 @@ if (mentatConfig?.enabled) {
       }
     }
 
-    lastMentatRunAt = new Date().toISOString();
+    lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());
   };
 
-  if (mentatConfig.intervalMinutes && mentatConfig.intervalMinutes > 0) {
-    setInterval(() => {
-      runMentatMonitor().catch((error) => logger.error('Mentat monitor failed', error));
-    }, mentatConfig.intervalMinutes * 60 * 1000);
-  } else {
+  for (const schedule of schedules) {
+    if (schedule.intervalMinutes && schedule.intervalMinutes > 0) {
+      setInterval(() => {
+        runMentatMonitor(schedule).catch((error) => logger.error('Mentat monitor failed', error));
+      }, schedule.intervalMinutes * 60 * 1000);
+      continue;
+    }
+
     setInterval(() => {
       const now = new Date();
-      const [hours, minutes] = mentatConfig.time.split(':').map((part) => Number(part));
+      const time = schedule.time ?? mentatConfig.time;
+      if (!time) return;
+      const [hours, minutes] = time.split(':').map((part) => Number(part));
       if (Number.isNaN(hours) || Number.isNaN(minutes)) {
         return;
       }
       const today = now.toISOString().split('T')[0]!;
-      if (lastMentatDate === today) {
+      const scheduleId = schedule.name ?? `${schedule.system ?? mentatConfig.system ?? 'system'}-${schedule.marketQuery ?? 'all'}`;
+      const lastDate = lastMentatDateBySchedule.get(scheduleId);
+      if (lastDate === today) {
         return;
       }
       if (now.getHours() !== hours || now.getMinutes() !== minutes) {
         return;
       }
-      runMentatMonitor().catch((error) => logger.error('Mentat monitor failed', error));
-      lastMentatDate = today;
+      runMentatMonitor(schedule).catch((error) => logger.error('Mentat monitor failed', error));
+      lastMentatDateBySchedule.set(scheduleId, today);
     }, 60_000);
   }
 }

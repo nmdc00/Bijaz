@@ -44,6 +44,16 @@ import { pruneChatMessages } from '../memory/chat.js';
 import { SessionStore } from '../memory/session_store.js';
 import { checkExposureLimits } from '../core/exposure.js';
 import { explainPrediction } from '../core/explain.js';
+import { executeToolCall } from '../core/tool-executor.js';
+import { getEvaluationSummary } from '../core/evaluation.js';
+import { runOrchestrator } from '../agent/orchestrator/orchestrator.js';
+import { AgentToolRegistry } from '../agent/tools/registry.js';
+import { registerAllTools } from '../agent/tools/adapters/index.js';
+import { loadThufirIdentity } from '../agent/identity/identity.js';
+import type { ToolExecution } from '../agent/tools/types.js';
+import type { AgentPlan } from '../agent/planning/types.js';
+import type { CriticResult } from '../agent/critic/types.js';
+import { withExecutionContext } from '../core/llm_infra.js';
 import type { ExecutionAdapter } from '../execution/executor.js';
 import type { ThufirConfig } from '../core/config.js';
 
@@ -73,6 +83,120 @@ async function createExecutorForConfig(
 
   const { PaperExecutor } = await import('../execution/modes/paper.js');
   return new PaperExecutor();
+}
+
+function formatToolTrace(executions: ToolExecution[]): string {
+  if (executions.length === 0) {
+    return 'No tools called.';
+  }
+  const lines: string[] = [];
+  for (const exec of executions) {
+    const status = exec.result.success ? 'SUCCESS' : 'FAILED';
+    lines.push(`- ${exec.toolName} [${status}]`);
+  }
+  return lines.join('\n');
+}
+
+function formatCriticNotes(criticResult: CriticResult | null): string {
+  if (!criticResult) {
+    return 'Critic not run.';
+  }
+  const lines: string[] = [];
+  lines.push(`Approved: ${criticResult.approved ? 'yes' : 'no'}`);
+  lines.push(`Assessment: ${criticResult.assessment}`);
+  if (criticResult.issues.length === 0) {
+    lines.push('Issues: none');
+    return lines.join('\n');
+  }
+  lines.push('Issues:');
+  for (const issue of criticResult.issues) {
+    const detail = issue.suggestion ? ` (fix: ${issue.suggestion})` : '';
+    lines.push(`- [${issue.severity}] ${issue.type}: ${issue.description}${detail}`);
+  }
+  return lines.join('\n');
+}
+
+function formatPlanTrace(plan: AgentPlan | null): string {
+  if (!plan) {
+    return 'No plan available.';
+  }
+  const lines: string[] = [];
+  lines.push(`Goal: ${plan.goal}`);
+  lines.push(`Confidence: ${(plan.confidence * 100).toFixed(0)}%`);
+  lines.push(`Revisions: ${plan.revisionCount}`);
+  if (plan.blockers.length > 0) {
+    lines.push(`Blockers: ${plan.blockers.join('; ')}`);
+  }
+  lines.push('Steps:');
+  for (const step of plan.steps) {
+    const tool = step.requiresTool ? ` tool=${step.toolName ?? 'unknown'}` : '';
+    lines.push(`- [${step.status}] ${step.description}${tool}`);
+  }
+  return lines.join('\n');
+}
+
+function formatFragilityTrace(fragility?: {
+  fragilityScore: number;
+  riskSignalCount: number;
+  fragilityCardCount: number;
+  topRiskSignals: string[];
+  highFragility: boolean;
+}): string {
+  if (!fragility) {
+    return 'No fragility analysis available.';
+  }
+  const lines: string[] = [];
+  const scorePercent = (fragility.fragilityScore * 100).toFixed(0);
+  const warning = fragility.highFragility ? ' ⚠️ HIGH' : '';
+  lines.push(`Fragility Score: ${scorePercent}%${warning}`);
+  lines.push(`Risk Signals: ${fragility.riskSignalCount}`);
+  lines.push(`Fragility Cards: ${fragility.fragilityCardCount}`);
+  if (fragility.topRiskSignals.length > 0) {
+    lines.push('');
+    lines.push('Top Risks:');
+    for (const signal of fragility.topRiskSignals) {
+      lines.push(`- ${signal}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function attachOrchestratorNotes(
+  response: string,
+  params: {
+    showPlan: boolean;
+    showTools: boolean;
+    showCritic: boolean;
+    showFragility: boolean;
+    toolExecutions: ToolExecution[];
+    criticResult: CriticResult | null;
+    plan: AgentPlan | null;
+    fragility?: {
+      fragilityScore: number;
+      riskSignalCount: number;
+      fragilityCardCount: number;
+      topRiskSignals: string[];
+      highFragility: boolean;
+    };
+  }
+): string {
+  const sections: string[] = [];
+  if (params.showPlan) {
+    sections.push(`## Plan Trace\n${formatPlanTrace(params.plan)}`);
+  }
+  if (params.showTools) {
+    sections.push(`## Tool Trace\n${formatToolTrace(params.toolExecutions)}`);
+  }
+  if (params.showCritic) {
+    sections.push(`## Critic Notes\n${formatCriticNotes(params.criticResult)}`);
+  }
+  if (params.showFragility) {
+    sections.push(`## Fragility Analysis\n${formatFragilityTrace(params.fragility)}`);
+  }
+  if (sections.length === 0) {
+    return response;
+  }
+  return `${response}\n\n---\n\n${sections.join('\n\n')}`;
 }
 
 function getConfigPath(): string {
@@ -876,6 +1000,65 @@ program
 
     console.log('Portfolio');
     console.log('═'.repeat(60));
+    const canUseClob =
+      config.execution.mode === 'live' && Boolean(process.env.THUFIR_WALLET_PASSWORD);
+    if (canUseClob) {
+      const marketClient = new PolymarketMarketClient(config);
+      const executor = await createExecutorForConfig(config);
+      const limiter = new DbSpendingLimitEnforcer({
+        daily: config.wallet?.limits?.daily ?? 100,
+        perTrade: config.wallet?.limits?.perTrade ?? 25,
+        confirmationThreshold: config.wallet?.limits?.confirmationThreshold ?? 10,
+      });
+      const toolResult = await executeToolCall('get_portfolio', {}, {
+        config,
+        marketClient,
+        executor,
+        limiter,
+      });
+      if (toolResult.success) {
+        const data = toolResult.data as {
+          positions?: Array<{
+            market_question?: string;
+            outcome?: string;
+            shares?: number | null;
+            avg_price?: number | null;
+            current_price?: number | null;
+            unrealized_pnl?: number | null;
+          }>;
+          summary?: {
+            total_positions?: number;
+            total_value?: number;
+            total_cost?: number;
+            unrealized_pnl?: number;
+            positions_source?: string;
+          };
+        };
+        const positions = data.positions ?? [];
+        if (positions.length === 0) {
+          console.log('No open positions.');
+          return;
+        }
+        for (const position of positions) {
+          const title = position.market_question ?? 'Unknown market';
+          const shares = position.shares != null ? position.shares.toFixed(2) : 'n/a';
+          const avg = position.avg_price != null ? position.avg_price.toFixed(3) : 'n/a';
+          const current = position.current_price != null ? position.current_price.toFixed(3) : 'n/a';
+          const pnl = position.unrealized_pnl != null ? position.unrealized_pnl.toFixed(2) : 'n/a';
+          console.log(`- ${title} [${position.outcome ?? 'YES'}] shares=${shares} avg=${avg} current=${current} pnl=${pnl}`);
+        }
+        const summary = data.summary;
+        if (summary) {
+          const source = summary.positions_source ?? 'clob';
+          console.log('─'.repeat(40));
+          console.log(`Source: ${source}`);
+          console.log(`Total Value: $${(summary.total_value ?? 0).toFixed(2)}`);
+          console.log(`Total Cost: $${(summary.total_cost ?? 0).toFixed(2)}`);
+          console.log(`Unrealized PnL: $${(summary.unrealized_pnl ?? 0).toFixed(2)}`);
+        }
+        return;
+      }
+    }
     const positions = (() => {
       const fromTrades = listOpenPositionsFromTrades(200);
       return fromTrades.length > 0 ? fromTrades : listOpenPositions(200);
@@ -1128,6 +1311,73 @@ program
     }
   });
 
+// ============================================================================
+// Evaluation Dashboard
+// ============================================================================
+
+program
+  .command('eval')
+  .description('Show evaluation dashboard (live-mode metrics)')
+  .option('-w, --window <days>', 'Window length in days (omit for all-time)')
+  .option('-d, --domain <domain>', 'Filter by domain')
+  .option('--json', 'Output raw JSON')
+  .action(async (options) => {
+    const windowDays = options.window ? Number(options.window) : undefined;
+    const summary = getEvaluationSummary({
+      windowDays,
+      domain: options.domain ? String(options.domain) : undefined,
+    });
+
+    if (options.json) {
+      console.log(JSON.stringify(summary, null, 2));
+      return;
+    }
+
+    const heading = windowDays ? `Evaluation Summary (last ${windowDays}d)` : 'Evaluation Summary (all-time)';
+    const pct = (value: number | null): string => (value == null ? '-' : `${(value * 100).toFixed(1)}%`);
+    const num = (value: number | null): string => (value == null ? '-' : value.toFixed(4));
+    const usd = (value: number): string =>
+      `${value >= 0 ? '+' : ''}$${value.toFixed(2)}`;
+
+    console.log(heading);
+    console.log('═'.repeat(72));
+    console.log(`Predictions: ${summary.totals.predictions}`);
+    console.log(`Executed: ${summary.totals.executedPredictions}`);
+    console.log(`Resolved: ${summary.totals.resolvedPredictions}`);
+    console.log(`Accuracy: ${pct(summary.totals.accuracy)} | Brier: ${num(summary.totals.avgBrier)}`);
+    console.log(`Avg edge: ${pct(summary.totals.avgEdge)}`);
+    console.log(
+      `PnL: ${usd(summary.totals.realizedPnl)} realized | ${usd(summary.totals.unrealizedPnl)} unrealized | ${usd(summary.totals.totalPnl)} total`
+    );
+
+    if (summary.process) {
+      console.log('');
+      console.log('Process Metrics');
+      console.log('─'.repeat(72));
+      console.log(`Decisions: ${summary.process.decisions}`);
+      console.log(
+        `Critic: ${summary.process.criticApproved} approved | ${summary.process.criticRejected} rejected`
+      );
+      console.log(`Avg fragility: ${num(summary.process.avgFragility)}`);
+      console.log(`Tool traces: ${summary.process.withToolTrace}`);
+    }
+
+    if (summary.byDomain.length > 0) {
+      console.log('');
+      console.log('By Domain');
+      console.log('─'.repeat(72));
+      console.log(
+        'domain | pnl_total | pnl_realized | pnl_unrealized | accuracy | brier | avg_edge | resolved'
+      );
+      for (const row of summary.byDomain) {
+        console.log(
+          `${row.domain} | ${usd(row.totalPnl)} | ${usd(row.realizedPnl)} | ${usd(row.unrealizedPnl)} | ` +
+            `${pct(row.accuracy)} | ${num(row.avgBrier)} | ${pct(row.avgEdge)} | ${row.resolvedPredictions}`
+        );
+      }
+    }
+  });
+
 calibration
   .command('history')
   .description('Show prediction outcome history')
@@ -1343,7 +1593,7 @@ program
   .command('chat')
   .description('Interactive chat with Thufir')
   .action(async () => {
-    const { createLlmClient } = await import('../core/llm.js');
+    const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { ConversationHandler } = await import('../core/conversation.js');
     const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
     const readline = await import('node:readline');
@@ -1354,7 +1604,8 @@ program
 
     const llm = createLlmClient(config);
     const marketClient = new PolymarketMarketClient(config);
-    const conversation = new ConversationHandler(llm, marketClient, config);
+    const infoLlm = createTrivialTaskClient(config) ?? undefined;
+    const conversation = new ConversationHandler(llm, marketClient, config, infoLlm);
     const userId = 'cli-user';
 
     const rl = readline.createInterface({
@@ -1395,12 +1646,145 @@ program
     prompt();
   });
 
+const agent = program.command('agent').description('Agentic orchestrator commands');
+
+agent
+  .command('run')
+  .description('Run the agentic orchestrator on a goal')
+  .argument('<goal...>', 'Goal or request for the agent')
+  .option('--mode <mode>', 'Force mode: chat | trade | mentat')
+  .option('--show-plan', 'Show plan trace')
+  .option('--show-tools', 'Show tool trace')
+  .option('--show-critic', 'Show critic notes')
+  .option('--show-fragility', 'Show fragility analysis')
+  .option('--mentat-report', 'Append a mentat report')
+  .option('--resume', 'Resume the last saved plan')
+  .option('--user <id>', 'User/session id for plan persistence', 'cli-user')
+  .option('--password <password>', 'Wallet password for live trading (optional)')
+  .action(async (goalParts, options) => {
+    const goal = Array.isArray(goalParts) ? goalParts.join(' ') : String(goalParts ?? '').trim();
+    if (!goal) {
+      console.error('Goal is required.');
+      return;
+    }
+    if (options.mode && !['chat', 'trade', 'mentat'].includes(options.mode)) {
+      console.error('Invalid mode. Use: chat | trade | mentat');
+      return;
+    }
+
+    const { createLlmClient } = await import('../core/llm.js');
+    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { SessionStore } = await import('../memory/session_store.js');
+
+    const llm = createLlmClient(config);
+    const marketClient = new PolymarketMarketClient(config);
+    const executor = await createExecutorForConfig(config, options.password);
+    const limiter = new DbSpendingLimitEnforcer({
+      daily: config.wallet?.limits?.daily ?? 100,
+      perTrade: config.wallet?.limits?.perTrade ?? 25,
+      confirmationThreshold: config.wallet?.limits?.confirmationThreshold ?? 10,
+    });
+
+    const toolContext = {
+      config,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    const registry = new AgentToolRegistry();
+    registerAllTools(registry);
+    const identity = loadThufirIdentity({
+      workspacePath: config.agent?.workspace,
+    }).identity;
+
+    const sessions = new SessionStore(config);
+    const priorPlan = options.resume ? sessions.getPlan(options.user) : null;
+
+    const result = await withExecutionContext(
+      { mode: 'FULL_AGENT', critical: false, reason: 'agent_run', source: 'cli' },
+      () =>
+        runOrchestrator(
+          goal,
+          {
+            llm,
+            toolRegistry: registry,
+            identity,
+            toolContext,
+          },
+          {
+            forceMode: options.mode,
+            initialPlan: priorPlan ?? undefined,
+            resumePlan: Boolean(options.resume),
+          }
+        )
+    );
+
+    if (result.state.plan && !result.state.plan.complete) {
+      sessions.setPlan(options.user, result.state.plan);
+    } else {
+      sessions.clearPlan(options.user);
+    }
+
+    const showPlan = options.showPlan ?? config.agent?.showPlanTrace ?? false;
+    const showTools = options.showTools ?? config.agent?.showToolTrace ?? false;
+    const showCritic = options.showCritic ?? config.agent?.showCriticNotes ?? false;
+    const showFragility =
+      options.showFragility ??
+      (config.agent?.showFragilityTrace ?? false) ??
+      false;
+
+    let output = attachOrchestratorNotes(result.response, {
+      showPlan,
+      showTools,
+      showCritic,
+      showFragility,
+      toolExecutions: result.state.toolExecutions,
+      criticResult: result.state.criticResult,
+      plan: result.state.plan,
+      fragility: result.summary.fragility,
+    });
+
+    const shouldAppendMentat =
+      options.mentatReport ??
+      config.agent?.mentatAutoScan ??
+      result.state.mode === 'mentat';
+
+    if (shouldAppendMentat) {
+      try {
+        const { runMentatScan } = await import('../mentat/scan.js');
+        const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
+        const scan = await withExecutionContext(
+          { mode: 'FULL_AGENT', critical: false, reason: 'mentat_report', source: 'cli' },
+          () =>
+            runMentatScan({
+              system: config.agent?.mentatSystem ?? 'Polymarket',
+              llm,
+              marketClient,
+              marketQuery: config.agent?.mentatMarketQuery,
+              limit: config.agent?.mentatMarketLimit,
+              intelLimit: config.agent?.mentatIntelLimit,
+            })
+        );
+        const report = generateMentatReport({
+          system: scan.system,
+          detectors: scan.detectors,
+        });
+        output = `${output}\n\n---\n\n${formatMentatReport(report)}`;
+      } catch (error) {
+        console.error('Mentat report failed:', error instanceof Error ? error.message : 'Unknown error');
+      }
+    }
+
+    console.log(output);
+  });
+
 program
   .command('analyze <market>')
   .description('Deep analysis of a market')
   .option('--json', 'Return structured JSON')
   .action(async (market, options) => {
-    const { createLlmClient } = await import('../core/llm.js');
+    const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { ConversationHandler } = await import('../core/conversation.js');
     const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
     const ora = await import('ora');
@@ -1413,7 +1797,8 @@ program
     try {
       const llm = createLlmClient(config);
       const markets = new PolymarketMarketClient(config);
-      const conversation = new ConversationHandler(llm, markets, config);
+      const infoLlm = createTrivialTaskClient(config) ?? undefined;
+      const conversation = new ConversationHandler(llm, markets, config, infoLlm);
 
       const analysis = options.json
         ? await conversation.analyzeMarketStructured('cli-user', market)
@@ -1448,7 +1833,7 @@ mentat
   .option('--intel-limit <number>', 'Recent intel items to include', '40')
   .option('--no-store', 'Do not store results')
   .action(async (options) => {
-    const { createLlmClient } = await import('../core/llm.js');
+    const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
     const { runMentatScan, formatMentatScan } = await import('../mentat/scan.js');
     const ora = await import('ora');
@@ -1543,7 +1928,8 @@ program
     try {
       const llm = createLlmClient(config);
       const markets = new PolymarketMarketClient(config);
-      const conversation = new ConversationHandler(llm, markets, config);
+      const infoLlm = createTrivialTaskClient(config) ?? undefined;
+      const conversation = new ConversationHandler(llm, markets, config, infoLlm);
 
       const response = await conversation.askAbout('cli-user', topic);
       spinner.stop();
@@ -1729,15 +2115,49 @@ program
   .description('Start the Thufir gateway')
   .option('-p, --port <port>', 'Port to listen on', '18789')
   .option('-v, --verbose', 'Verbose logging')
+  .option('--openclaw', 'Start the OpenClaw gateway (vendor/openclaw)')
   .action(async (options) => {
+    const { spawn } = await import('node:child_process');
+    const { existsSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+
+    if (options.openclaw) {
+      const openclawRoot = resolve(process.cwd(), 'vendor', 'openclaw');
+      const openclawPkg = resolve(openclawRoot, 'package.json');
+      const openclawNodeModules = resolve(openclawRoot, 'node_modules');
+      if (!existsSync(openclawPkg)) {
+        console.error('OpenClaw repo not found at vendor/openclaw.');
+        console.error('Run: git clone https://github.com/openclaw/openclaw vendor/openclaw');
+        process.exit(1);
+      }
+      if (!existsSync(openclawNodeModules)) {
+        console.error('OpenClaw dependencies are not installed.');
+        console.error('Run: pnpm --dir vendor/openclaw install');
+        process.exit(1);
+      }
+      if (options.port) {
+        process.env.OPENCLAW_GATEWAY_PORT = String(options.port);
+      }
+      if (options.verbose) {
+        process.env.OPENCLAW_LOG_LEVEL = 'debug';
+      }
+      const child = spawn(process.execPath, ['scripts/run-node.mjs', 'gateway'], {
+        stdio: 'inherit',
+        env: { ...process.env },
+        cwd: openclawRoot,
+      });
+      child.on('exit', (code) => {
+        process.exit(code ?? 0);
+      });
+      return;
+    }
+
     if (options.port) {
       process.env.THUFIR_GATEWAY_PORT = String(options.port);
     }
     if (options.verbose) {
       process.env.THUFIR_LOG_LEVEL = 'debug';
     }
-
-    const { spawn } = await import('node:child_process');
 
     const args = ['src/gateway/index.ts'];
     const child = spawn('tsx', args, {

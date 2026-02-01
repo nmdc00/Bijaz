@@ -34,6 +34,19 @@ export interface MechanismRow extends MechanismRecord {
   updatedAt: string;
 }
 
+export interface SystemMapRecord {
+  id?: string;
+  system?: string | null;
+  nodes: string[];
+  edges: Array<{ from: string; to: string; relation: string }>;
+}
+
+export interface SystemMapRow extends SystemMapRecord {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface FragilityCardRecord {
   id?: string;
   system?: string | null;
@@ -243,6 +256,63 @@ export function listMechanisms(options?: {
     causalChain: parseJson<string[]>(row.causalChain as string | null),
     triggerClass: (row.triggerClass as string) ?? null,
     propagationPath: parseJson<string[]>(row.propagationPath as string | null),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  }));
+}
+
+export function listSystemMaps(options?: {
+  system?: string;
+  limit?: number;
+  orderBy?: 'updated' | 'created';
+}): SystemMapRow[] {
+  const db = openDatabase();
+  const system = normalizeSystem(options?.system);
+  const limit = normalizeLimit(options?.limit, 20);
+  const orderBy = options?.orderBy === 'created' ? 'created_at DESC' : 'updated_at DESC';
+
+  const rows = system
+    ? db
+        .prepare(
+          `
+          SELECT
+            id,
+            system,
+            nodes,
+            edges,
+            created_at as createdAt,
+            updated_at as updatedAt
+          FROM system_maps
+          WHERE system = ?
+          ORDER BY ${orderBy}
+          LIMIT ?
+        `
+        )
+        .all(system, limit)
+    : db
+        .prepare(
+          `
+          SELECT
+            id,
+            system,
+            nodes,
+            edges,
+            created_at as createdAt,
+            updated_at as updatedAt
+          FROM system_maps
+          ORDER BY ${orderBy}
+          LIMIT ?
+        `
+        )
+        .all(limit);
+
+  return (rows as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id),
+    system: (row.system as string) ?? null,
+    nodes: parseJson<string[]>(row.nodes as string | null) ?? [],
+    edges: parseJson<Array<{ from: string; to: string; relation: string }>>(
+      row.edges as string | null
+    ) ?? [],
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   }));
@@ -622,6 +692,59 @@ export function upsertAssumption(record: AssumptionRecord): string {
       fieldsChanged: JSON.stringify(fieldsChanged),
     });
   }
+
+  return id;
+}
+
+export function upsertSystemMap(record: SystemMapRecord): string {
+  const db = openDatabase();
+  const system = normalizeSystem(record.system);
+  const existing = system
+    ? (db
+        .prepare(
+          `
+          SELECT id FROM system_maps
+          WHERE system = ?
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `
+        )
+        .get(system) as Record<string, unknown> | undefined)
+    : undefined;
+
+  const id = record.id ?? (existing?.id as string | undefined) ?? randomUUID();
+  const nodes = Array.isArray(record.nodes) ? record.nodes : [];
+  const edges = Array.isArray(record.edges) ? record.edges : [];
+
+  db.prepare(
+    `
+      INSERT INTO system_maps (
+        id,
+        system,
+        nodes,
+        edges,
+        created_at,
+        updated_at
+      ) VALUES (
+        @id,
+        @system,
+        @nodes,
+        @edges,
+        datetime('now'),
+        datetime('now')
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        system = excluded.system,
+        nodes = excluded.nodes,
+        edges = excluded.edges,
+        updated_at = datetime('now')
+    `
+  ).run({
+    id,
+    system,
+    nodes: toJson(nodes),
+    edges: toJson(edges),
+  });
 
   return id;
 }

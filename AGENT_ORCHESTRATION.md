@@ -49,15 +49,14 @@ agent:
 5. Synthesize response.
 6. Run critic pass when required by mode.
 7. Return result with metadata (mode, confidence, tool usage).
+8. Record decision audit for trade runs (critic + fragility + tool/plan traces).
 
 ---
 
 ## Not Yet Implemented
 
-- Explicit multi-agent role split (Cartographer/Skeptic/Risk Officer).
-- Persistent plan state across sessions (plan is per-run).
-- User-visible tool trace / plan transcript (currently internal).
-- Automatic mentat report generation in agent mode (CLI-only today).
+- Explicit multi-agent role split (Cartographer/Skeptic/Risk Officer) outside mentat scan loop.
+- Evaluation-aware self-tuning (agent uses eval summary to bias domains by default).
 
 ---
 
@@ -67,4 +66,4 @@ agent:
 2. Tool-first planning when tools are needed - IMPLEMENTED in orchestrator path.
 3. Critic pass on trades/mentat mode - IMPLEMENTED in orchestrator path.
 4. QMD memory retrieval before planning - IMPLEMENTED when enabled.
-5. User-visible tool trace - NOT IMPLEMENTED.
+5. User-visible tool trace - IMPLEMENTED (chat via config flags; CLI `thufir agent run --show-tools`).
