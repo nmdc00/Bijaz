@@ -24,6 +24,7 @@ agent:
   showPlanTrace: false
   showFragilityTrace: false
   persistPlans: true
+  allowFallbackNonCritical: true
   identityPromptMode: full
   internalPromptMode: minimal
   mentatAutoScan: false

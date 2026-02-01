@@ -1238,7 +1238,8 @@ export class FallbackLlmClient implements LlmClient {
       }
       const reason = extractErrorMessage(error);
       const ctx = getExecutionContext();
-      if (!ctx?.critical) {
+      const allowNonCritical = this.config?.agent?.allowFallbackNonCritical ?? true;
+      if (!ctx?.critical && !allowNonCritical) {
         this.logger?.warn('LLM fallback suppressed (non-critical context)', {
           from: this.primary.meta ?? { provider: 'unknown', model: 'unknown' },
           to: this.fallback.meta ?? { provider: 'unknown', model: 'unknown' },

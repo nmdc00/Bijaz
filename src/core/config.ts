@@ -32,6 +32,7 @@ const ConfigSchema = z.object({
     showPlanTrace: z.boolean().default(false),
     showFragilityTrace: z.boolean().default(false),
     persistPlans: z.boolean().default(true),
+    allowFallbackNonCritical: z.boolean().default(true),
     identityPromptMode: z.enum(['full', 'minimal', 'none']).default('full'),
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
     mentatAutoScan: z.boolean().default(false),
