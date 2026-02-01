@@ -1232,10 +1232,21 @@ export class FallbackLlmClient implements LlmClient {
       if (!this.shouldFallback(error)) {
         throw error;
       }
+      const reason = extractErrorMessage(error);
       const ctx = getExecutionContext();
       if (!ctx?.critical) {
+        this.logger?.warn('LLM fallback suppressed (non-critical context)', {
+          from: this.primary.meta ?? { provider: 'unknown', model: 'unknown' },
+          to: this.fallback.meta ?? { provider: 'unknown', model: 'unknown' },
+          reason,
+        });
         throw error;
       }
+      this.logger?.warn('LLM fallback triggered', {
+        from: this.primary.meta ?? { provider: 'unknown', model: 'unknown' },
+        to: this.fallback.meta ?? { provider: 'unknown', model: 'unknown' },
+        reason,
+      });
       if (this.config) {
         const budget = getLlmBudgetManager(this.config);
         const meta = this.fallback.meta ?? { provider: 'openai', model: 'unknown' };
