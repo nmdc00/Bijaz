@@ -1672,7 +1672,7 @@ agent
       return;
     }
 
-    const { createLlmClient } = await import('../core/llm.js');
+    const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
     const { SessionStore } = await import('../memory/session_store.js');
 
@@ -1833,7 +1833,7 @@ mentat
   .option('--intel-limit <number>', 'Recent intel items to include', '40')
   .option('--no-store', 'Do not store results')
   .action(async (options) => {
-    const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
+    const { createLlmClient } = await import('../core/llm.js');
     const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
     const { runMentatScan, formatMentatScan } = await import('../mentat/scan.js');
     const ora = await import('ora');
