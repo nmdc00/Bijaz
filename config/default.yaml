@@ -27,6 +27,8 @@ agent:
   allowFallbackNonCritical: true
   alwaysIncludeTime: false
   identityPromptMode: full
+  identityBootstrapMaxChars: 20000
+  identityBootstrapIncludeMissing: true
   internalPromptMode: minimal
   mentatAutoScan: false
   mentatSystem: Polymarket

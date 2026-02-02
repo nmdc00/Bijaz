@@ -669,6 +669,8 @@ ${contextBlock}`.trim();
       const identityPrelude = loadIdentityPrelude({
         workspacePath: this.config.agent?.workspace,
         promptMode: this.config.agent?.internalPromptMode ?? 'minimal',
+        bootstrapMaxChars: this.config.agent?.identityBootstrapMaxChars,
+        includeMissing: this.config.agent?.identityBootstrapIncludeMissing,
       }).prelude;
       const systemPrompt = identityPrelude
         ? `${identityPrelude}\n\n---\n\nYou are a concise information gatherer.`
@@ -702,6 +704,8 @@ ${contextBlock}`.trim();
     const workspaceIdentity = loadIdentityPrelude({
       workspacePath: this.config.agent?.workspace,
       promptMode: this.config.agent?.identityPromptMode ?? 'full',
+      bootstrapMaxChars: this.config.agent?.identityBootstrapMaxChars,
+      includeMissing: this.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
 
     // Identity comes FIRST - this is the critical difference from before

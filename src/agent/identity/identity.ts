@@ -54,10 +54,21 @@ export function loadThufirIdentity(config?: IdentityConfig): IdentityLoadResult 
     join(process.cwd(), 'workspace'),
   ].filter(Boolean) as string[];
 
-  const identityFiles = ['AGENTS.md', 'IDENTITY.md', 'SOUL.md', 'USER.md'];
+  const identityFiles = [
+    'AGENTS.md',
+    'IDENTITY.md',
+    'SOUL.md',
+    'USER.md',
+    'TOOLS.md',
+    'HEARTBEAT.md',
+    'BOOTSTRAP.md',
+  ];
+  const maxChars = config?.bootstrapMaxChars ?? 20000;
+  const includeMissing = config?.includeMissing ?? true;
   const rawContent: AgentIdentity['rawContent'] = {};
   const filesLoaded: string[] = [];
   const warnings: string[] = [];
+  let missingFiles: string[] = [];
 
   // Try each workspace path until we find files
   for (const workspacePath of workspacePaths) {
@@ -65,6 +76,7 @@ export function loadThufirIdentity(config?: IdentityConfig): IdentityLoadResult 
       continue;
     }
 
+    missingFiles = [];
     for (const filename of identityFiles) {
       const filepath = join(workspacePath, filename);
       if (existsSync(filepath)) {
@@ -72,12 +84,14 @@ export function loadThufirIdentity(config?: IdentityConfig): IdentityLoadResult 
           const content = readFileSync(filepath, 'utf-8').trim();
           if (content) {
             const key = filename.replace('.md', '').toLowerCase() as keyof typeof rawContent;
-            rawContent[key] = content;
+            rawContent[key] = truncateContent(content, maxChars);
             filesLoaded.push(filepath);
           }
         } catch (error) {
           warnings.push(`Failed to read ${filepath}: ${error}`);
         }
+      } else {
+        missingFiles.push(filename);
       }
     }
 
@@ -88,7 +102,11 @@ export function loadThufirIdentity(config?: IdentityConfig): IdentityLoadResult 
   }
 
   // Build identity from loaded content
-  const identity = buildIdentityFromContent(rawContent, warnings);
+  if (filesLoaded.length === 0) {
+    missingFiles = identityFiles.slice();
+  }
+
+  const identity = buildIdentityFromContent(rawContent, missingFiles, warnings, includeMissing);
   cachedIdentity = identity;
 
   return {
@@ -103,12 +121,22 @@ export function loadThufirIdentity(config?: IdentityConfig): IdentityLoadResult 
  */
 function buildIdentityFromContent(
   rawContent: AgentIdentity['rawContent'],
-  warnings: string[]
+  missingFiles: string[],
+  warnings: string[],
+  includeMissing: boolean
 ): AgentIdentity {
   // If no content loaded, use fallback
-  if (!rawContent.agents && !rawContent.identity && !rawContent.soul && !rawContent.user) {
+  if (
+    !rawContent.agents &&
+    !rawContent.identity &&
+    !rawContent.soul &&
+    !rawContent.user &&
+    !rawContent.tools &&
+    !rawContent.heartbeat &&
+    !rawContent.bootstrap
+  ) {
     warnings.push('No identity files found, using fallback identity');
-    return createFallbackIdentity();
+    return createFallbackIdentity(includeMissing ? missingFiles : []);
   }
 
   // Extract name from identity content
@@ -121,6 +149,7 @@ function buildIdentityFromContent(
     traits: THUFIR_TRAITS,
     marker: IDENTITY_MARKER,
     rawContent,
+    missingFiles: includeMissing ? missingFiles : [],
   };
 }
 
@@ -163,13 +192,14 @@ function extractRole(content?: string): string | null {
 /**
  * Create a fallback identity when no files are found.
  */
-function createFallbackIdentity(): AgentIdentity {
+function createFallbackIdentity(missingFiles: string[]): AgentIdentity {
   return {
     name: 'Thufir Hawat',
     role: 'Mentat risk and fragility analyst',
     traits: THUFIR_TRAITS,
     marker: IDENTITY_MARKER,
     rawContent: {},
+    missingFiles,
   };
 }
 
@@ -204,6 +234,22 @@ Maintain this identity throughout the entire conversation.`);
 
   if (identity.rawContent.user) {
     sections.push(identity.rawContent.user);
+  }
+
+  if (identity.rawContent.tools) {
+    sections.push(identity.rawContent.tools);
+  }
+
+  if (identity.rawContent.heartbeat) {
+    sections.push(identity.rawContent.heartbeat);
+  }
+
+  if (identity.rawContent.bootstrap) {
+    sections.push(identity.rawContent.bootstrap);
+  }
+
+  if (identity.missingFiles.length > 0) {
+    sections.push(buildMissingFilesSection(identity.missingFiles));
   }
 
   // Behavioral traits
@@ -326,4 +372,19 @@ Before planning, retrieve relevant context:
 export function getIdentityPrompt(config?: IdentityConfig): string {
   const { identity } = loadThufirIdentity(config);
   return buildIdentityPrompt(identity);
+}
+
+function truncateContent(content: string, maxChars: number): string {
+  if (maxChars <= 0 || content.length <= maxChars) {
+    return content;
+  }
+  return `${content.slice(0, maxChars)}\n\n[TRUNCATED]`;
+}
+
+function buildMissingFilesSection(files: string[]): string {
+  const lines = ['## Missing Identity Files'];
+  for (const file of files) {
+    lines.push(`- ${file} (not found)`);
+  }
+  return lines.join('\n');
 }

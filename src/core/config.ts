@@ -36,6 +36,8 @@ const ConfigSchema = z.object({
     alwaysIncludeTime: z.boolean().default(false),
     identityPromptMode: z.enum(['full', 'minimal', 'none']).default('full'),
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
+    identityBootstrapMaxChars: z.number().default(20000),
+    identityBootstrapIncludeMissing: z.boolean().default(true),
     mentatAutoScan: z.boolean().default(false),
     mentatSystem: z.string().default('Polymarket'),
     mentatMarketQuery: z.string().optional(),

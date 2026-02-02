@@ -38,7 +38,13 @@ export interface AgentIdentity {
     identity?: string;
     soul?: string;
     user?: string;
+    tools?: string;
+    heartbeat?: string;
+    bootstrap?: string;
   };
+
+  /** Workspace identity files that were missing */
+  missingFiles: string[];
 }
 
 /**
@@ -49,6 +55,10 @@ export interface IdentityConfig {
   workspacePath?: string;
   /** Prompt mode for identity injection */
   promptMode?: 'full' | 'minimal' | 'none';
+  /** Max chars to include from each identity file */
+  bootstrapMaxChars?: number;
+  /** Include missing-file markers in the prompt */
+  includeMissing?: boolean;
 }
 
 /**

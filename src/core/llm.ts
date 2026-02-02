@@ -710,6 +710,8 @@ export class AgenticAnthropicClient implements LlmClient {
     const prelude = loadIdentityPrelude({
       workspacePath: this.toolContext.config.agent?.workspace,
       promptMode: resolveIdentityPromptMode(this.toolContext.config, this.meta?.kind),
+      bootstrapMaxChars: this.toolContext.config.agent?.identityBootstrapMaxChars,
+      includeMissing: this.toolContext.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
     const systemPrompt =
       prelude && !system.includes(IDENTITY_MARKER)
@@ -855,6 +857,8 @@ export class AgenticOpenAiClient implements LlmClient {
     const prelude = loadIdentityPrelude({
       workspacePath: this.toolContext.config.agent?.workspace,
       promptMode: resolveIdentityPromptMode(this.toolContext.config, this.meta?.kind),
+      bootstrapMaxChars: this.toolContext.config.agent?.identityBootstrapMaxChars,
+      includeMissing: this.toolContext.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
     let openaiMessages: OpenAiMessage[] = injectIdentity(
       messages,
@@ -1059,6 +1063,8 @@ class AnthropicClient implements LlmClient {
     const prelude = loadIdentityPrelude({
       workspacePath: this.config.agent?.workspace,
       promptMode: resolveIdentityPromptMode(this.config, this.meta?.kind),
+      bootstrapMaxChars: this.config.agent?.identityBootstrapMaxChars,
+      includeMissing: this.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
     const systemPrompt =
       prelude && !system.includes(IDENTITY_MARKER)
@@ -1109,6 +1115,8 @@ class OpenAiClient implements LlmClient {
     const prelude = loadIdentityPrelude({
       workspacePath: this.config.agent?.workspace,
       promptMode: resolveIdentityPromptMode(this.config, this.meta?.kind),
+      bootstrapMaxChars: this.config.agent?.identityBootstrapMaxChars,
+      includeMissing: this.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
     // Inject workspace identity at the start (Moltbot pattern)
     const openaiMessages = injectIdentity(messages, prelude);
@@ -1191,6 +1199,8 @@ class LocalClient implements LlmClient {
     const prelude = loadIdentityPrelude({
       workspacePath: this.config.agent?.workspace,
       promptMode: resolveIdentityPromptMode(this.config, this.meta?.kind),
+      bootstrapMaxChars: this.config.agent?.identityBootstrapMaxChars,
+      includeMissing: this.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
     const localMessages = injectIdentity(messages, prelude);
     const controller =
