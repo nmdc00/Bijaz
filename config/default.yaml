@@ -25,6 +25,7 @@ agent:
   showFragilityTrace: false
   persistPlans: true
   allowFallbackNonCritical: true
+  alwaysIncludeTime: false
   identityPromptMode: full
   internalPromptMode: minimal
   mentatAutoScan: false

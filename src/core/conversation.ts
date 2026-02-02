@@ -322,9 +322,15 @@ export class ConversationHandler {
           return alertResponse;
         }
 
+        const timeContext = await this.buildCurrentTimeContext();
+
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
           const memorySystem = {
-            getRelevantContext: (query: string) => this.getMemoryContextForOrchestrator(userId, query),
+            getRelevantContext: async (query: string) => {
+              const base = await this.getMemoryContextForOrchestrator(userId, query);
+              if (!timeContext) return base;
+              return [base, timeContext].filter(Boolean).join('\n\n');
+            },
           };
 
           const tradeToolNames = new Set(['place_bet', 'trade.place']);
@@ -431,6 +437,7 @@ export class ConversationHandler {
         // Build the full context for this turn
         const contextBlock = [
           userContext,
+          timeContext,
           forcedToolContext,
           toolFirstContext,
           summary ? `## Conversation Summary\n${summary}` : '',
@@ -508,6 +515,21 @@ export class ConversationHandler {
         return reply;
       }
     );
+  }
+
+  private async buildCurrentTimeContext(): Promise<string> {
+    if (!this.config.agent?.alwaysIncludeTime) {
+      return '';
+    }
+    try {
+      const timeResult = await executeToolCall('current_time', {}, this.toolContext);
+      if (!timeResult.success) {
+        return '';
+      }
+      return `## Current Time\n${JSON.stringify(timeResult.data, null, 2)}`;
+    } catch {
+      return '';
+    }
   }
 
   private async runForcedTooling(message: string): Promise<string> {
