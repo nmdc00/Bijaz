@@ -368,15 +368,21 @@ export class PolymarketCLOBClient {
     }
 
     const timestamp = Math.floor(Date.now() / 1000);
-    const message = `${timestamp}${method}${path}${body ?? ''}`;
+    // Body needs single quotes replaced with double quotes for cross-language compatibility
+    const normalizedBody = body?.replace(/'/g, '"') ?? '';
+    const message = `${timestamp}${method}${path}${normalizedBody}`;
 
-    // HMAC signature using secret
+    // Decode base64url secret before using as HMAC key
+    const secretBytes = Buffer.from(this.credentials.secret, 'base64url');
+
+    // HMAC signature using decoded secret
     const hmac = ethers.utils.computeHmac(
       ethers.utils.SupportedAlgorithm.sha256,
-      ethers.utils.toUtf8Bytes(this.credentials.secret),
+      secretBytes,
       ethers.utils.toUtf8Bytes(message)
     );
-    const signature = Buffer.from(hmac.slice(2), 'hex').toString('base64');
+    // Convert to base64url encoding
+    const signature = Buffer.from(hmac.slice(2), 'hex').toString('base64url');
 
     return {
       'POLY_ADDRESS': this.wallet?.address ?? '',
