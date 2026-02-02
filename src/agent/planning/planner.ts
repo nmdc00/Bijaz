@@ -174,24 +174,15 @@ function parseplanResponse(
       warnings: parsed.warnings ?? [],
     };
   } catch (error) {
-    const fallbackTool = selectFallbackTool(goal, availableTools);
-    if (fallbackTool) {
+    const fallbackSteps = buildFallbackSteps(goal, availableTools);
+    if (fallbackSteps.length > 0) {
       const plan: AgentPlan = {
         id: randomUUID(),
         goal,
-        steps: [
-          {
-            id: '1',
-            description: fallbackTool.description,
-            requiresTool: true,
-            toolName: fallbackTool.toolName,
-            toolInput: fallbackTool.toolInput,
-            status: 'pending',
-          },
-        ],
+        steps: fallbackSteps,
         complete: false,
         blockers: ['Failed to parse plan from LLM response'],
-        confidence: 0.35,
+        confidence: 0.45,
         createdAt: now,
         updatedAt: now,
         revisionCount: 0,
@@ -232,46 +223,54 @@ function parseplanResponse(
   }
 }
 
-function selectFallbackTool(
-  goal: string,
-  availableTools: string[]
-): { toolName: string; toolInput: Record<string, unknown>; description: string } | null {
+function buildFallbackSteps(goal: string, availableTools: string[]): PlanStep[] {
   const toolSet = new Set(availableTools);
   const lower = goal.toLowerCase();
 
   const hasTool = (name: string) => toolSet.has(name);
   const firstAvailable = (names: string[]) => names.find((name) => hasTool(name));
+  const steps: PlanStep[] = [];
+  let stepId = 1;
 
   if (/(portfolio|positions?|balance|holdings?)/i.test(lower)) {
     const toolName = firstAvailable(['get_portfolio']);
     if (toolName) {
-      return {
+      steps.push({
+        id: String(stepId++),
+        description: 'Fetch current portfolio summary',
+        requiresTool: true,
         toolName,
         toolInput: {},
-        description: 'Fetch current portfolio summary',
-      };
+        status: 'pending',
+      });
     }
   }
 
   if (/(predictions?|history|track record)/i.test(lower)) {
     const toolName = firstAvailable(['get_predictions']);
     if (toolName) {
-      return {
+      steps.push({
+        id: String(stepId++),
+        description: 'Fetch recent predictions and outcomes',
+        requiresTool: true,
         toolName,
         toolInput: {},
-        description: 'Fetch recent predictions and outcomes',
-      };
+        status: 'pending',
+      });
     }
   }
 
   if (/(wallet|address|keystore)/i.test(lower)) {
     const toolName = firstAvailable(['get_wallet_info']);
     if (toolName) {
-      return {
+      steps.push({
+        id: String(stepId++),
+        description: 'Fetch wallet info',
+        requiresTool: true,
         toolName,
         toolInput: {},
-        description: 'Fetch wallet info',
-      };
+        status: 'pending',
+      });
     }
   }
 
@@ -279,11 +278,14 @@ function selectFallbackTool(
     const toolName = firstAvailable(['intel_search', 'intel.search']);
     if (toolName) {
       const query = sanitizeQuery(goal);
-      return {
+      steps.push({
+        id: String(stepId++),
+        description: `Search intel for "${query}"`,
+        requiresTool: true,
         toolName,
         toolInput: { query },
-        description: `Search intel for "${query}"`,
-      };
+        status: 'pending',
+      });
     }
   }
 
@@ -291,15 +293,18 @@ function selectFallbackTool(
     const toolName = firstAvailable(['market_search', 'markets.search']);
     if (toolName) {
       const query = sanitizeQuery(goal);
-      return {
+      steps.push({
+        id: String(stepId++),
+        description: `Search markets for "${query}"`,
+        requiresTool: true,
         toolName,
         toolInput: { query },
-        description: `Search markets for "${query}"`,
-      };
+        status: 'pending',
+      });
     }
   }
 
-  return null;
+  return steps;
 }
 
 function sanitizeQuery(goal: string): string {
