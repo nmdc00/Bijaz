@@ -9,8 +9,11 @@ import {
   loadIdentityPrelude,
   injectIdentity,
   clearIdentityCache as clearIdentityPreludeCache,
+  buildHardIdentityPrompt,
+  buildSoftIdentityPrompt,
 } from '../agent/identity/identity.js';
 import { IDENTITY_MARKER } from '../agent/identity/types.js';
+import { sanitizeUntrustedText } from './sanitize_untrusted_text.js';
 import {
   getExecutionContext,
   estimateTokensFromMessages,
@@ -63,6 +66,129 @@ function resolveIdentityPromptMode(
     return config.agent?.internalPromptMode ?? 'minimal';
   }
   return config.agent?.identityPromptMode ?? 'full';
+}
+
+function isDebugEnabled(): boolean {
+  return (process.env.THUFIR_LOG_LEVEL ?? '').toLowerCase() === 'debug';
+}
+
+function finalizeMessages(
+  messages: ChatMessage[],
+  config: ThufirConfig,
+  meta?: LlmClientMeta
+): ChatMessage[] {
+  const promptMode = resolveIdentityPromptMode(config, meta?.kind);
+  const identityConfig = {
+    workspacePath: config.agent?.workspace,
+    bootstrapMaxChars: config.agent?.identityBootstrapMaxChars,
+    includeMissing: config.agent?.identityBootstrapIncludeMissing,
+  };
+
+  const { identity } = loadIdentityPrelude({
+    ...identityConfig,
+    promptMode: 'minimal',
+  });
+
+  const hardIdentity = buildHardIdentityPrompt(identity);
+  const softIdentity = promptMode === 'full' ? buildSoftIdentityPrompt(identity) : '';
+  const identityBlock = softIdentity
+    ? `${hardIdentity}\n\n---\n\n${softIdentity}`
+    : hardIdentity;
+
+  const systemIndex = messages.findIndex((msg) => msg.role === 'system');
+  const existingSystem =
+    systemIndex >= 0 ? messages[systemIndex]?.content ?? '' : '';
+  const systemHasMarker = existingSystem.includes(IDENTITY_MARKER);
+  const systemContent = systemHasMarker
+    ? existingSystem
+    : existingSystem
+      ? `${identityBlock}\n\n---\n\n${existingSystem}`
+      : identityBlock;
+
+  const sanitized = messages.map((msg, idx) => {
+    if (idx === systemIndex) {
+      return { ...msg, content: systemContent };
+    }
+    if (
+      msg.role === 'user' &&
+      typeof msg.content === 'string' &&
+      looksLikeToolOutput(msg.content)
+    ) {
+      return {
+        ...msg,
+        content: sanitizeUntrustedText(
+          msg.content,
+          config.agent?.maxToolResultChars ?? 8000
+        ),
+      };
+    }
+    return msg;
+  });
+
+  const withSystem =
+    systemIndex >= 0
+      ? sanitized
+      : ([{ role: 'system', content: systemContent } as ChatMessage, ...sanitized] as ChatMessage[]);
+
+  const trimmed = trimMessagesByCharBudget(
+    withSystem,
+    config.agent?.maxPromptChars ?? 120000,
+    config.agent?.maxToolResultChars ?? 8000
+  );
+
+  if (isDebugEnabled()) {
+    const sys = trimmed.find((msg) => msg.role === 'system')?.content ?? '';
+    if (!sys.includes(IDENTITY_MARKER)) {
+      throw new Error('Identity marker missing from system prompt');
+    }
+  }
+
+  return trimmed;
+}
+
+function looksLikeToolOutput(content: string): boolean {
+  return (
+    content.includes('## Tool Results') ||
+    content.includes('Execution results:') ||
+    content.includes('tool_result') ||
+    content.includes('tool_use')
+  );
+}
+
+function trimMessagesByCharBudget(
+  messages: ChatMessage[],
+  maxChars: number,
+  maxToolChars: number
+): ChatMessage[] {
+  const system = messages.find((msg) => msg.role === 'system');
+  const rest = messages.filter((msg) => msg.role !== 'system');
+
+  const calcChars = (items: ChatMessage[]) =>
+    items.reduce((sum, msg) => sum + (typeof msg.content === 'string' ? msg.content.length : 0), 0);
+
+  let totalChars = calcChars(messages);
+  if (totalChars <= maxChars) {
+    return messages;
+  }
+
+  const trimmedRest = [...rest];
+  while (trimmedRest.length > 0 && totalChars > maxChars) {
+    trimmedRest.shift();
+    totalChars = calcChars(system ? [system, ...trimmedRest] : trimmedRest);
+  }
+
+  if (totalChars > maxChars) {
+    for (const msg of trimmedRest) {
+      if (totalChars <= maxChars) break;
+      if (typeof msg.content === 'string' && msg.content.length > maxToolChars) {
+        const truncated = `${msg.content.slice(0, maxToolChars)}\n\n[TRUNCATED]`;
+        totalChars -= msg.content.length - truncated.length;
+        msg.content = truncated;
+      }
+    }
+  }
+
+  return system ? [system, ...trimmedRest] : trimmedRest;
 }
 
 class LlmQueue {
@@ -142,6 +268,7 @@ class InfraLlmClient implements LlmClient {
     options?: LlmClientOptions
   ): Promise<LlmResponse> {
     const meta = this.meta ?? { provider: 'openai', model: 'unknown' };
+    const finalized = finalizeMessages(messages, this.config, this.meta);
     const ctx = getExecutionContext();
     const context = ctx ?? {
       mode: 'FULL_AGENT' as const,
@@ -157,7 +284,7 @@ class InfraLlmClient implements LlmClient {
     }
 
     const budget = getLlmBudgetManager(this.config);
-    const estimatedTokens = estimateTokensFromMessages(messages);
+    const estimatedTokens = estimateTokensFromMessages(finalized);
     if (!budget.canConsume(estimatedTokens, !!context.critical, meta.provider)) {
       this.logger.warn('LLM budget exceeded; degrading to MONITOR_ONLY', {
         provider: meta.provider,
@@ -185,7 +312,7 @@ class InfraLlmClient implements LlmClient {
     }
 
     try {
-      const response = await this.inner.complete(messages, options);
+      const response = await this.inner.complete(finalized, options);
       const totalTokens = estimatedTokens + estimateTokensFromText(response.content);
       budget.record(totalTokens, meta.provider);
       return response;

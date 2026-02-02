@@ -2245,6 +2245,31 @@ memory
   });
 
 // ============================================================================
+// Debug Commands
+// ============================================================================
+
+const debug = program.command('debug').description('Debug utilities');
+
+debug
+  .command('whoami')
+  .description('Verify identity invariance')
+  .action(async () => {
+    const { createLlmClient } = await import('../core/llm.js');
+    const llm = createLlmClient(config);
+    const response = await llm.complete(
+      [{ role: 'user', content: 'Who are you? Reply with only your name.' }],
+      { temperature: 0 }
+    );
+    const name = response.content.trim();
+    if (name === 'Thufir Hawat') {
+      console.log('PASS: Thufir Hawat');
+      return;
+    }
+    console.log(`FAIL: ${name}`);
+    process.exitCode = 1;
+  });
+
+// ============================================================================
 // Parse and Run
 // ============================================================================
 
