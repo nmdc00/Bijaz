@@ -304,20 +304,31 @@ export async function decideTrade(
         plan
       );
 
-      const response = await executorLlm.complete(
-        [
-          { role: 'system', content: EXECUTOR_PROMPT },
-          { role: 'user', content: finalExecutorPrompt },
-        ],
-        { temperature: 0.1 }
-      );
+      let responseContent = '';
+      try {
+        const response = await executorLlm.complete(
+          [
+            { role: 'system', content: EXECUTOR_PROMPT },
+            { role: 'user', content: finalExecutorPrompt },
+          ],
+          { temperature: 0.1 }
+        );
+        responseContent = response.content;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger?.warn('Decision executor failed; returning hold', {
+          marketId: market.id,
+          error: message,
+        });
+        return { action: 'hold', reasoning: `Decision executor failed: ${message}` };
+      }
 
-      let decision = parseDecision(response.content);
+      let decision = parseDecision(responseContent);
 
       if (!decision) {
         logger?.warn('Decision parse failed, attempting repair', {
           marketId: market.id,
-          preview: response.content.slice(0, 400),
+          preview: responseContent.slice(0, 400),
         });
         const repairPrompt = `Convert the following content into ONLY valid JSON matching this schema:
 {
@@ -329,15 +340,24 @@ export async function decideTrade(
 }
 
 Content:
-${response.content}`.trim();
-        const repaired = await executorLlm.complete(
-          [
-            { role: 'system', content: 'Return ONLY valid JSON. No markdown, no commentary.' },
-            { role: 'user', content: repairPrompt },
-          ],
-          { temperature: 0 }
-        );
-        decision = parseDecision(repaired.content);
+${responseContent}`.trim();
+        try {
+          const repaired = await executorLlm.complete(
+            [
+              { role: 'system', content: 'Return ONLY valid JSON. No markdown, no commentary.' },
+              { role: 'user', content: repairPrompt },
+            ],
+            { temperature: 0 }
+          );
+          decision = parseDecision(repaired.content);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          logger?.warn('Decision repair failed; returning hold', {
+            marketId: market.id,
+            error: message,
+          });
+          return { action: 'hold', reasoning: `Decision repair failed: ${message}` };
+        }
       }
 
       if (!decision) {
