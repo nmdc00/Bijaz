@@ -33,6 +33,7 @@ const ConfigSchema = z.object({
     showFragilityTrace: z.boolean().default(false),
     persistPlans: z.boolean().default(true),
     allowFallbackNonCritical: z.boolean().default(true),
+    alwaysIncludeTime: z.boolean().default(false),
     identityPromptMode: z.enum(['full', 'minimal', 'none']).default('full'),
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
     mentatAutoScan: z.boolean().default(false),
