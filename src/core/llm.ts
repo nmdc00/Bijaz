@@ -1018,17 +1018,21 @@ export class AgenticOpenAiClient implements LlmClient {
             this.useResponsesApi
               ? {
                   model: this.model,
-                  input: openaiMessages.map((msg) => ({
-                    role: msg.role,
-                    content:
-                      msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
-                        ? msg.tool_calls.map((call) => ({
-                            type: 'function_call',
-                            name: call.function.name,
-                            arguments: call.function.arguments,
-                          }))
-                        : [{ type: 'text', text: msg.content ?? '' }],
-                  })),
+                  // Extract system message as instructions (overrides proxy defaults)
+                  instructions: openaiMessages.find((m) => m.role === 'system')?.content ?? undefined,
+                  input: openaiMessages
+                    .filter((msg) => msg.role !== 'system')
+                    .map((msg) => ({
+                      role: msg.role,
+                      content:
+                        msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
+                          ? msg.tool_calls.map((call) => ({
+                              type: 'function_call',
+                              name: call.function.name,
+                              arguments: call.function.arguments,
+                            }))
+                          : [{ type: 'text', text: msg.content ?? '' }],
+                    })),
                   tools: THUFIR_TOOLS.map((tool) => ({
                     type: 'function',
                     name: tool.name,
@@ -1260,10 +1264,14 @@ class OpenAiClient implements LlmClient {
             ? {
                 model: this.model,
                 ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
-                input: openaiMessages.map((msg) => ({
-                  role: msg.role,
-                  content: [{ type: 'text', text: msg.content }],
-                })),
+                // Extract system message as instructions (overrides proxy defaults)
+                instructions: openaiMessages.find((m) => m.role === 'system')?.content ?? undefined,
+                input: openaiMessages
+                  .filter((msg) => msg.role !== 'system')
+                  .map((msg) => ({
+                    role: msg.role,
+                    content: [{ type: 'text', text: msg.content }],
+                  })),
               }
             : {
                 model: this.model,
