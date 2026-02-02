@@ -38,6 +38,8 @@ const ConfigSchema = z.object({
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
     identityBootstrapMaxChars: z.number().default(20000),
     identityBootstrapIncludeMissing: z.boolean().default(true),
+    maxPromptChars: z.number().default(120000),
+    maxToolResultChars: z.number().default(8000),
     mentatAutoScan: z.boolean().default(false),
     mentatSystem: z.string().default('Polymarket'),
     mentatMarketQuery: z.string().optional(),

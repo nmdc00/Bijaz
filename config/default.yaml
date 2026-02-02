@@ -29,6 +29,8 @@ agent:
   identityPromptMode: full
   identityBootstrapMaxChars: 20000
   identityBootstrapIncludeMissing: true
+  maxPromptChars: 120000
+  maxToolResultChars: 8000
   internalPromptMode: minimal
   mentatAutoScan: false
   mentatSystem: Polymarket
