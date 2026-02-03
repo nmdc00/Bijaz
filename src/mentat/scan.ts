@@ -1,5 +1,5 @@
 import type { LlmClient } from '../core/llm.js';
-import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { Market, AugurMarketClient } from '../execution/augur/markets.js';
 import { listRecentIntel } from '../intel/store.js';
 import { upsertAssumption, upsertMechanism, upsertFragilityCard, upsertSystemMap } from '../memory/mentat.js';
 import { withExecutionContextIfMissing } from '../core/llm_infra.js';
@@ -17,7 +17,7 @@ import { computeDetectorBundle, summarizeSignals } from './detectors.js';
 interface MentatScanOptions {
   system: string;
   llm: LlmClient;
-  marketClient: PolymarketMarketClient;
+  marketClient: AugurMarketClient;
   marketIds?: string[];
   marketQuery?: string;
   limit?: number;
@@ -206,7 +206,6 @@ function renderMarketSnapshot(markets: Market[], limit = 12): string {
       liquidity: market.liquidity ?? null,
       prices: market.prices,
       endDate: market.endDate ?? null,
-      negRisk: market.negRisk ?? null,
     })),
     null,
     2
@@ -255,7 +254,7 @@ function buildMentatPrompt(
 
 export async function collectMentatSignals(options: {
   system: string;
-  marketClient: PolymarketMarketClient;
+  marketClient: AugurMarketClient;
   marketIds?: string[];
   marketQuery?: string;
   limit?: number;
@@ -472,7 +471,7 @@ export interface QuickFragilityScan {
 
 interface QuickFragilityScanOptions {
   marketId: string;
-  marketClient: PolymarketMarketClient;
+  marketClient: AugurMarketClient;
   llm: LlmClient;
   intelLimit?: number;
 }

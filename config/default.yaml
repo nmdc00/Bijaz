@@ -33,7 +33,7 @@ agent:
   maxToolResultChars: 8000
   internalPromptMode: minimal
   mentatAutoScan: false
-  mentatSystem: Polymarket
+  mentatSystem: Augur
   # Optional filters for mentat auto-scan
   # mentatMarketQuery: "macro"
   # mentatMarketLimit: 25
@@ -91,14 +91,14 @@ wallet:
     lossThresholdPercent: 10  # Trigger at 10% daily loss
     durationSeconds: 3600     # 1 hour cooldown
 
-# Polymarket settings
-polymarket:
-  network: polygon
+# Augur Turbo settings
+augur:
+  enabled: true
+  subgraph: https://api.thegraph.com/subgraphs/name/augurproject/augur-turbo-matic
   rpcUrl: https://polygon-rpc.com
-  # API endpoints
-  api:
-    gamma: https://gamma-api.polymarket.com
-    clob: https://clob.polymarket.com
+  slippageTolerance: 0.02
+  marketTypes:
+    - crypto
   stream:
     enabled: false
     wsUrl: ""            # optional WebSocket endpoint
@@ -107,6 +107,39 @@ polymarket:
     reconnectSeconds: 10
     staleAfterSeconds: 180
     refreshIntervalSeconds: 300
+
+# Technical analysis (short-term crypto)
+technical:
+  enabled: false
+  priceSource: binance
+  symbols:
+    - 'BTC/USDT'
+    - 'ETH/USDT'
+  timeframes:
+    - '1h'
+    - '4h'
+    - '1d'
+  indicators:
+    rsi:
+      period: 14
+      overbought: 70
+      oversold: 30
+    macd:
+      fast: 12
+      slow: 26
+      signal: 9
+    bollingerBands:
+      period: 20
+      stdDev: 2
+  signals:
+    minConfidence: 0.5
+    weights:
+      technical: 0.5
+      news: 0.3
+      onChain: 0.2
+  onChain:
+    enabled: false
+    coinglassApiKey: ""
 
 # Execution mode
 execution:

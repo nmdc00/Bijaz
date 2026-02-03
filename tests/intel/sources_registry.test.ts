@@ -15,7 +15,6 @@ describe('intel sources registry', () => {
         newsapi: { enabled: true, apiKey: 'k', queries: [] },
         googlenews: { enabled: true, serpApiKey: 'k', queries: [] },
         twitter: { enabled: true, bearerToken: 'k', keywords: [] },
-        polymarketComments: { enabled: true },
       },
     },
   };

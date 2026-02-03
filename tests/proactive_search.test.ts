@@ -10,8 +10,8 @@ vi.mock('../src/memory/watchlist.js', () => ({
   listWatchlist: () => [{ marketId: 'm1' }],
 }));
 
-vi.mock('../src/execution/polymarket/markets.js', () => ({
-  PolymarketMarketClient: class {
+vi.mock('../src/execution/augur/markets.js', () => ({
+  AugurMarketClient: class {
     async getMarket() {
       return {
         id: 'm1',
@@ -36,7 +36,7 @@ describe('proactive search', () => {
       agent: { model: 'test', provider: 'local', fallbackModel: 'test' },
       execution: { mode: 'paper' },
       wallet: { limits: { daily: 100, perTrade: 25, confirmationThreshold: 10 } },
-      polymarket: { api: { gamma: 'https://example.com', clob: 'https://example.com' } },
+      augur: { enabled: true, subgraph: 'https://example.com' },
       intel: {
         roaming: { enabled: true, socialOptIn: true, minTrust: 'low' },
         sources: {

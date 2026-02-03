@@ -1,5 +1,5 @@
 /**
- * Polymarket Address Whitelist
+ * Augur Turbo Address Whitelist
  *
  * CRITICAL SECURITY COMPONENT
  *
@@ -11,27 +11,25 @@
  */
 
 /**
- * Whitelisted Polymarket contract addresses on Polygon.
+ * Whitelisted Augur Turbo contract addresses on Polygon.
  *
  * DO NOT MODIFY without thorough security review.
  * DO NOT add arbitrary addresses.
  * DO NOT make this configurable.
  */
-export const POLYMARKET_WHITELIST = Object.freeze([
-  // Polymarket CTF Exchange (main trading contract)
-  '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e',
+export const AUGUR_WHITELIST = Object.freeze([
+  // Augur Turbo AMM Factory
+  '0x79c3cf0553b6852890e8ba58878a5bca8b06d90c',
 
-  // Polymarket Neg Risk CTF Exchange
-  '0xc5d563a36ae78145c45a50134d48a1215220f80a',
-
-  // Polymarket Neg Risk Adapter
-  '0xd91e80cf2e7be2e162c6513ced06f1dd0da35296',
+  // Augur Market Factories
+  '0x03810440953e2bcd2f17a63706a4c8325e0abf94', // MLB
+  '0xe696b8fa35e487c3a02c2444777c7a2ef6cd0297', // NBA
+  '0x1f3ef7ca2b2ca07a397e7bc1beb8c3cffc57e95a', // NFL
+  '0x6d2e53d53aec521dec3d53c533e6c6e60444c655', // MMA
+  '0x48725bac1c27c2daf5ed7df22d6a9d781053fec1', // Crypto
 
   // USDC on Polygon (for token approvals)
   '0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
-
-  // USDC.e (bridged USDC) on Polygon
-  '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
 ]);
 
 /**
@@ -59,7 +57,7 @@ export function isWhitelisted(address: string): boolean {
     return false;
   }
 
-  return POLYMARKET_WHITELIST.includes(normalized);
+  return AUGUR_WHITELIST.includes(normalized);
 }
 
 /**
@@ -75,7 +73,7 @@ export function assertWhitelisted(address: string, context?: string): void {
     const ctx = context ? ` (${context})` : '';
     throw new WhitelistError(
       `Address ${address} is not whitelisted${ctx}. ` +
-        'Thufir can only interact with Polymarket contracts.'
+        'Thufir can only interact with Augur Turbo contracts.'
     );
   }
 }
@@ -96,7 +94,7 @@ export class WhitelistError extends Error {
  * @returns A copy of the whitelist array
  */
 export function getWhitelistedAddresses(): readonly string[] {
-  return [...POLYMARKET_WHITELIST];
+  return [...AUGUR_WHITELIST];
 }
 
 /**
@@ -108,24 +106,32 @@ export function getWhitelistDescriptions(): Array<{
 }> {
   return [
     {
-      address: '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e',
-      description: 'Polymarket CTF Exchange',
+      address: '0x79c3cf0553b6852890e8ba58878a5bca8b06d90c',
+      description: 'Augur Turbo AMM Factory',
     },
     {
-      address: '0xc5d563a36ae78145c45a50134d48a1215220f80a',
-      description: 'Polymarket Neg Risk CTF Exchange',
+      address: '0x03810440953e2bcd2f17a63706a4c8325e0abf94',
+      description: 'Augur MLB Market Factory',
     },
     {
-      address: '0xd91e80cf2e7be2e162c6513ced06f1dd0da35296',
-      description: 'Polymarket Neg Risk Adapter',
+      address: '0xe696b8fa35e487c3a02c2444777c7a2ef6cd0297',
+      description: 'Augur NBA Market Factory',
+    },
+    {
+      address: '0x1f3ef7ca2b2ca07a397e7bc1beb8c3cffc57e95a',
+      description: 'Augur NFL Market Factory',
+    },
+    {
+      address: '0x6d2e53d53aec521dec3d53c533e6c6e60444c655',
+      description: 'Augur MMA Market Factory',
+    },
+    {
+      address: '0x48725bac1c27c2daf5ed7df22d6a9d781053fec1',
+      description: 'Augur Crypto Market Factory',
     },
     {
       address: '0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
       description: 'USDC on Polygon',
-    },
-    {
-      address: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
-      description: 'USDC.e (bridged) on Polygon',
     },
   ];
 }

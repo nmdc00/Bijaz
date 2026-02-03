@@ -10,37 +10,37 @@ import {
   isWhitelisted,
   assertWhitelisted,
   WhitelistError,
-  POLYMARKET_WHITELIST,
+  AUGUR_WHITELIST,
   getWhitelistedAddresses,
 } from '../../../src/execution/wallet/whitelist.js';
 
 describe('Address Whitelist', () => {
   describe('isWhitelisted', () => {
-    it('should return true for whitelisted Polymarket CTF Exchange', () => {
+    it('should return true for whitelisted Augur AMM factory', () => {
       expect(
-        isWhitelisted('0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E')
+        isWhitelisted('0x79c3cf0553b6852890e8ba58878a5bca8b06d90c')
       ).toBe(true);
     });
 
     it('should return true for whitelisted addresses (case insensitive)', () => {
       // Uppercase
       expect(
-        isWhitelisted('0x4BFB41D5B3570DEFD03C39A9A4D8DE6BD8B8982E')
+        isWhitelisted('0x79C3CF0553B6852890E8BA58878A5BCA8B06D90C')
       ).toBe(true);
 
       // Lowercase
       expect(
-        isWhitelisted('0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e')
+        isWhitelisted('0x79c3cf0553b6852890e8ba58878a5bca8b06d90c')
       ).toBe(true);
 
       // Mixed case
       expect(
-        isWhitelisted('0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E')
+        isWhitelisted('0x79c3cf0553b6852890E8ba58878A5bCA8b06d90c')
       ).toBe(true);
     });
 
     it('should return true for all whitelisted addresses', () => {
-      for (const addr of POLYMARKET_WHITELIST) {
+      for (const addr of AUGUR_WHITELIST) {
         expect(isWhitelisted(addr)).toBe(true);
       }
     });
@@ -91,7 +91,7 @@ describe('Address Whitelist', () => {
     it('should handle whitespace', () => {
       // With leading/trailing whitespace - should still work
       expect(
-        isWhitelisted('  0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E  ')
+        isWhitelisted('  0x79c3cf0553b6852890e8ba58878a5bca8b06d90c  ')
       ).toBe(true);
     });
   });
@@ -119,26 +119,26 @@ describe('Address Whitelist', () => {
     });
   });
 
-  describe('POLYMARKET_WHITELIST', () => {
+  describe('AUGUR_WHITELIST', () => {
     it('should be frozen (immutable)', () => {
-      expect(Object.isFrozen(POLYMARKET_WHITELIST)).toBe(true);
+      expect(Object.isFrozen(AUGUR_WHITELIST)).toBe(true);
     });
 
     it('should contain expected number of addresses', () => {
       // Update this if whitelist changes
-      expect(POLYMARKET_WHITELIST.length).toBe(5);
+      expect(AUGUR_WHITELIST.length).toBe(7);
     });
 
     it('should contain only valid Ethereum addresses', () => {
       const addressRegex = /^0x[a-f0-9]{40}$/;
-      for (const addr of POLYMARKET_WHITELIST) {
+      for (const addr of AUGUR_WHITELIST) {
         expect(addr).toMatch(addressRegex);
       }
     });
 
     it('should contain the USDC address', () => {
       expect(
-        POLYMARKET_WHITELIST.includes(
+        AUGUR_WHITELIST.includes(
           '0x2791bca1f2de4661ed88a30c99a7a9449aa84174'
         )
       ).toBe(true);
@@ -148,8 +148,8 @@ describe('Address Whitelist', () => {
   describe('getWhitelistedAddresses', () => {
     it('should return a copy of the whitelist', () => {
       const addresses = getWhitelistedAddresses();
-      expect(addresses).toEqual(POLYMARKET_WHITELIST);
-      expect(addresses).not.toBe(POLYMARKET_WHITELIST);
+      expect(addresses).toEqual(AUGUR_WHITELIST);
+      expect(addresses).not.toBe(AUGUR_WHITELIST);
     });
   });
 
@@ -168,11 +168,11 @@ describe('Address Whitelist', () => {
     });
 
     it('should NOT allow near-miss addresses (off by one character)', () => {
-      // Original: 0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e
+      // Original: 0x79c3cf0553b6852890e8ba58878a5bca8b06d90c
       const nearMisses = [
-        '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982f', // Last char different
-        '0x5bfb41d5b3570defd03c39a9a4d8de6bd8b8982e', // First char different
-        '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b89820', // Different ending
+        '0x79c3cf0553b6852890e8ba58878a5bca8b06d90d', // Last char different
+        '0x69c3cf0553b6852890e8ba58878a5bca8b06d90c', // First char different
+        '0x79c3cf0553b6852890e8ba58878a5bca8b06d900', // Different ending
       ];
 
       for (const addr of nearMisses) {

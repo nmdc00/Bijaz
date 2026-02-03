@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { LlmClient } from './llm.js';
 import type { Logger } from './logger.js';
-import type { Market } from '../execution/polymarket/markets.js';
+import type { Market } from '../execution/augur/markets.js';
 import { listCalibrationSummaries, type CalibrationSummary } from '../memory/calibration.js';
 import { listPredictions } from '../memory/predictions.js';
 import { withExecutionContextIfMissing } from './llm_infra.js';

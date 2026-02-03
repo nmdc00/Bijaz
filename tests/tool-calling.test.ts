@@ -77,7 +77,7 @@ describe('Tool executor', () => {
   it('fails twitter_search without bearer', async () => {
     const result = await executeToolCall(
       'twitter_search',
-      { query: 'polymarket', limit: 2 },
+      { query: 'augur', limit: 2 },
       mockContext as any
     );
     expect(result.success).toBe(false);

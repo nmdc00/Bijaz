@@ -13,10 +13,10 @@ import {
 import type { LlmClient } from './llm.js';
 import { decideTrade, buildDecisionPrompts, parseDecisionFromText, EXECUTOR_PROMPT } from './decision.js';
 import { Logger } from './logger.js';
-import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import { AugurMarketClient } from '../execution/augur/markets.js';
 import { PaperExecutor } from '../execution/modes/paper.js';
 import { WebhookExecutor } from '../execution/modes/webhook.js';
-import { LiveExecutor } from '../execution/modes/live.js';
+import { AugurLiveExecutor } from '../execution/modes/augur-live.js';
 import type { ExecutionAdapter } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { addWatchlist, listWatchlist } from '../memory/watchlist.js';
@@ -41,7 +41,7 @@ export class ThufirAgent {
   private infoLlm?: LlmClient;
   private executorLlm: ReturnType<typeof createExecutorClient>;
   private autonomyLlm: ReturnType<typeof createLlmClient>;
-  private marketClient: PolymarketMarketClient;
+  private marketClient: AugurMarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
   private logger: Logger;
@@ -59,7 +59,7 @@ export class ThufirAgent {
     this.llm = createLlmClient(this.config);
     this.infoLlm = createTrivialTaskClient(this.config) ?? undefined;
     this.executorLlm = createExecutorClient(this.config);
-    this.marketClient = new PolymarketMarketClient(this.config);
+    this.marketClient = new AugurMarketClient(this.config);
     this.executor = this.createExecutor(config);
 
     this.limiter = new DbSpendingLimitEnforcer({
@@ -112,7 +112,7 @@ export class ThufirAgent {
           'Live execution mode requires THUFIR_WALLET_PASSWORD environment variable'
         );
       }
-      return new LiveExecutor({ config, password });
+      return new AugurLiveExecutor({ config, password });
     }
 
     if (config.execution.mode === 'webhook' && config.execution.webhookUrl) {

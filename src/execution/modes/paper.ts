@@ -1,5 +1,5 @@
-import type { ExecutionAdapter, TradeDecision, TradeResult } from '../executor.js';
-import type { Market } from '../polymarket/markets.js';
+import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../executor.js';
+import type { Market } from '../markets.js';
 import { logWalletOperation } from '../../memory/audit.js';
 import { createPrediction, recordExecution } from '../../memory/predictions.js';
 import { recordTrade } from '../../memory/trades.js';
@@ -58,5 +58,13 @@ export class PaperExecutor implements ExecutionAdapter {
       executed: true,
       message: `Paper trade executed for ${market.id} (${decision.outcome})`,
     };
+  }
+
+  async getOpenOrders(): Promise<Order[]> {
+    return [];
+  }
+
+  async cancelOrder(_id: string): Promise<void> {
+    // Paper mode has no live orders to cancel.
   }
 }

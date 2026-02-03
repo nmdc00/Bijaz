@@ -15,7 +15,7 @@ All trading tools implemented (Phases 12-17). Tool calling works with Anthropic 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 1. Foundation | COMPLETE | Project setup, wallet security |
-| 2. Polymarket Integration | COMPLETE | Market data, order execution |
+| 2. Augur Turbo Integration | COMPLETE | Market data, order execution |
 | 3. Memory & Predictions | COMPLETE | Prediction storage, calibration |
 | 4. Intelligence Layer | COMPLETE | RSS, NewsAPI, vector storage |
 | 5. Agent Reasoning | COMPLETE | LLM works with tool calling |

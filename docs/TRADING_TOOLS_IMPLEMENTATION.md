@@ -115,13 +115,13 @@ The LLM will make mistakes. That's how it learns calibration.
 ```typescript
 {
   name: 'place_bet',
-  description: 'Place a bet on a Polymarket prediction market. Executes a real trade with real money. Use carefully - consider position sizing, bankroll management, and edge confidence before betting.',
+  description: 'Place a bet on a Augur Turbo prediction market. Executes a real trade with real money. Use carefully - consider position sizing, bankroll management, and edge confidence before betting.',
   input_schema: {
     type: 'object',
     properties: {
       market_id: {
         type: 'string',
-        description: 'The Polymarket market ID'
+        description: 'The Augur Turbo market ID'
       },
       outcome: {
         type: 'string',
@@ -307,7 +307,7 @@ Update `ToolExecutorContext` to include executor:
 ```typescript
 export interface ToolExecutorContext {
   config: ThufirConfig;
-  marketClient: PolymarketMarketClient;
+  marketClient: Augur TurboMarketClient;
   executor?: ExecutionAdapter;  // Add this
 }
 ```
@@ -567,7 +567,7 @@ The LLM cannot see market depth/liquidity before placing bets. This leads to:
     properties: {
       market_id: {
         type: 'string',
-        description: 'The Polymarket market ID'
+        description: 'The Augur Turbo market ID'
       },
       depth: {
         type: 'number',
@@ -602,7 +602,7 @@ async function getOrderBook(
 ): Promise<ToolResult> {
   try {
     // Fetch from CLOB API
-    const clobUrl = ctx.config.polymarket.api.clob;
+    const clobUrl = ctx.config.augur.api.clob;
 
     // Get market to find token IDs
     const market = await ctx.marketClient.getMarket(marketId);
@@ -716,7 +716,7 @@ The LLM cannot see historical price movement. This prevents:
     properties: {
       market_id: {
         type: 'string',
-        description: 'The Polymarket market ID'
+        description: 'The Augur Turbo market ID'
       },
       interval: {
         type: 'string',
@@ -735,7 +735,7 @@ The LLM cannot see historical price movement. This prevents:
 
 #### 17.2 Implementation Options
 
-**Option A: Polymarket Gamma API (if available)**
+**Option A: Augur Turbo Gamma API (if available)**
 ```typescript
 const url = `${gammaUrl}/markets/${marketId}/prices?interval=${interval}&limit=${limit}`;
 ```
@@ -746,12 +746,12 @@ const url = `${gammaUrl}/markets/${marketId}/prices?interval=${interval}&limit=$
 - Query local DB for history
 
 **Option C: Third-party API**
-- Polymarket doesn't expose historical prices easily
+- Augur Turbo doesn't expose historical prices easily
 - May need to use Dune Analytics or similar
 
 #### 17.3 Deliverables
 
-- [ ] Research Polymarket price history API availability
+- [ ] Research Augur Turbo price history API availability
 - [ ] Implement storage if needed
 - [ ] Add tool schema
 - [ ] Add executor handler
@@ -770,7 +770,7 @@ Add to SYSTEM_PROMPT:
 Get current date/time. Always check time when analyzing time-sensitive markets or news.
 
 ### place_bet
-Execute a real trade on Polymarket. Before betting:
+Execute a real trade on Augur Turbo. Before betting:
 - Check portfolio balance and exposure
 - Consider position sizing (Kelly criterion, max 2-5% of bankroll per bet)
 - Verify you have genuine edge, not just an opinion

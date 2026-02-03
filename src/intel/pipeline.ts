@@ -5,7 +5,6 @@ import { RssFetcher } from './rss.js';
 import { NewsApiFetcher } from './newsapi.js';
 import { GoogleNewsFetcher } from './googlenews.js';
 import { TwitterFetcher } from './twitter.js';
-import { PolymarketCommentsFetcher } from './polymarket_comments.js';
 import { storeIntel, type StoredIntel } from './store.js';
 import { IntelVectorStore } from './vectorstore.js';
 
@@ -54,7 +53,7 @@ export async function runIntelPipelineDetailed(
   const newsApiEnabled = config.intel?.sources?.newsapi?.enabled ?? false;
   const googleNewsEnabled = config.intel?.sources?.googlenews?.enabled ?? false;
   const twitterEnabled = config.intel?.sources?.twitter?.enabled ?? false;
-  const commentsEnabled = config.intel?.sources?.polymarketComments?.enabled ?? false;
+  const commentsEnabled = false;
 
   if (rssEnabled) {
     const fetcher = new RssFetcher(config);
@@ -165,30 +164,7 @@ export async function runIntelPipelineDetailed(
   }
 
   if (commentsEnabled) {
-    const fetcher = new PolymarketCommentsFetcher(config);
-    const items = await fetcher.fetch();
-    for (const item of items) {
-      const id = randomUUID();
-      const record: StoredIntel = {
-        id,
-        title: item.title,
-        content: item.content,
-        source: item.source,
-        sourceType: 'social',
-        category: item.category,
-        url: item.url,
-        timestamp: item.publishedAt,
-      };
-      const inserted = storeIntel(record);
-      if (inserted) {
-        await vectorStore.add({
-          id,
-          text: `${item.title}\n${item.content ?? ''}`.trim(),
-        });
-        storedItems.push(record);
-        stored += 1;
-      }
-    }
+    // Augur Turbo does not provide public comment feeds.
   }
 
   return { storedCount: stored, storedItems };

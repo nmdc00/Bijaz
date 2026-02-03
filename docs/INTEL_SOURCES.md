@@ -62,7 +62,7 @@ intel:
       enabled: true
       bearerToken: ${TWITTER_BEARER}
       keywords:
-        - polymarket
+        - augur
         - "prediction market"
         - "#election2028"
       accounts:
@@ -143,20 +143,20 @@ intel:
 **Pricing:**
 - SerpAPI: $50/month for 5000 searches
 
-### 5. Polymarket Comments
+### 5. Augur Turbo Comments
 
 Sentiment from the prediction market community itself.
 
 **Setup:**
 ```bash
-thufir intel add polymarket-comments
+thufir intel add augur-comments
 ```
 
 **Configuration:**
 ```yaml
 intel:
   sources:
-    polymarketComments:
+    augurComments:
       enabled: true
       trackWatchlist: true
       watchlistLimit: 50
@@ -387,7 +387,7 @@ intel:
     twitter:
       enabled: true
       bearerToken: ${TWITTER_BEARER}
-      keywords: [polymarket, "prediction market"]
+      keywords: [augur, "prediction market"]
 
     rss:
       enabled: true
@@ -395,7 +395,7 @@ intel:
         - url: https://fivethirtyeight.com/feed/
           category: politics
 
-    polymarketComments:
+    augurComments:
       enabled: true
       trackWatchlist: true
 
@@ -453,7 +453,7 @@ thufir intel status
 # newsapi             ✓ OK      2 min ago     342
 # twitter             ✓ OK      30 sec ago    1,204
 # rss                 ✓ OK      5 min ago     89
-# polymarket-comments ✓ OK      3 min ago     156
+# augur-comments ✓ OK      3 min ago     156
 # my-webhook          ⚠ STALE   2 hours ago   12
 
 # View recent intel
@@ -487,7 +487,7 @@ You can require a minimum score with `minScore` and show scores in the preview w
 
 To minimize API costs:
 
-1. **Start with free sources** (RSS, Polymarket comments)
+1. **Start with free sources** (RSS, Augur Turbo comments)
 2. **Use caching** - Intel is cached and deduplicated
 3. **Filter aggressively** - Only fetch categories you care about
 4. **Batch requests** - Sources batch API calls where possible

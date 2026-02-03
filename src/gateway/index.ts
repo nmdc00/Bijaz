@@ -15,15 +15,12 @@ import { resolveOutcomes } from '../core/resolver.js';
 import { runIntelPipelineDetailed } from '../intel/pipeline.js';
 import { pruneChatMessages } from '../memory/chat.js';
 import { listWatchlist } from '../memory/watchlist.js';
-import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import { AugurMarketClient } from '../execution/augur/markets.js';
 import { pruneIntel } from '../intel/store.js';
 import { rankIntelAlerts } from '../intel/alerts.js';
 import { refreshMarketPrices, syncMarketCache } from '../core/markets_sync.js';
 import { formatProactiveSummary, runProactiveSearch } from '../core/proactive_search.js';
 import { buildAgentPeerSessionKey, resolveThreadSessionKeys } from './session_keys.js';
-import { PolymarketStreamClient } from '../execution/polymarket/stream.js';
-import { upsertMarketCache } from '../memory/market_cache.js';
-import { getMarketCache } from '../memory/market_cache.js';
 import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
 
@@ -49,50 +46,7 @@ for (const instance of agentRegistry.agents.values()) {
   instance.start();
 }
 
-// Market stream (watchlist-only)
-const streamConfig = config.polymarket?.stream;
-const streamClient =
-  streamConfig?.enabled && streamConfig.wsUrl ? new PolymarketStreamClient(config) : null;
-const streamMarketClient = new PolymarketMarketClient(config);
-
-if (streamClient) {
-  streamClient.on('connected', () => logger.info('Market stream connected.'));
-  streamClient.on('disconnected', () => logger.warn('Market stream disconnected.'));
-  streamClient.on('error', (err) => logger.error('Market stream error', err));
-  streamClient.on('update', async (update) => {
-    const marketId = update.marketId ? update.marketId : '';
-    if (!marketId) return;
-    let question = '';
-    let outcomes: string[] = [];
-    let category: string | undefined;
-    if (marketId) {
-      const cachedMarket = getMarketCache(marketId);
-      if (cachedMarket) {
-        question = cachedMarket.question;
-        outcomes = cachedMarket.outcomes ?? [];
-        category = cachedMarket.category ?? undefined;
-      } else {
-        try {
-          const market = await streamMarketClient.getMarket(marketId);
-          question = market.question;
-          outcomes = market.outcomes ?? [];
-          category = market.category ?? undefined;
-        } catch {
-          return;
-        }
-      }
-    }
-    if (!question) return;
-    upsertMarketCache({
-      id: update.marketId,
-      question,
-      outcomes,
-      prices: update.prices ?? {},
-      category,
-    });
-  });
-  streamClient.connect();
-}
+// Augur Turbo does not provide a websocket market stream; cache is refreshed on schedule.
 
 const onIncoming = async (
   message: {
@@ -255,11 +209,7 @@ let lastMarketSyncDate = '';
 if (marketSyncConfig?.enabled) {
   const runMarketSync = async () => {
     try {
-      const result = await syncMarketCache(
-        config,
-        marketSyncConfig.limit,
-        marketSyncConfig.maxPages
-      );
+      const result = await syncMarketCache(config, marketSyncConfig.limit);
       logger.info(`Market cache sync stored ${result.stored} market(s).`);
       const refreshed = await refreshMarketPrices(config, marketSyncConfig.refreshLimit);
       logger.info(`Market price refresh stored ${refreshed.stored} market(s).`);
@@ -458,7 +408,7 @@ if (heartbeatConfig?.enabled) {
 const mentatConfig = config.notifications?.mentat;
 if (mentatConfig?.enabled) {
   const llm = createLlmClient(config);
-  const mentatMarketClient = new PolymarketMarketClient(config);
+  const mentatMarketClient = new AugurMarketClient(config);
   const schedules =
     mentatConfig.schedules && mentatConfig.schedules.length > 0
       ? mentatConfig.schedules
@@ -684,46 +634,7 @@ if (telegram) {
   });
 }
 
-if (streamClient && streamConfig?.watchlistOnly) {
-  const refreshStreamSubs = () => {
-    const watchlist = listWatchlist(streamConfig.maxWatchlist ?? 50);
-    const marketIds = watchlist.map((item) => item.marketId);
-    if (marketIds.length > 0) {
-      streamClient.subscribe(marketIds);
-    }
-  };
-
-  refreshStreamSubs();
-  setInterval(refreshStreamSubs, 5 * 60 * 1000);
-
-  const staleAfterMs = (streamConfig.staleAfterSeconds ?? 180) * 1000;
-  const refreshIntervalMs = (streamConfig.refreshIntervalSeconds ?? 300) * 1000;
-  setInterval(async () => {
-    const watchlist = listWatchlist(streamConfig.maxWatchlist ?? 50);
-    for (const item of watchlist) {
-      const lastUpdate = streamClient.getLastUpdate(item.marketId);
-      if (!lastUpdate || Date.now() - lastUpdate > staleAfterMs) {
-        try {
-          const market = await streamMarketClient.getMarket(item.marketId);
-          upsertMarketCache({
-            id: market.id,
-            question: market.question,
-            outcomes: market.outcomes ?? [],
-            prices: market.prices ?? {},
-            volume: market.volume ?? null,
-            liquidity: market.liquidity ?? null,
-            endDate: market.endDate ?? null,
-            category: market.category ?? null,
-            resolved: market.resolved ?? false,
-            resolution: market.resolution ?? null,
-          });
-        } catch {
-          continue;
-        }
-      }
-    }
-  }, refreshIntervalMs);
-}
+// Augur Turbo has no native market stream; rely on cache refresh schedules instead.
 
 async function sendIntelAlerts(
   items: Array<{ title: string; url?: string; source: string; content?: string }>,
@@ -783,7 +694,7 @@ async function sendIntelAlerts(
     entityAliases: alertsConfig.entityAliases ?? {},
   };
 
-  const marketClient = new PolymarketMarketClient(config);
+  const marketClient = new AugurMarketClient(config);
   let watchlistTitles: string[] = [];
 
   if (settings.watchlistOnly) {

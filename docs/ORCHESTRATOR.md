@@ -93,7 +93,7 @@ Split model architecture where Claude handles reasoning/orchestration and GPT ha
 ### Step 2: GPT Executes
 
 GPT runs all tool calls, handling:
-- API calls to Polymarket
+- API calls to Augur Turbo
 - Intel fetching from configured sources
 - Database queries for calibration data
 - Error handling and retries
@@ -147,7 +147,7 @@ agent:
   showCriticNotes: false                  # Append critic notes to chat responses
   showPlanTrace: false                    # Append plan trace to chat responses
   mentatAutoScan: false                   # Auto-run mentat scan/report in chat + daily report + autonomous P&L
-  mentatSystem: Polymarket                # System label for mentat reports
+  mentatSystem: Augur Turbo                # System label for mentat reports
   identityPromptMode: full                # full | minimal | none (identity prelude)
   internalPromptMode: minimal             # full | minimal | none (internal LLM calls)
   # Mentat monitoring/alerts (gateway)

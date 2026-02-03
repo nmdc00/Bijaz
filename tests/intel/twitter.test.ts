@@ -9,7 +9,7 @@ const baseConfig = {
         enabled: true,
         bearerToken: 'test-bearer',
         baseUrl: 'https://twitter.local/2',
-        keywords: ['polymarket'],
+        keywords: ['augur'],
       },
     },
   },

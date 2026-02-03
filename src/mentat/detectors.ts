@@ -1,4 +1,4 @@
-import type { Market } from '../execution/polymarket/markets.js';
+import type { Market } from '../execution/augur/markets.js';
 import type { StoredIntel } from '../intel/store.js';
 import type { DetectorBundle, DetectorResult, MentatSignals } from './types.js';
 
@@ -175,7 +175,10 @@ function summarizeIrreversibility(markets: Market[]): DetectorResult {
   const withDates = markets
     .map((market) => {
       if (!market.endDate) return null;
-      const parsed = Date.parse(market.endDate);
+      const parsed =
+        market.endDate instanceof Date
+          ? market.endDate.getTime()
+          : Date.parse(String(market.endDate));
       if (Number.isNaN(parsed)) return null;
       return parsed;
     })

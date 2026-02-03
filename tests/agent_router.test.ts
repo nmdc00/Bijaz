@@ -18,7 +18,7 @@ const baseConfig = {
   agent: { model: 'test-model', provider: 'local', openaiModel: 'gpt-5.2' },
   execution: { mode: 'paper' },
   wallet: { limits: { daily: 100, perTrade: 25, confirmationThreshold: 10 }, exposure: { maxPositionPercent: 20, maxDomainPercent: 40 } },
-  polymarket: { api: { gamma: 'https://example.com', clob: 'https://example.com' } },
+  augur: { enabled: true, subgraph: 'https://example.com' },
   intel: { embeddings: { enabled: false, provider: 'openai', model: 'text-embedding-3-small' }, sources: {}, roaming: { enabled: true, allowSources: [], allowTypes: [], minTrust: 'medium', socialOptIn: false }, retentionDays: 30 },
   memory: { dbPath: '/tmp/thufir.sqlite', sessionsPath: '/tmp/thufir/sessions', maxHistoryMessages: 50, compactAfterTokens: 12000, keepRecentMessages: 12, retentionDays: 90, embeddings: { enabled: false, provider: 'openai', model: 'text-embedding-3-small' } },
   session: { mainKey: 'main', dmScope: 'per-channel-peer', identityLinks: {} },

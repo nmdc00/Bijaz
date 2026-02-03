@@ -4,7 +4,7 @@ export const THUFIR_TOOLS: Tool[] = [
   {
     name: 'market_search',
     description:
-      'Search for prediction markets on Polymarket by query. Use when the user asks about a topic and you want relevant markets.',
+      'Search for prediction markets on Augur Turbo by query. Use when the user asks about a topic and you want relevant markets.',
     input_schema: {
       type: 'object',
       properties: {
@@ -28,7 +28,7 @@ export const THUFIR_TOOLS: Tool[] = [
       properties: {
         market_id: {
           type: 'string',
-          description: 'Polymarket market ID',
+          description: 'Augur market ID',
         },
       },
       required: ['market_id'],
@@ -135,7 +135,7 @@ export const THUFIR_TOOLS: Tool[] = [
       properties: {
         query: {
           type: 'string',
-          description: 'Search query for Twitter (e.g., "Polymarket", "Palantir earnings")',
+          description: 'Search query for Twitter (e.g., "Augur", "Bitcoin price")',
         },
         limit: {
           type: 'number',
@@ -176,15 +176,25 @@ export const THUFIR_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'get_open_orders',
+    description:
+      'Get currently open orders. For Augur AMM trades this will typically be empty.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: 'get_order_book',
     description:
-      'Get order book depth for a market. Shows bid/ask prices and liquidity at each level.',
+      'Get indicative price snapshot for an Augur market (AMM markets do not have a traditional order book).',
     input_schema: {
       type: 'object',
       properties: {
         market_id: {
           type: 'string',
-          description: 'The Polymarket market ID',
+          description: 'The Augur market ID',
         },
         depth: {
           type: 'number',
@@ -197,13 +207,13 @@ export const THUFIR_TOOLS: Tool[] = [
   {
     name: 'price_history',
     description:
-      'Get historical price data for a market. Shows how odds have changed over time.',
+      'Get price snapshots for an Augur market. Augur Turbo does not expose full order-book history.',
     input_schema: {
       type: 'object',
       properties: {
         market_id: {
           type: 'string',
-          description: 'The Polymarket market ID',
+          description: 'The Augur market ID',
         },
         interval: {
           type: 'string',
@@ -265,7 +275,7 @@ export const THUFIR_TOOLS: Tool[] = [
       properties: {
         market_id: {
           type: 'string',
-          description: 'The Polymarket market ID to bet on',
+          description: 'The Augur market ID to bet on',
         },
         outcome: {
           type: 'string',

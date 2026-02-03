@@ -1,5 +1,5 @@
 import type { ThufirConfig } from './config.js';
-import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { Market, AugurMarketClient } from '../execution/augur/markets.js';
 import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import type { LimitCheckResult } from '../execution/wallet/limits.js';
 import { listCalibrationSummaries } from '../memory/calibration.js';
@@ -20,7 +20,6 @@ export interface ToolSpendingLimiter {
 import { getCashBalance } from '../memory/portfolio.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
-import { PolymarketCLOBClient } from '../execution/polymarket/clob.js';
 import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import { isIP } from 'node:net';
@@ -35,7 +34,7 @@ const execAsync = promisify(exec);
 
 export interface ToolExecutorContext {
   config: ThufirConfig;
-  marketClient: PolymarketMarketClient;
+  marketClient: AugurMarketClient;
   executor?: ExecutionAdapter;
   limiter?: ToolSpendingLimiter;
 }
@@ -197,6 +196,19 @@ export async function executeToolCall(
         const limit = Math.max(Number(toolInput.limit ?? 20), 1);
         const status = String(toolInput.status ?? 'all');
         return getPredictions(limit, status);
+      }
+
+      case 'get_open_orders': {
+        if (!ctx.executor) {
+          return { success: false, error: 'Trading is not enabled (no executor configured)' };
+        }
+        try {
+          const orders = await ctx.executor.getOpenOrders();
+          return { success: true, data: { orders } };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          return { success: false, error: message };
+        }
       }
 
       case 'get_order_book': {
@@ -478,7 +490,7 @@ function getWalletInfo(ctx: ToolExecutorContext): ToolResult {
         address,
         chain: 'polygon',
         token: 'USDC',
-        rpc_url: ctx.config.polymarket?.rpcUrl ?? null,
+        rpc_url: ctx.config.augur?.rpcUrl ?? ctx.config.polymarket?.rpcUrl ?? null,
         keystore_path: keystorePath,
       },
     };
@@ -488,198 +500,57 @@ function getWalletInfo(ctx: ToolExecutorContext): ToolResult {
   }
 }
 
-async function getClobPositions(ctx: ToolExecutorContext): Promise<{
-  positions: Array<{
-    market_id: string;
-    market_question: string;
-    outcome: string;
-    shares: number;
-    avg_price: number | null;
-    current_price: number | null;
-    cost_basis: number | null;
-    current_value: number | null;
-    unrealized_pnl: number | null;
-    pnl_percent: string | null;
-  }>;
-} | null> {
-  if (ctx.config.execution?.mode !== 'live') {
-    return null;
-  }
-
-  const password = process.env.THUFIR_WALLET_PASSWORD;
-  if (!password) {
-    return null;
-  }
-
-  try {
-    const wallet = loadWallet(ctx.config, password);
-    const clobClient = new PolymarketCLOBClient(ctx.config);
-    clobClient.setWallet(wallet);
-
-    try {
-      await clobClient.deriveApiKey();
-    } catch {
-      await clobClient.createApiKey();
-    }
-
-    const trades = await clobClient.getTrades({ limit: 500 });
-    if (!trades || trades.length === 0) {
-      return { positions: [] };
-    }
-
-    const marketCache = new Map<string, Market>();
-    const positionByToken = new Map<string, {
-      marketId: string;
-      netShares: number;
-      netCost: number;
-    }>();
-
-    for (const trade of trades) {
-      const size = Number(trade.size);
-      const price = Number(trade.price);
-      if (!Number.isFinite(size) || !Number.isFinite(price)) continue;
-      const cost = size * price;
-      const entry = positionByToken.get(trade.asset_id) ?? {
-        marketId: trade.market,
-        netShares: 0,
-        netCost: 0,
-      };
-      if (trade.side === 'BUY') {
-        entry.netShares += size;
-        entry.netCost += cost;
-      } else {
-        entry.netShares -= size;
-        entry.netCost -= cost;
-      }
-      entry.marketId = trade.market;
-      positionByToken.set(trade.asset_id, entry);
-    }
-
-    const positions: Array<{
-      market_id: string;
-      market_question: string;
-      outcome: string;
-      shares: number;
-      avg_price: number | null;
-      current_price: number | null;
-      cost_basis: number | null;
-      current_value: number | null;
-      unrealized_pnl: number | null;
-      pnl_percent: string | null;
-    }> = [];
-
-    for (const [tokenId, entry] of positionByToken.entries()) {
-      if (entry.netShares <= 0) continue;
-
-      let market = marketCache.get(entry.marketId);
-      if (!market) {
-        try {
-          market = await ctx.marketClient.getMarket(entry.marketId);
-          marketCache.set(entry.marketId, market);
-        } catch {
-          continue;
-        }
-      }
-
-      const token = market.tokens?.find((t) => t.token_id === tokenId);
-      const outcome = token?.outcome?.toUpperCase() === 'NO' ? 'NO' : 'YES';
-      const currentPrice =
-        market.prices?.[outcome] ??
-        market.prices?.[outcome.toUpperCase()] ??
-        (Array.isArray(market.prices)
-          ? outcome === 'YES'
-            ? market.prices[0]
-            : market.prices[1]
-          : null) ??
-        null;
-
-      const avgPrice = entry.netCost > 0 && entry.netShares > 0
-        ? entry.netCost / entry.netShares
-        : null;
-      const currentValue =
-        currentPrice != null ? entry.netShares * currentPrice : null;
-      const costBasis = entry.netCost > 0 ? entry.netCost : null;
-      const unrealizedPnl =
-        currentValue != null && costBasis != null ? currentValue - costBasis : null;
-      const pnlPercent =
-        avgPrice && currentPrice != null
-          ? `${(((currentPrice - avgPrice) / avgPrice) * 100).toFixed(1)}%`
-          : null;
-
-      positions.push({
-        market_id: market.id,
-        market_question: market.question ?? entry.marketId,
-        outcome,
-        shares: entry.netShares,
-        avg_price: avgPrice,
-        current_price: currentPrice,
-        cost_basis: costBasis,
-        current_value: currentValue,
-        unrealized_pnl: unrealizedPnl,
-        pnl_percent: pnlPercent,
-      });
-    }
-
-    return { positions };
-  } catch {
-    return null;
-  }
-}
-
 async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
   try {
-    const clobPositions = await getClobPositions(ctx);
-    const positionRows = clobPositions
-      ? clobPositions.positions
-      : await Promise.all(
-          listOpenPositions(50).map(async (position) => {
-            const outcome = (position.predictedOutcome ?? 'YES').toUpperCase();
-            let currentPrice = resolveCurrentPrice(position);
+    const positionRows = await Promise.all(
+      listOpenPositions(50).map(async (position) => {
+        const outcome = (position.predictedOutcome ?? 'YES').toUpperCase();
+        let currentPrice = resolveCurrentPrice(position);
 
-            if (currentPrice == null) {
-              try {
-                const market = await ctx.marketClient.getMarket(position.marketId);
-                currentPrice =
-                  market.prices?.[outcome] ??
-                  market.prices?.[outcome.toUpperCase()] ??
-                  (Array.isArray(market.prices)
-                    ? outcome === 'YES'
-                      ? market.prices[0]
-                      : market.prices[1]
-                    : null) ??
-                  null;
-              } catch {
-                currentPrice = null;
-              }
-            }
+        if (currentPrice == null) {
+          try {
+            const market = await ctx.marketClient.getMarket(position.marketId);
+            currentPrice =
+              market.prices?.[outcome] ??
+              market.prices?.[outcome.toUpperCase()] ??
+              (Array.isArray(market.prices)
+                ? outcome === 'YES'
+                  ? market.prices[0]
+                  : market.prices[1]
+                : null) ??
+              null;
+          } catch {
+            currentPrice = null;
+          }
+        }
 
-            const executionPrice = position.executionPrice ?? null;
-            const positionSize = position.positionSize ?? 0;
-            const shares =
-              executionPrice && executionPrice > 0 ? positionSize / executionPrice : null;
-            const currentValue =
-              shares != null && currentPrice != null ? shares * currentPrice : null;
-            const costBasis = positionSize;
-            const unrealizedPnl =
-              currentValue != null ? currentValue - costBasis : null;
+        const executionPrice = position.executionPrice ?? null;
+        const positionSize = position.positionSize ?? 0;
+        const shares =
+          executionPrice && executionPrice > 0 ? positionSize / executionPrice : null;
+        const currentValue =
+          shares != null && currentPrice != null ? shares * currentPrice : null;
+        const costBasis = positionSize;
+        const unrealizedPnl =
+          currentValue != null ? currentValue - costBasis : null;
 
-            return {
-              market_id: position.marketId,
-              market_question: position.marketTitle,
-              outcome,
-              shares,
-              avg_price: executionPrice,
-              current_price: currentPrice,
-              cost_basis: costBasis,
-              current_value: currentValue,
-              unrealized_pnl: unrealizedPnl,
-              pnl_percent:
-                executionPrice && currentPrice != null
-                  ? `${(((currentPrice - executionPrice) / executionPrice) * 100).toFixed(1)}%`
-                  : null,
-            };
-          })
-        );
+        return {
+          market_id: position.marketId,
+          market_question: position.marketTitle,
+          outcome,
+          shares,
+          avg_price: executionPrice,
+          current_price: currentPrice,
+          cost_basis: costBasis,
+          current_value: currentValue,
+          unrealized_pnl: unrealizedPnl,
+          pnl_percent:
+            executionPrice && currentPrice != null
+              ? `${(((currentPrice - executionPrice) / executionPrice) * 100).toFixed(1)}%`
+              : null,
+        };
+      })
+    );
 
     const totals = positionRows.reduce(
       (acc, position) => {
@@ -700,11 +571,14 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
         ? Math.max(0, dailyLimit - limiterState.todaySpent - limiterState.reserved)
         : null;
 
+    const augurPositions = await getAugurPositions(ctx);
+
     return {
       success: true,
       data: {
         balances,
         positions: positionRows,
+        augur_positions: augurPositions,
         summary: {
           total_positions: positionRows.length,
           total_value: totals.totalValue,
@@ -712,13 +586,72 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
           unrealized_pnl: totals.totalValue - totals.totalCost,
           available_balance: balances.usdc ?? 0,
           remaining_daily_limit: remainingDaily,
-          positions_source: clobPositions ? 'clob' : 'local',
+          positions_source: 'local',
+          augur_positions_count: augurPositions.length,
         },
       },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: message };
+  }
+}
+
+async function getAugurPositions(
+  ctx: ToolExecutorContext
+): Promise<
+  Array<{
+    market_id: string;
+    outcome: string;
+    shares: string;
+    avg_price: number;
+    cost_basis: number;
+    open: boolean;
+  }>
+> {
+  try {
+    if (typeof (ctx.marketClient as { getPositions?: unknown }).getPositions !== 'function') {
+      return [];
+    }
+
+    const keystorePath =
+      ctx.config.wallet?.keystorePath ??
+      process.env.THUFIR_KEYSTORE_PATH ??
+      `${process.env.HOME ?? ''}/.thufir/keystore.json`;
+    const store = loadKeystore(keystorePath);
+    const address = store.address
+      ? store.address.startsWith('0x')
+        ? store.address
+        : `0x${store.address}`
+      : null;
+
+    if (!address) {
+      return [];
+    }
+
+    const positions = await (ctx.marketClient as {
+      getPositions: (addr: string) => Promise<
+        Array<{
+          marketId: string;
+          outcome: string;
+          shares: string;
+          avgPrice: number;
+          costBasis: number;
+          open: boolean;
+        }>
+      >;
+    }).getPositions(address);
+
+    return positions.map((pos) => ({
+      market_id: pos.marketId,
+      outcome: pos.outcome,
+      shares: pos.shares,
+      avg_price: pos.avgPrice,
+      cost_basis: pos.costBasis,
+      open: pos.open,
+    }));
+  } catch {
+    return [];
   }
 }
 
@@ -874,101 +807,34 @@ async function getOrderBook(
 ): Promise<ToolResult> {
   try {
     const market = await ctx.marketClient.getMarket(marketId);
-    const clobUrl = ctx.config.polymarket.api.clob.replace(/\/$/, '');
-    const yesToken = resolveTokenId(market, 'YES');
-    const noToken = resolveTokenId(market, 'NO');
-
-    if (!yesToken || !noToken) {
-      return { success: false, error: 'Could not find token IDs for market' };
-    }
-
-    const yesBook = await fetchOrderBook(clobUrl, yesToken);
-    const noBook = await fetchOrderBook(clobUrl, noToken);
-
+    const yesPrice = market.prices?.YES ?? market.prices?.Yes ?? 0.5;
+    const noPrice = market.prices?.NO ?? market.prices?.No ?? 0.5;
     return {
       success: true,
       data: {
         market_id: marketId,
         question: market.question,
-        yes: formatOrderBook(yesBook, depth),
-        no: formatOrderBook(noBook, depth),
-        liquidity_warning: assessLiquidity(yesBook, noBook),
+        yes: {
+          best_bid: yesPrice,
+          best_ask: yesPrice,
+          spread: 0,
+          bids: Array.from({ length: depth }, () => ({ price: yesPrice, size: 0 })),
+          asks: Array.from({ length: depth }, () => ({ price: yesPrice, size: 0 })),
+        },
+        no: {
+          best_bid: noPrice,
+          best_ask: noPrice,
+          spread: 0,
+          bids: Array.from({ length: depth }, () => ({ price: noPrice, size: 0 })),
+          asks: Array.from({ length: depth }, () => ({ price: noPrice, size: 0 })),
+        },
+        liquidity_warning: 'Augur AMM markets do not provide order book depth; values are indicative only.',
       },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: message };
   }
-}
-
-interface OrderBookResponse {
-  bids?: Array<{ price: number; size: number }>;
-  asks?: Array<{ price: number; size: number }>;
-}
-
-function resolveTokenId(market: Market, outcome: 'YES' | 'NO'): string | null {
-  if (market.clobTokenIds && market.clobTokenIds.length >= 2) {
-    return outcome === 'YES' ? market.clobTokenIds[0] : market.clobTokenIds[1];
-  }
-  if (market.tokens && market.tokens.length > 0) {
-    const match = market.tokens.find((token) => {
-      const tokenOutcome = (token.outcome ?? '').toUpperCase();
-      return tokenOutcome === outcome || tokenOutcome.includes(outcome);
-    });
-    if (match?.token_id) return match.token_id;
-  }
-  return null;
-}
-
-async function fetchOrderBook(clobUrl: string, tokenId: string): Promise<OrderBookResponse> {
-  const url = `${clobUrl}/book?token_id=${encodeURIComponent(tokenId)}`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Order book fetch failed: ${response.status}`);
-  }
-  return (await response.json()) as OrderBookResponse;
-}
-
-function formatOrderBook(book: OrderBookResponse, depth: number) {
-  const bids = (book.bids ?? []).slice(0, depth).map((level) => ({
-    price: level.price,
-    size: level.size,
-  }));
-  const asks = (book.asks ?? []).slice(0, depth).map((level) => ({
-    price: level.price,
-    size: level.size,
-  }));
-  return {
-    best_bid: bids[0]?.price ?? null,
-    best_ask: asks[0]?.price ?? null,
-    spread: calculateSpread(book),
-    bids,
-    asks,
-  };
-}
-
-function calculateSpread(book: OrderBookResponse): number | null {
-  const bestBid = book.bids?.[0]?.price;
-  const bestAsk = book.asks?.[0]?.price;
-  if (bestBid == null || bestAsk == null) return null;
-  return bestAsk - bestBid;
-}
-
-function assessLiquidity(yesBook: OrderBookResponse, noBook: OrderBookResponse): string | null {
-  const yesDepth =
-    (yesBook.bids ?? []).reduce((sum, level) => sum + level.size, 0) +
-    (yesBook.asks ?? []).reduce((sum, level) => sum + level.size, 0);
-  const noDepth =
-    (noBook.bids ?? []).reduce((sum, level) => sum + level.size, 0) +
-    (noBook.asks ?? []).reduce((sum, level) => sum + level.size, 0);
-
-  if (yesDepth < 100 || noDepth < 100) {
-    return 'LOW LIQUIDITY - Large orders may experience significant slippage';
-  }
-  if (yesDepth < 500 || noDepth < 500) {
-    return 'MODERATE LIQUIDITY - Consider splitting large orders';
-  }
-  return null;
 }
 
 async function getPriceHistory(
@@ -978,18 +844,14 @@ async function getPriceHistory(
   limit: number
 ): Promise<ToolResult> {
   try {
-    const gammaUrl = ctx.config.polymarket.api.gamma.replace(/\/$/, '');
-    const url = new URL(`${gammaUrl}/markets/${marketId}/prices`);
-    url.searchParams.set('interval', interval);
-    url.searchParams.set('limit', String(limit));
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-      return { success: false, error: `Price history fetch failed: ${response.status}` };
-    }
-    const data = (await response.json()) as {
-      prices?: Array<Record<string, unknown>>;
-    };
-    const series = Array.isArray(data) ? data : data.prices ?? data;
+    const market = await ctx.marketClient.getMarket(marketId);
+    const series = [
+      {
+        timestamp: market.endDate?.toISOString() ?? new Date().toISOString(),
+        prices: market.prices,
+        interval,
+      },
+    ];
     return {
       success: true,
       data: {
@@ -997,6 +859,7 @@ async function getPriceHistory(
         interval,
         limit,
         series,
+        note: 'Augur Turbo does not provide order-book price history; returning latest snapshot only.',
       },
     };
   } catch (error) {

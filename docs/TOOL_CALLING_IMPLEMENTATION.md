@@ -90,7 +90,7 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 export const THUFIR_TOOLS: Tool[] = [
   {
     name: 'market_search',
-    description: 'Search for prediction markets on Polymarket by query. Use this when the user asks about a topic and you want to find relevant markets.',
+    description: 'Search for prediction markets on Augur Turbo by query. Use this when the user asks about a topic and you want to find relevant markets.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -114,7 +114,7 @@ export const THUFIR_TOOLS: Tool[] = [
       properties: {
         market_id: {
           type: 'string',
-          description: 'The Polymarket market ID'
+          description: 'The Augur Turbo market ID'
         }
       },
       required: ['market_id']
@@ -188,13 +188,13 @@ Create executor that maps tool names to handlers:
 
 ```typescript
 import type { ThufirConfig } from './config.js';
-import type { PolymarketMarketClient, Market } from '../execution/polymarket/markets.js';
+import type { Augur TurboMarketClient, Market } from '../execution/augur/markets.js';
 import { searchIntel, listRecentIntel, type StoredIntel } from '../intel/store.js';
 import { listCalibrationSummaries } from '../memory/calibration.js';
 
 export interface ToolExecutorContext {
   config: ThufirConfig;
-  marketClient: PolymarketMarketClient;
+  marketClient: Augur TurboMarketClient;
 }
 
 export type ToolResult =
@@ -433,7 +433,7 @@ Update to use agentic client:
 // In ConversationHandler constructor
 constructor(
   llm: LlmClient,
-  marketClient: PolymarketMarketClient,
+  marketClient: Augur TurboMarketClient,
   config: ThufirConfig,
   infoLlm?: LlmClient
 ) {
@@ -761,7 +761,7 @@ For prediction markets, **7 days is usually sufficient** - recent sentiment driv
     properties: {
       query: {
         type: 'string',
-        description: 'Search query (e.g., "polymarket", "Fed rates", "Trump trial")'
+        description: 'Search query (e.g., "augur", "Fed rates", "Trump trial")'
       },
       limit: {
         type: 'number',

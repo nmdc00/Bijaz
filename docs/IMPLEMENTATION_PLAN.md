@@ -10,7 +10,7 @@ This document outlines the implementation phases for Thufir, designed for handof
 
 ### Completed Phases
 - [x] Phase 1: Foundation - Project setup, structure, wallet security
-- [x] Phase 2: Polymarket Integration - Market data, order execution
+- [x] Phase 2: Augur Turbo Integration - Market data, order execution
 - [x] Phase 3: Memory & Predictions - Prediction storage, calibration
 - [x] Phase 4: Intelligence Layer - RSS, NewsAPI, vector storage
 - [x] Phase 5: Agent Reasoning - LLM integration, tool calling, orchestration
@@ -35,7 +35,7 @@ This document outlines the implementation phases for Thufir, designed for handof
 
 Thufir is built by combining:
 1. **Clawdbot** - Multi-channel gateway and session management
-2. **Polymarket Agents** - Market data and trade execution
+2. **Augur Turbo Agents** - Market data and trade execution
 3. **Custom layers** - Memory, calibration, and intel aggregation
 
 ## Phase 1: Foundation (Weeks 1-2)
@@ -50,8 +50,8 @@ cd thufir
 # Rename and rebrand
 # Update package.json, README, etc.
 
-# Add Polymarket dependencies
-pnpm add @polymarket/sdk @polymarket/order-utils ethers@5
+# Add Augur Turbo dependencies
+pnpm add @augur/sdk @augur/order-utils ethers@5
 
 # Add vector DB
 pnpm add chromadb
@@ -80,7 +80,7 @@ src/
 │   │   ├── newsapi.ts
 │   │   ├── twitter.ts
 │   │   ├── rss.ts
-│   │   └── polymarket-comments.ts
+│   │   └── augur-comments.ts
 │   ├── pipeline.ts          # Processing pipeline
 │   ├── vectorstore.ts       # ChromaDB wrapper
 │   └── retrieval.ts         # Context retrieval
@@ -92,7 +92,7 @@ src/
 │   └── schema.sql           # Database schema
 │
 ├── execution/               # Trading layer
-│   ├── polymarket/          # Polymarket integration
+│   ├── augur/          # Augur Turbo integration
 │   │   ├── client.ts        # API client
 │   │   ├── markets.ts       # Market data
 │   │   └── orders.ts        # Order execution
@@ -182,15 +182,15 @@ Implement in order:
 
 ---
 
-## Phase 2: Polymarket Integration (Weeks 3-4)
+## Phase 2: Augur Turbo Integration (Weeks 3-4)
 
 ### 2.1 Market Data
 
-Implement `src/execution/polymarket/`:
+Implement `src/execution/augur/`:
 
 ```typescript
 // client.ts
-export class PolymarketClient {
+export class Augur TurboClient {
   async getMarkets(filter?: MarketFilter): Promise<Market[]>;
   async getMarket(marketId: string): Promise<Market>;
   async getOrderBook(marketId: string): Promise<OrderBook>;
@@ -218,7 +218,7 @@ export interface Market {
 // orders.ts
 export class OrderExecutor {
   constructor(
-    private polymarket: PolymarketClient,
+    private augur: Augur TurboClient,
     private wallet: WalletManager,
     private limits: SpendingLimitEnforcer
   ) {}
@@ -231,7 +231,7 @@ export class OrderExecutor {
     }
 
     // 2. Build order
-    const order = await this.polymarket.buildOrder(params);
+    const order = await this.augur.buildOrder(params);
 
     // 3. Verify destination is whitelisted
     if (!isWhitelisted(order.to)) {
@@ -242,7 +242,7 @@ export class OrderExecutor {
     const signed = await this.wallet.sign(order);
 
     // 5. Submit
-    const result = await this.polymarket.submit(signed);
+    const result = await this.augur.submit(signed);
 
     // 6. Record spend
     await this.limits.record(params.amount);
@@ -266,7 +266,7 @@ export class PortfolioManager {
 
 ### 2.4 Deliverables
 
-- [ ] Polymarket API integration (read)
+- [ ] Augur Turbo API integration (read)
 - [ ] Order execution with all security checks
 - [ ] Portfolio tracking
 - [ ] CLI: `thufir markets list`, `thufir markets show <id>`
@@ -314,7 +314,7 @@ export class ResolutionChecker {
     const openPredictions = await this.predictions.list({ resolved: false });
 
     for (const pred of openPredictions) {
-      const market = await this.polymarket.getMarket(pred.marketId);
+      const market = await this.augur.getMarket(pred.marketId);
 
       if (market.resolved) {
         await this.predictions.recordOutcome(pred.id, {
@@ -345,7 +345,7 @@ export class ResolutionChecker {
 Implement one source at a time:
 
 1. **RSS** (easiest, free) - `src/intel/sources/rss.ts`
-2. **Polymarket comments** - `src/intel/sources/polymarket-comments.ts`
+2. **Augur Turbo comments** - `src/intel/sources/augur-comments.ts`
 3. **NewsAPI** - `src/intel/sources/newsapi.ts`
 4. **Twitter** - `src/intel/sources/twitter.ts`
 
@@ -411,7 +411,7 @@ export class IntelRetriever {
 ### 4.4 Deliverables
 
 - [ ] RSS source implementation
-- [ ] Polymarket comments source
+- [ ] Augur Turbo comments source
 - [ ] NewsAPI source (requires API key)
 - [ ] Vector storage with ChromaDB
 - [ ] Retrieval for market context
@@ -543,7 +543,7 @@ if (response.stop_reason === 'tool_use') {
 
 | Tool Name | Description |
 |-----------|-------------|
-| `market_search` | Search Polymarket for markets by query |
+| `market_search` | Search Augur Turbo for markets by query |
 | `market_get` | Get detailed market info by ID |
 | `intel_search` | Search news/intel database |
 | `intel_recent` | Get latest news items |
@@ -642,7 +642,7 @@ tests/
 │       └── orders.test.ts       # CRITICAL
 │
 ├── integration/
-│   ├── polymarket.test.ts
+│   ├── augur.test.ts
 │   └── intel-pipeline.test.ts
 │
 └── e2e/
@@ -694,7 +694,7 @@ volumes:
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 
-# Polymarket (testnet for development)
+# Augur Turbo (testnet for development)
 POLYGON_RPC_URL=https://polygon-rpc.com
 POLYMARKET_API_KEY=...
 
@@ -734,7 +734,7 @@ pnpm thufir chat
 
 | Risk | Mitigation |
 |------|------------|
-| Polymarket API changes | Pin SDK version, monitor changelog |
+| Augur Turbo API changes | Pin SDK version, monitor changelog |
 | LLM hallucinations | Validate all numeric outputs, require reasoning |
 | Vector DB performance | Start with ChromaDB, plan migration path to Pinecone |
 | Wallet security breach | Defense in depth, limited hot wallet funds |
@@ -775,7 +775,7 @@ If building solo, prioritize:
 
 ### Phase 1-2 (Foundation)
 - [ ] Can create wallet and view balance
-- [ ] Can fetch Polymarket data
+- [ ] Can fetch Augur Turbo data
 - [ ] Can execute a trade with all security checks
 
 ### Phase 3-4 (Memory & Intel)

@@ -22,7 +22,7 @@ Add two web tools to give Thufir real-time internet access:
 ### Problem
 
 The agent can only search:
-- Polymarket markets (`market_search`)
+- Augur Turbo markets (`market_search`)
 - Stored intel database (`intel_search`)
 - Twitter (`twitter_search`)
 
@@ -453,7 +453,7 @@ Thufir will have **8 tools**:
 
 | Tool | Purpose |
 |------|---------|
-| `market_search` | Search Polymarket |
+| `market_search` | Search Augur Turbo |
 | `market_get` | Get market details |
 | `intel_search` | Search stored intel |
 | `intel_recent` | Get recent intel |

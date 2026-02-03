@@ -1,7 +1,7 @@
 /**
  * Opportunity Scanner
  *
- * Proactively scans Polymarket for opportunities based on:
+ * Proactively scans Augur for opportunities based on:
  * 1. Current news/intel
  * 2. Market prices vs LLM estimates
  * 3. User's calibration history
@@ -9,7 +9,7 @@
 
 import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
-import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { Market, AugurMarketClient } from '../execution/augur/markets.js';
 import { listCalibrationSummaries } from '../memory/calibration.js';
 import { listRecentIntel } from '../intel/store.js';
 import { runOrchestrator } from '../agent/orchestrator/orchestrator.js';
@@ -75,7 +75,7 @@ Edge = |myEstimate - marketPrice|. Only flag opportunities where edge >= 0.05.`;
  */
 export async function scanForOpportunities(
   llm: LlmClient,
-  marketClient: PolymarketMarketClient,
+  marketClient: AugurMarketClient,
   config: ThufirConfig,
   maxMarkets = 50,
   options?: { orchestrator?: OrchestratorAssets }
@@ -235,7 +235,7 @@ Return a JSON array with your analysis.`;
  */
 export async function generateDailyReport(
   llm: LlmClient,
-  marketClient: PolymarketMarketClient,
+  marketClient: AugurMarketClient,
   config: ThufirConfig,
   options?: { orchestrator?: OrchestratorAssets }
 ): Promise<DailyReport> {
@@ -256,7 +256,7 @@ export async function generateDailyReport(
       const { runMentatScan } = await import('../mentat/scan.js');
       const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
       const scan = await runMentatScan({
-        system: config.agent?.mentatSystem ?? 'Polymarket',
+        system: config.agent?.mentatSystem ?? 'Augur',
         llm,
         marketClient,
         marketQuery: config.agent?.mentatMarketQuery,

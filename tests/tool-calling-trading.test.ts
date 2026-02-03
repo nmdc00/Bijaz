@@ -83,7 +83,7 @@ describe('trading tools (excluding place_bet)', () => {
     const result = await executeToolCall(
       'current_time',
       { timezone: 'UTC' },
-      { config: { polymarket: { api: { gamma: '', clob: '' } }, execution: { mode: 'paper' } } as any, marketClient: {} as any }
+      { config: { augur: { enabled: true }, execution: { mode: 'paper' } } as any, marketClient: {} as any }
     );
 
     expect(result.success).toBe(true);
@@ -98,7 +98,7 @@ describe('trading tools (excluding place_bet)', () => {
     const result = await executeToolCall(
       'get_predictions',
       { status: 'won', limit: 10 },
-      { config: { polymarket: { api: { gamma: '', clob: '' } } } as any, marketClient: {} as any }
+      { config: { augur: { enabled: true } } as any, marketClient: {} as any }
     );
 
     expect(result.success).toBe(true);
@@ -113,7 +113,7 @@ describe('trading tools (excluding place_bet)', () => {
     const result = await executeToolCall(
       'get_portfolio',
       {},
-      { config: { execution: { mode: 'paper' }, polymarket: { api: { gamma: '', clob: '' } } } as any, marketClient: {} as any }
+      { config: { execution: { mode: 'paper' }, augur: { enabled: true } } as any, marketClient: {} as any }
     );
 
     expect(result.success).toBe(true);
@@ -128,7 +128,7 @@ describe('trading tools (excluding place_bet)', () => {
     const result = await executeToolCall(
       'get_wallet_info',
       {},
-      { config: { polymarket: { api: { gamma: '', clob: '' } } } as any, marketClient: {} as any }
+      { config: { augur: { enabled: true } } as any, marketClient: {} as any }
     );
 
     expect(result.success).toBe(true);
@@ -141,23 +141,18 @@ describe('trading tools (excluding place_bet)', () => {
   });
 
   it('returns get_order_book depth', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        bids: [{ price: 0.4, size: 50 }],
-        asks: [{ price: 0.45, size: 60 }],
-      }),
-    });
-    // @ts-expect-error test stub
-    globalThis.fetch = fetchMock;
-
     const result = await executeToolCall(
       'get_order_book',
       { market_id: 'm1', depth: 1 },
       {
-        config: { polymarket: { api: { gamma: '', clob: 'https://clob.polymarket.com' } } } as any,
+        config: { augur: { enabled: true } } as any,
         marketClient: {
-          getMarket: async () => ({ id: 'm1', question: 'Market 1', clobTokenIds: ['yes', 'no'] }),
+          getMarket: async () => ({
+            id: 'm1',
+            question: 'Market 1',
+            outcomes: ['Yes', 'No'],
+            prices: { Yes: 0.4, No: 0.6 },
+          }),
         } as any,
       }
     );
@@ -170,25 +165,27 @@ describe('trading tools (excluding place_bet)', () => {
   });
 
   it('returns price_history series', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        prices: [{ t: 1, price: 0.5 }],
-      }),
-    });
-    // @ts-expect-error test stub
-    globalThis.fetch = fetchMock;
-
     const result = await executeToolCall(
       'price_history',
       { market_id: 'm1', interval: '1d', limit: 1 },
-      { config: { polymarket: { api: { gamma: 'https://gamma' } } } as any, marketClient: {} as any }
+      {
+        config: { augur: { enabled: true } } as any,
+        marketClient: {
+          getMarket: async () => ({
+            id: 'm1',
+            question: 'Market 1',
+            outcomes: ['Yes', 'No'],
+            prices: { Yes: 0.5, No: 0.5 },
+            endDate: new Date('2026-01-01T00:00:00Z'),
+          }),
+        } as any,
+      }
     );
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { series: Array<{ price: number }> };
-      expect(data.series[0].price).toBe(0.5);
+      const data = result.data as { series: Array<{ prices: Record<string, number> }> };
+      expect(data.series[0].prices.Yes).toBe(0.5);
     }
   });
 });

@@ -9,16 +9,23 @@
 export interface Market {
   id: string;
   question: string;
-  description: string;
+  description?: string;
   outcomes: string[];
   prices: Record<string, number>;
-  volume: number;
-  liquidity: number;
-  endDate: Date;
-  category: string;
-  resolved: boolean;
+  volume?: number;
+  liquidity?: number;
+  endDate?: Date;
+  category?: string;
+  resolved?: boolean;
   resolution?: string;
-  createdAt: Date;
+  createdAt?: Date;
+  platform: 'augur';
+  augur?: {
+    marketFactory: string;
+    marketIndex: number;
+    type: 'crypto' | 'sports' | 'mma';
+    shareTokens: string[];
+  };
 }
 
 export interface OrderBook {
@@ -302,9 +309,31 @@ export interface ThufirConfig {
       maxDomainPercent: number;
     };
   };
-  polymarket: {
-    network: string;
-    rpcUrl: string;
+  polymarket?: {
+    rpcUrl?: string;
+  };
+  augur?: {
+    enabled?: boolean;
+    subgraph?: string;
+    rpcUrl?: string;
+    slippageTolerance?: number;
+    marketTypes?: Array<'crypto' | 'sports' | 'mma'>;
+  };
+  technical?: {
+    enabled?: boolean;
+    priceSource?: 'binance' | 'coinbase' | 'coingecko';
+    symbols?: string[];
+    timeframes?: Array<'1m' | '5m' | '15m' | '1h' | '4h' | '1d'>;
+    indicators?: {
+      rsi?: { period?: number; overbought?: number; oversold?: number };
+      macd?: { fast?: number; slow?: number; signal?: number };
+      bollingerBands?: { period?: number; stdDev?: number };
+    };
+    signals?: {
+      minConfidence?: number;
+      weights?: { technical?: number; news?: number; onChain?: number };
+    };
+    onChain?: { enabled?: boolean; coinglassApiKey?: string };
   };
   intel: {
     vectorDb: {

@@ -4,8 +4,7 @@ export type IntelSourceName =
   | 'rss'
   | 'newsapi'
   | 'googlenews'
-  | 'twitter'
-  | 'polymarketComments';
+  | 'twitter';
 
 export type IntelSourceType = 'news' | 'social' | 'market';
 export type IntelTrust = 'low' | 'medium' | 'high';
@@ -33,7 +32,6 @@ export function listIntelSources(config: ThufirConfig): IntelSourceDescriptor[] 
   const newsapi = sources.newsapi as { enabled?: boolean; apiKey?: string } | undefined;
   const googlenews = sources.googlenews as { enabled?: boolean; serpApiKey?: string } | undefined;
   const twitter = sources.twitter as { enabled?: boolean; bearerToken?: string } | undefined;
-  const polymarketComments = sources.polymarketComments as { enabled?: boolean } | undefined;
 
   const entries: IntelSourceDescriptor[] = [
     {
@@ -74,16 +72,6 @@ export function listIntelSources(config: ThufirConfig): IntelSourceDescriptor[] 
       queryCapable: true,
       enabled: twitter?.enabled ?? false,
       configured: Boolean(twitter?.bearerToken),
-      roamable: true,
-    },
-    {
-      name: 'polymarketComments',
-      label: 'Polymarket Comments',
-      type: 'market',
-      trust: 'medium',
-      queryCapable: false,
-      enabled: polymarketComments?.enabled ?? false,
-      configured: true,
       roamable: true,
     },
   ];

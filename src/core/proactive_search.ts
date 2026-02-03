@@ -3,7 +3,7 @@ import { createLlmClient } from './llm.js';
 import { withExecutionContextIfMissing } from './llm_infra.js';
 import { listWatchlist } from '../memory/watchlist.js';
 import { listRecentIntel, type StoredIntel } from '../intel/store.js';
-import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import { AugurMarketClient } from '../execution/augur/markets.js';
 import { listQueryCapableRoamingSources } from '../intel/sources_registry.js';
 import {
   runIntelPipelineDetailedWithOverrides,
@@ -91,7 +91,7 @@ async function buildQueriesFromWatchlist(
   if (watchlist.length === 0) {
     return [];
   }
-  const client = new PolymarketMarketClient(config);
+  const client = new AugurMarketClient(config);
   const queries: string[] = [];
   for (const item of watchlist.slice(0, watchlistLimit)) {
     try {

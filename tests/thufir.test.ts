@@ -59,14 +59,21 @@ vi.mock('../src/core/conversation.js', () => ({
   },
 }));
 
-vi.mock('../src/execution/polymarket/markets.js', () => ({
-  PolymarketMarketClient: class {
+vi.mock('../src/execution/augur/markets.js', () => ({
+  AugurMarketClient: class {
     async getMarket() {
       return {
         id: 'm1',
         question: 'Test market',
         outcomes: ['YES', 'NO'],
         prices: { YES: 0.5, NO: 0.5 },
+        platform: 'augur',
+        augur: {
+          marketFactory: '0xFactory',
+          marketIndex: 1,
+          type: 'crypto',
+          shareTokens: [],
+        },
       };
     }
   },
@@ -91,10 +98,9 @@ gateway:
 agent:
   model: "test-model"
   provider: "local"
-polymarket:
-  api:
-    gamma: "https://example.com"
-    clob: "https://example.com"
+augur:
+  enabled: true
+  subgraph: "https://example.com"
 execution:
   mode: "paper"
 wallet:

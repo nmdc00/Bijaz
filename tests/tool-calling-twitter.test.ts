@@ -37,7 +37,7 @@ describe('twitter_search tool', () => {
 
     const result = await executeToolCall(
       'twitter_search',
-      { query: 'polymarket', limit: 1 },
+      { query: 'augur', limit: 1 },
       {
         config: { intel: { sources: { twitter: { bearerToken: 'token' } } } },
         marketClient: {} as any,
@@ -86,7 +86,7 @@ describe('twitter_search tool', () => {
 
     const result = await executeToolCall(
       'twitter_search',
-      { query: 'polymarket', limit: 1 },
+      { query: 'augur', limit: 1 },
       {
         config: { intel: { sources: { twitter: { bearerToken: 'token' } } } },
         marketClient: {} as any,
@@ -111,7 +111,7 @@ describe('twitter_search tool', () => {
 
     const result = await executeToolCall(
       'twitter_search',
-      { query: 'polymarket', limit: 1 },
+      { query: 'augur', limit: 1 },
       {
         config: { intel: { sources: { twitter: { bearerToken: 'token' } } } },
         marketClient: {} as any,

@@ -14,7 +14,7 @@ import {
   getPrediction,
   listPredictions,
 } from '../memory/predictions.js';
-import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import { AugurMarketClient } from '../execution/augur/markets.js';
 import { addWatchlist, listWatchlist } from '../memory/watchlist.js';
 import { runIntelPipeline } from '../intel/pipeline.js';
 import { listRecentIntel } from '../intel/store.js';
@@ -38,6 +38,7 @@ import inquirer from 'inquirer';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { Timeframe } from '../technical/types.js';
 import yaml from 'yaml';
 import { openDatabase } from '../memory/db.js';
 import { pruneChatMessages } from '../memory/chat.js';
@@ -66,14 +67,14 @@ async function createExecutorForConfig(
   password?: string
 ): Promise<ExecutionAdapter> {
   if (config.execution.mode === 'live') {
-    const { LiveExecutor } = await import('../execution/modes/live.js');
+    const { AugurLiveExecutor } = await import('../execution/modes/augur-live.js');
     const pwd = password ?? process.env.THUFIR_WALLET_PASSWORD;
     if (!pwd) {
       throw new Error(
         'Live execution mode requires THUFIR_WALLET_PASSWORD environment variable or --password option'
       );
     }
-    return new LiveExecutor({ config, password: pwd });
+    return new AugurLiveExecutor({ config, password: pwd });
   }
 
   if (config.execution.mode === 'webhook' && config.execution.webhookUrl) {
@@ -332,7 +333,7 @@ async function runEnvChecks(values: Record<string, string>): Promise<void> {
   if (env.SERPAPI_KEY) {
     await tryCheck('SerpAPI', () =>
       fetchWithTimeout(
-        `https://serpapi.com/search.json?engine=google_news&q=polymarket&api_key=${env.SERPAPI_KEY}`
+        `https://serpapi.com/search.json?engine=google_news&q=augur%20prediction%20market&api_key=${env.SERPAPI_KEY}`
       )
     );
   } else {
@@ -342,7 +343,7 @@ async function runEnvChecks(values: Record<string, string>): Promise<void> {
   if (env.TWITTER_BEARER) {
     await tryCheck('X/Twitter', () =>
       fetchWithTimeout(
-        'https://api.twitter.com/2/tweets/search/recent?query=polymarket&max_results=10',
+        'https://api.twitter.com/2/tweets/search/recent?query=augur%20prediction%20market&max_results=10',
         {
           headers: { Authorization: `Bearer ${env.TWITTER_BEARER}` },
         }
@@ -620,7 +621,7 @@ walletLimits
 // ============================================================================
 
 const markets = program.command('markets').description('Market data');
-const marketClient = new PolymarketMarketClient(config);
+const marketClient = new AugurMarketClient(config);
 
 markets
   .command('list')
@@ -693,71 +694,52 @@ markets
 
 markets
   .command('tokens <id>')
-  .description('Fetch token IDs from CLOB API (needed for trading)')
+  .description('Show share tokens for an Augur market')
   .action(async (id) => {
-    const { PolymarketCLOBClient } = await import('../execution/polymarket/clob.js');
-    const clobClient = new PolymarketCLOBClient(config);
+    const marketClient = new AugurMarketClient(config);
 
     console.log(`Fetching token IDs for: ${id}`);
     console.log('─'.repeat(50));
 
     try {
-      const market = await clobClient.getMarket(id);
-      console.log(`Condition ID: ${market.condition_id}`);
-      console.log(`Negative Risk: ${market.neg_risk ?? false}`);
+      const market = await marketClient.getMarket(id);
+      console.log(`Market ID: ${market.id}`);
+      console.log(`Platform: ${market.platform}`);
+      if (market.augur) {
+        console.log(`Factory: ${market.augur.marketFactory}`);
+        console.log(`Index: ${market.augur.marketIndex}`);
+        console.log(`Type: ${market.augur.type}`);
+        console.log(`Share tokens: ${market.augur.shareTokens.length}`);
+        market.augur.shareTokens.forEach((token, idx) => {
+          console.log(`  ${idx}: ${token}`);
+        });
+      }
       console.log(`\nTokens:`);
-      if (market.tokens && market.tokens.length > 0) {
-        for (const token of market.tokens) {
-          const priceStr = token.price ? ` @ ${token.price}` : '';
-          console.log(`  ${token.outcome}: ${token.token_id}${priceStr}`);
-        }
-      } else {
-        console.log('  No tokens found');
-      }
-
-      // Also try order book for price info
-      const firstToken = market.tokens?.[0];
-      if (firstToken) {
-        console.log(`\nOrder Book (first token):`);
-        try {
-          const book = await clobClient.getOrderBook(firstToken.token_id);
-          const bestBid = book.bids[0];
-          const bestAsk = book.asks[0];
-          if (bestBid) console.log(`  Best Bid: ${bestBid.price} (${bestBid.size} shares)`);
-          if (bestAsk) console.log(`  Best Ask: ${bestAsk.price} (${bestAsk.size} shares)`);
-          if (!bestBid && !bestAsk) console.log('  Empty order book');
-        } catch {
-          console.log('  Could not fetch order book');
-        }
-      }
+      console.log(`  Outcomes: ${market.outcomes.join(', ')}`);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      console.log('\nNote: The ID should be the condition_id from Polymarket.');
+      console.log('\nNote: The ID should be the Augur market id from the subgraph.');
       console.log('You can find this in the market URL or by using `thufir markets search`.');
     }
   });
 
 markets
-  .command('clob-status')
-  .description('Test CLOB API connectivity')
+  .command('augur-status')
+  .description('Test Augur subgraph connectivity')
   .action(async () => {
-    const { PolymarketCLOBClient } = await import('../execution/polymarket/clob.js');
-    const clobClient = new PolymarketCLOBClient(config);
+    const marketClient = new AugurMarketClient(config);
 
-    console.log('Testing CLOB API connectivity...');
+    console.log('Testing Augur subgraph connectivity...');
     console.log('─'.repeat(40));
-    console.log(`CLOB URL: ${config.polymarket.api.clob}`);
+    console.log(`Subgraph: ${config.augur?.subgraph}`);
 
     try {
-      const result = await clobClient.listMarkets();
-      console.log(`✓ Connected - ${result.data.length} markets returned`);
-
-      const sample = result.data[0];
-      if (sample) {
-        console.log(`\nSample market:`);
-        console.log(`  Condition ID: ${sample.condition_id}`);
-        console.log(`  Tokens: ${sample.tokens?.length ?? 0}`);
-        console.log(`  Neg Risk: ${sample.neg_risk ?? false}`);
+      const markets = await marketClient.listMarkets(3);
+      console.log(`✓ Connected - ${markets.length} markets returned`);
+      for (const sample of markets) {
+        console.log(`\nSample market: ${sample.question}`);
+        console.log(`  ID: ${sample.id}`);
+        console.log(`  Platform: ${sample.platform}`);
       }
     } catch (error) {
       console.error(`✗ Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -796,7 +778,7 @@ trade
       return;
     }
 
-    const marketClient = new PolymarketMarketClient(config);
+    const marketClient = new AugurMarketClient(config);
     const executor = await createExecutorForConfig(config);
     const limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
@@ -879,7 +861,7 @@ trade
       return;
     }
 
-    const marketClient = new PolymarketMarketClient(config);
+    const marketClient = new AugurMarketClient(config);
     const executor = await createExecutorForConfig(config);
     const limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
@@ -1003,7 +985,7 @@ program
     const canUseClob =
       config.execution.mode === 'live' && Boolean(process.env.THUFIR_WALLET_PASSWORD);
     if (canUseClob) {
-      const marketClient = new PolymarketMarketClient(config);
+      const marketClient = new AugurMarketClient(config);
       const executor = await createExecutorForConfig(config);
       const limiter = new DbSpendingLimitEnforcer({
         daily: config.wallet?.limits?.daily ?? 100,
@@ -1502,7 +1484,7 @@ intel
 
     let watchlistTitles: string[] = [];
     if (alertsConfig.watchlistOnly) {
-      const markets = new PolymarketMarketClient(config);
+      const markets = new AugurMarketClient(config);
       const watchlist = listWatchlist(50);
       for (const item of watchlist) {
         try {
@@ -1595,7 +1577,7 @@ program
   .action(async () => {
     const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { ConversationHandler } = await import('../core/conversation.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const readline = await import('node:readline');
 
     console.log('Starting Thufir chat...');
@@ -1603,7 +1585,7 @@ program
     console.log('Type "exit" or "quit" to end the conversation.\n');
 
     const llm = createLlmClient(config);
-    const marketClient = new PolymarketMarketClient(config);
+    const marketClient = new AugurMarketClient(config);
     const infoLlm = createTrivialTaskClient(config) ?? undefined;
     const conversation = new ConversationHandler(llm, marketClient, config, infoLlm);
     const userId = 'cli-user';
@@ -1673,11 +1655,11 @@ agent
     }
 
     const { createLlmClient } = await import('../core/llm.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const { SessionStore } = await import('../memory/session_store.js');
 
     const llm = createLlmClient(config);
-    const marketClient = new PolymarketMarketClient(config);
+    const marketClient = new AugurMarketClient(config);
     const executor = await createExecutorForConfig(config, options.password);
     const limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
@@ -1758,7 +1740,7 @@ agent
           { mode: 'FULL_AGENT', critical: false, reason: 'mentat_report', source: 'cli' },
           () =>
             runMentatScan({
-              system: config.agent?.mentatSystem ?? 'Polymarket',
+              system: config.agent?.mentatSystem ?? 'Augur',
               llm,
               marketClient,
               marketQuery: config.agent?.mentatMarketQuery,
@@ -1786,7 +1768,7 @@ program
   .action(async (market, options) => {
     const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { ConversationHandler } = await import('../core/conversation.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const ora = await import('ora');
 
     console.log(`Analyzing market: ${market}`);
@@ -1796,7 +1778,7 @@ program
 
     try {
       const llm = createLlmClient(config);
-      const markets = new PolymarketMarketClient(config);
+      const markets = new AugurMarketClient(config);
       const infoLlm = createTrivialTaskClient(config) ?? undefined;
       const conversation = new ConversationHandler(llm, markets, config, infoLlm);
 
@@ -1834,7 +1816,7 @@ mentat
   .option('--no-store', 'Do not store results')
   .action(async (options) => {
     const { createLlmClient } = await import('../core/llm.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const { runMentatScan, formatMentatScan } = await import('../mentat/scan.js');
     const ora = await import('ora');
 
@@ -1842,7 +1824,7 @@ mentat
 
     try {
       const llm = createLlmClient(config);
-      const markets = new PolymarketMarketClient(config);
+      const markets = new AugurMarketClient(config);
 
       const scan = await runMentatScan({
         system: String(options.system),
@@ -1873,7 +1855,7 @@ mentat
   .option('--query <query>', 'Search query for markets')
   .option('--intel-limit <number>', 'Recent intel items to include', '40')
   .action(async (options) => {
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const { collectMentatSignals } = await import('../mentat/scan.js');
     const { computeDetectorBundle } = await import('../mentat/detectors.js');
     const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
@@ -1884,7 +1866,7 @@ mentat
     try {
       let detectors: ReturnType<typeof computeDetectorBundle> | undefined;
       if (options.refresh) {
-        const markets = new PolymarketMarketClient(config);
+        const markets = new AugurMarketClient(config);
         const signals = await collectMentatSignals({
           system: String(options.system),
           marketClient: markets,
@@ -1916,7 +1898,7 @@ program
   .action(async (topicParts) => {
     const { createLlmClient, createTrivialTaskClient } = await import('../core/llm.js');
     const { ConversationHandler } = await import('../core/conversation.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const ora = await import('ora');
 
     const topic = topicParts.join(' ');
@@ -1927,7 +1909,7 @@ program
 
     try {
       const llm = createLlmClient(config);
-      const markets = new PolymarketMarketClient(config);
+      const markets = new AugurMarketClient(config);
       const infoLlm = createTrivialTaskClient(config) ?? undefined;
       const conversation = new ConversationHandler(llm, markets, config, infoLlm);
 
@@ -1950,7 +1932,7 @@ program
   .description('Get today\'s top 10 trading opportunities')
   .action(async () => {
     const { createLlmClient } = await import('../core/llm.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const { generateDailyReport, formatDailyReport } = await import('../core/opportunities.js');
     const ora = await import('ora');
 
@@ -1958,7 +1940,7 @@ program
 
     try {
       const llm = createLlmClient(config);
-      const markets = new PolymarketMarketClient(config);
+      const markets = new AugurMarketClient(config);
 
       const report = await generateDailyReport(llm, markets, config);
       spinner.stop();
@@ -1976,13 +1958,13 @@ auto
   .description('Show autonomous mode status')
   .action(async () => {
     const { createLlmClient } = await import('../core/llm.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const { PaperExecutor } = await import('../execution/modes/paper.js');
     const { DbSpendingLimitEnforcer } = await import('../execution/wallet/limits_db.js');
     const { AutonomousManager } = await import('../core/autonomous.js');
 
     const llm = createLlmClient(config);
-    const markets = new PolymarketMarketClient(config);
+    const markets = new AugurMarketClient(config);
     const executor = new PaperExecutor();
     const limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
@@ -2031,7 +2013,7 @@ auto
   .description('Generate full daily report')
   .action(async () => {
     const { createLlmClient } = await import('../core/llm.js');
-    const { PolymarketMarketClient } = await import('../execution/polymarket/markets.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
     const { PaperExecutor } = await import('../execution/modes/paper.js');
     const { DbSpendingLimitEnforcer } = await import('../execution/wallet/limits_db.js');
     const { AutonomousManager } = await import('../core/autonomous.js');
@@ -2041,7 +2023,7 @@ auto
 
     try {
       const llm = createLlmClient(config);
-      const markets = new PolymarketMarketClient(config);
+      const markets = new AugurMarketClient(config);
       const executor = new PaperExecutor();
       const limiter = new DbSpendingLimitEnforcer({
         daily: config.wallet?.limits?.daily ?? 100,
@@ -2242,6 +2224,143 @@ memory
     }
     const pruned = pruneChatMessages(days);
     console.log(`Pruned ${pruned} chat message(s).`);
+  });
+
+// ============================================================================
+// Technical Analysis Commands
+// ============================================================================
+
+program
+  .command('ta <symbol>')
+  .description('Show technical snapshot for a symbol (e.g., BTC/USDT)')
+  .option('-t, --timeframe <tf>', 'Timeframe (1m|5m|15m|1h|4h|1d)')
+  .option('-l, --limit <number>', 'Candle limit (default: 120)', '120')
+  .action(async (symbol, options) => {
+    const { getTechnicalSnapshot } = await import('../technical/snapshot.js');
+    const timeframe =
+      (options.timeframe as string | undefined) ??
+      config.technical?.timeframes?.[0] ??
+      '1h';
+
+    const snapshot = await getTechnicalSnapshot({
+      config,
+      symbol,
+      timeframe: timeframe as Timeframe,
+      limit: Number(options.limit) || 120,
+    });
+
+    console.log(`\nTechnical Snapshot: ${snapshot.symbol} (${snapshot.timeframe})`);
+    console.log(`Price: ${snapshot.price}`);
+    console.log(`Bias: ${snapshot.overallBias} (confidence ${snapshot.confidence.toFixed(2)})`);
+    console.log('Indicators:');
+    for (const indicator of snapshot.indicators) {
+      const value = Array.isArray(indicator.value)
+        ? indicator.value.map((v) => Number(v).toFixed(4)).join(', ')
+        : Number(indicator.value).toFixed(4);
+      console.log(`- ${indicator.name}: ${indicator.signal} (${value})`);
+    }
+  });
+
+program
+  .command('signals')
+  .description('Generate technical + news signals for configured symbols')
+  .option('-s, --symbol <symbol>', 'Symbol override (e.g., BTC/USDT)')
+  .option('-t, --timeframe <tf>', 'Timeframe override')
+  .option('--map-augur', 'Map signals to Augur crypto markets', false)
+  .action(async (options) => {
+    const { getTechnicalSnapshot } = await import('../technical/snapshot.js');
+    const { buildTradeSignal } = await import('../technical/signals.js');
+    const { mapSignalToAugurMarket } = await import('../technical/augur.js');
+    const { AugurMarketClient } = await import('../execution/augur/markets.js');
+
+    const symbols = options.symbol
+      ? [String(options.symbol)]
+      : config.technical?.symbols ?? ['BTC/USDT'];
+    const timeframes = (options.timeframe
+      ? [String(options.timeframe)]
+      : config.technical?.timeframes ?? ['1h']) as Timeframe[];
+
+    let augurMarkets = [] as Array<import('../execution/markets.js').Market>;
+    if (options.mapAugur && config.augur?.enabled) {
+      const marketClient = new AugurMarketClient(config);
+      augurMarkets = await marketClient.listMarkets(50);
+    }
+
+    for (const symbol of symbols) {
+      for (const timeframe of timeframes) {
+        const snapshot = await getTechnicalSnapshot({
+          config,
+          symbol,
+          timeframe,
+          limit: 120,
+        });
+        const signal = await buildTradeSignal({
+          config,
+          snapshot,
+          timeframe: snapshot.timeframe,
+        });
+
+        console.log(`\nSignal: ${signal.symbol} (${signal.timeframe})`);
+        console.log(`Direction: ${signal.direction} (confidence ${signal.confidence.toFixed(2)})`);
+        console.log(`Scores: technical=${signal.technicalScore.toFixed(2)} news=${signal.newsScore.toFixed(2)} onchain=${signal.onChainScore.toFixed(2)}`);
+        console.log(`Entry: ${signal.entryPrice.toFixed(2)} Stop: ${signal.stopLoss.toFixed(2)} TP: ${signal.takeProfit.map((v) => v.toFixed(2)).join(', ')}`);
+
+        if (options.mapAugur && augurMarkets.length > 0) {
+          const decision = mapSignalToAugurMarket(signal, augurMarkets);
+          if (decision.action === 'bet') {
+            console.log(`Augur bet: ${decision.marketId} ${decision.outcome} size=${decision.size?.toFixed(4)} (${decision.reason})`);
+          } else {
+            console.log(`Augur bet: skip (${decision.reason})`);
+          }
+        }
+      }
+    }
+  });
+
+program
+  .command('strategy <name>')
+  .description('Run a named strategy against current signals')
+  .option('-s, --symbol <symbol>', 'Symbol override (e.g., BTC/USDT)')
+  .option('-t, --timeframe <tf>', 'Timeframe override')
+  .action(async (name, options) => {
+    const { getTechnicalSnapshot } = await import('../technical/snapshot.js');
+    const { buildTradeSignal } = await import('../technical/signals.js');
+    const { getStrategy } = await import('../technical/strategies.js');
+
+    const strategy = getStrategy(String(name));
+    if (!strategy) {
+      console.log('Unknown strategy. Available: trend_following, mean_reversion, news_catalyst');
+      process.exitCode = 1;
+      return;
+    }
+
+    const symbols = options.symbol
+      ? [String(options.symbol)]
+      : config.technical?.symbols ?? ['BTC/USDT'];
+    const timeframes = (options.timeframe
+      ? [String(options.timeframe)]
+      : strategy.timeframes) as Timeframe[];
+
+    for (const symbol of symbols) {
+      for (const timeframe of timeframes) {
+        const snapshot = await getTechnicalSnapshot({
+          config,
+          symbol,
+          timeframe,
+          limit: 120,
+        });
+        const signal = await buildTradeSignal({
+          config,
+          snapshot,
+          timeframe: snapshot.timeframe,
+        });
+
+        const shouldEnter = strategy.shouldEnter(signal);
+        console.log(`\n${strategy.name} ${symbol} (${timeframe}) => ${shouldEnter ? 'ENTER' : 'SKIP'}`);
+        console.log(`Direction: ${signal.direction} confidence ${signal.confidence.toFixed(2)}`);
+        console.log(`Scores: technical=${signal.technicalScore.toFixed(2)} news=${signal.newsScore.toFixed(2)} onchain=${signal.onChainScore.toFixed(2)}`);
+      }
+    }
   });
 
 // ============================================================================

@@ -1,6 +1,6 @@
-# Polymarket Setup Guide
+# Augur Turbo Setup Guide
 
-This guide walks you through setting up Thufir to trade on Polymarket.
+This guide walks you through setting up Thufir to trade on Augur Turbo.
 
 ## Prerequisites
 
@@ -8,8 +8,8 @@ This guide walks you through setting up Thufir to trade on Polymarket.
    - USDC (for trading)
    - Small amount of MATIC (~$5 for gas fees)
 
-2. **Polymarket Account** (optional but recommended):
-   - Go to [polymarket.com](https://polymarket.com)
+2. **Augur Turbo Account** (optional but recommended):
+   - Go to [augur.com](https://augur.com)
    - Connect your wallet
    - This helps you verify positions in their UI
 
@@ -101,14 +101,14 @@ thufir trade buy "Some Market" YES --amount 5
 thufir trade buy "Some Market" YES --amount 1
 ```
 
-## Polymarket API Details
+## Augur Turbo API Details
 
 ### Endpoints Used
 
 | Endpoint | Purpose |
 |----------|---------|
-| `https://gamma-api.polymarket.com` | Market data, prices, outcomes |
-| `https://clob.polymarket.com` | Order submission (CLOB = Central Limit Order Book) |
+| `https://gamma-api.augur.com` | Market data, prices, outcomes |
+| `https://clob.augur.com` | Order submission (CLOB = Central Limit Order Book) |
 
 ### Authentication
 
@@ -118,7 +118,7 @@ Thufir handles authentication automatically:
 2. **Subsequent trades**: Uses cached credentials
 3. **Credentials expire**: Auto-renewed when needed
 
-You don't need to manually create API keys on Polymarket.
+You don't need to manually create API keys on Augur Turbo.
 
 ### Order Flow
 
@@ -129,7 +129,7 @@ You don't need to manually create API keys on Polymarket.
 2. Spending limits checked (daily, per-trade)
          │
          ▼
-3. Address whitelist verified (Polymarket contracts only)
+3. Address whitelist verified (Augur Turbo contracts only)
          │
          ▼
 4. Order built using EIP-712 typed data signing
@@ -141,7 +141,7 @@ You don't need to manually create API keys on Polymarket.
 6. Signed order submitted to CLOB API
          │
          ▼
-7. Polymarket matches order on-chain
+7. Augur Turbo matches order on-chain
          │
          ▼
 8. Position recorded in Thufir memory
@@ -153,7 +153,7 @@ You don't need to manually create API keys on Polymarket.
 |------|-------------|----------|
 | `paper` | Simulated trades, no real money | Testing, practice, calibration tracking |
 | `webhook` | Forwards decisions to external URL | Custom execution, external signing service |
-| `live` | Real trades on Polymarket | Production trading |
+| `live` | Real trades on Augur Turbo | Production trading |
 
 ## Security Architecture
 
@@ -173,7 +173,7 @@ Any transaction to other addresses is **blocked**.
 ### Defense Layers
 
 1. **Spending Limits**: Daily and per-trade caps
-2. **Address Whitelist**: Only Polymarket contracts
+2. **Address Whitelist**: Only Augur Turbo contracts
 3. **Encrypted Keystore**: AES-256-GCM encryption
 4. **Password Protection**: Required for decryption
 

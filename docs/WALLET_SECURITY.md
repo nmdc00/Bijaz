@@ -4,9 +4,9 @@ This document describes the security architecture for Thufir's crypto wallet int
 
 ## Overview
 
-Thufir requires a Polygon wallet with USDC to execute trades on Polymarket. This is the most security-critical component of the system.
+Thufir requires a Polygon wallet with USDC to execute trades on Augur Turbo. This is the most security-critical component of the system.
 
-**Principle:** The wallet should be a "hot wallet" with limited funds, used exclusively for Polymarket trading. Never store more than you're willing to lose.
+**Principle:** The wallet should be a "hot wallet" with limited funds, used exclusively for Augur Turbo trading. Never store more than you're willing to lose.
 
 ## Security Architecture
 
@@ -23,7 +23,7 @@ Thufir requires a Polygon wallet with USDC to execute trades on Polymarket. This
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  LAYER 2: Address Whitelist                                 │
-│  • Only Polymarket contract addresses allowed               │
+│  • Only Augur Turbo contract addresses allowed               │
 │  • NO external transfers permitted                          │
 │  • Whitelist is hardcoded, not configurable                 │
 └─────────────────────────────────────────────────────────────┘
@@ -60,7 +60,7 @@ Thufir requires a Polygon wallet with USDC to execute trades on Polymarket. This
 - Compromised password (use a strong, unique password)
 - Sophisticated memory-reading malware (use dedicated machine if concerned)
 - $5 wrench attack (physical coercion)
-- Polymarket itself being compromised
+- Augur Turbo itself being compromised
 
 ## Implementation Details
 
@@ -124,13 +124,13 @@ The address whitelist is **hardcoded** and cannot be modified by configuration:
 
 // These are the ONLY addresses the wallet can interact with
 export const POLYMARKET_WHITELIST = Object.freeze([
-  // Polymarket CTF Exchange (Polygon)
+  // Augur Turbo CTF Exchange (Polygon)
   '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E',
 
-  // Polymarket Neg Risk CTF Exchange
+  // Augur Turbo Neg Risk CTF Exchange
   '0xC5d563A36AE78145C45a50134d48A1215220f80a',
 
-  // Polymarket Neg Risk Adapter
+  // Augur Turbo Neg Risk Adapter
   '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296',
 
   // USDC on Polygon (for approvals)
@@ -241,7 +241,7 @@ class CooldownEnforcer {
 
 ## Live Execution Mode
 
-When you set `execution.mode: live` in your config, Thufir will execute real trades on Polymarket using your wallet. This requires:
+When you set `execution.mode: live` in your config, Thufir will execute real trades on Augur Turbo using your wallet. This requires:
 
 1. **Wallet Setup**: Create or import a wallet using `thufir wallet create` or `thufir wallet import`
 2. **Password**: Set `THUFIR_WALLET_PASSWORD` environment variable with your keystore password
@@ -260,7 +260,7 @@ When you set `execution.mode: live` in your config, Thufir will execute real tra
 ┌─────────────────────────────────────────────────────────────┐
 │  LiveExecutor checks:                                       │
 │  1. Spending limits (daily & per-trade)                     │
-│  2. Address whitelist (Polymarket contracts only)           │
+│  2. Address whitelist (Augur Turbo contracts only)           │
 │  3. Wallet balance                                          │
 └─────────────────────────┬───────────────────────────────────┘
                           │
@@ -275,7 +275,7 @@ When you set `execution.mode: live` in your config, Thufir will execute real tra
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  CLOB API Submission:                                       │
-│  • Signed order sent to Polymarket CLOB                     │
+│  • Signed order sent to Augur Turbo CLOB                     │
 │  • API credentials derived from wallet signature            │
 │  • Response logged and position recorded                    │
 └─────────────────────────────────────────────────────────────┘
@@ -293,7 +293,7 @@ execution:
   mode: webhook
   webhookUrl: "https://your-service.com/execute"
 
-# Live mode - real Polymarket trades
+# Live mode - real Augur Turbo trades
 execution:
   mode: live
 ```

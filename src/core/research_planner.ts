@@ -1,7 +1,7 @@
 import type { LlmClient } from './llm.js';
 import { withExecutionContextIfMissing } from './llm_infra.js';
 import type { ThufirConfig } from './config.js';
-import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { Market, AugurMarketClient } from '../execution/augur/markets.js';
 import { listWatchlist } from '../memory/watchlist.js';
 import { listIntelByIds } from '../intel/store.js';
 import { ToolRegistry } from './tools.js';
@@ -117,7 +117,7 @@ function formatIntelList(
 
 export async function runResearchPlan(params: {
   config: ThufirConfig;
-  marketClient: PolymarketMarketClient;
+  marketClient: AugurMarketClient;
   subject: { id?: string; question: string; category?: string };
   plan: ResearchPlan;
   tools?: ToolRegistry;

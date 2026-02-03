@@ -7,7 +7,7 @@
 
 import type { LlmClient, ChatMessage } from './llm.js';
 import type { ThufirConfig } from './config.js';
-import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { Market, AugurMarketClient } from '../execution/augur/markets.js';
 import { listCalibrationSummaries } from '../memory/calibration.js';
 import { listPredictions } from '../memory/predictions.js';
 import { listWatchlist } from '../memory/watchlist.js';
@@ -238,7 +238,7 @@ export class ConversationHandler {
   private infoLlm?: LlmClient;
   private agenticLlm?: LlmClient;
   private agenticOpenAi?: LlmClient;
-  private marketClient: PolymarketMarketClient;
+  private marketClient: AugurMarketClient;
   private config: ThufirConfig;
   private sessions: SessionStore;
   private chatVectorStore: ChatVectorStore;
@@ -249,7 +249,7 @@ export class ConversationHandler {
 
   constructor(
     llm: LlmClient,
-    marketClient: PolymarketMarketClient,
+    marketClient: AugurMarketClient,
     config: ThufirConfig,
     infoLlm?: LlmClient,
     toolContext?: ToolExecutorContext,
@@ -535,7 +535,7 @@ export class ConversationHandler {
   private async runForcedTooling(message: string): Promise<string> {
     const text = message.toLowerCase();
     const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio)\b/.test(text);
-    const wantsTrade = /\b(trade|bet|order|place|execute|polymarket|clob)\b/.test(text);
+    const wantsTrade = /\b(trade|bet|order|place|execute|augur|amm)\b/.test(text);
     if (!wantsWallet && !wantsTrade) {
       return '';
     }
@@ -571,7 +571,7 @@ export class ConversationHandler {
   private async runToolFirstGuard(message: string): Promise<string> {
     const text = message.toLowerCase();
     const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
-    const wantsMarket = /\b(price|odds|market|polymarket|probability|volume|liquidity|bid|ask)\b/.test(text);
+    const wantsMarket = /\b(price|odds|market|augur|probability|volume|liquidity|bid|ask)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
 
     if (!wantsNews && !wantsMarket && !wantsTime) {
@@ -1037,7 +1037,7 @@ ${contextBlock}`.trim();
       const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
 
       const scan = await runMentatScan({
-        system: this.config.agent?.mentatSystem ?? 'Polymarket',
+        system: this.config.agent?.mentatSystem ?? 'Augur',
         llm: this.llm,
         marketClient: this.marketClient,
         marketQuery: this.config.agent?.mentatMarketQuery,

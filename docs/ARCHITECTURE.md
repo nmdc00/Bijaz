@@ -40,7 +40,7 @@ Thufir is built as a layered system with clear separation of concerns:
 │     INTEL LAYER       │ │   MEMORY LAYER    │ │   EXECUTION LAYER     │
 │  ───────────────────  │ │ ───────────────── │ │ ───────────────────── │
 │                       │ │                   │ │                       │
-│  Data Sources:        │ │  Prediction DB:   │ │  Polymarket:          │
+│  Data Sources:        │ │  Prediction DB:   │ │  Augur Turbo:          │
 │  • NewsAPI            │ │  • Predictions    │ │  • Market Data API    │
 │  • Twitter/X API      │ │  • Outcomes       │ │  • Order Execution    │
 │  • RSS Aggregator     │ │  • Reasoning Logs │ │  • Position Mgmt      │
@@ -231,7 +231,7 @@ interface IntelSource {
 class NewsAPISource implements IntelSource { }
 class TwitterSource implements IntelSource { }
 class RSSSource implements IntelSource { }
-class PolymarketCommentsSource implements IntelSource { }
+class Augur TurboCommentsSource implements IntelSource { }
 class CustomWebhookSource implements IntelSource { }
 ```
 
@@ -253,7 +253,7 @@ intel:
         - politics-pundits
         - crypto-analysts
       keywords:
-        - polymarket
+        - augur
         - prediction market
       refreshInterval: 60
 
@@ -412,12 +412,12 @@ Every prediction stores its full reasoning chain:
 
 ### 6. Execution Layer
 
-Handles all interactions with Polymarket and wallet management.
+Handles all interactions with Augur Turbo and wallet management.
 
-#### 6.1 Polymarket Integration
+#### 6.1 Augur Turbo Integration
 
 ```typescript
-interface PolymarketClient {
+interface Augur TurboClient {
   // Market data
   getMarkets(filter?: MarketFilter): Promise<Market[]>;
   getMarket(marketId: string): Promise<Market>;
@@ -493,7 +493,7 @@ interface WalletInfo {
 │                          ▼                              │
 │  ┌─────────────────────────────────────────────────┐    │
 │  │              Address Whitelist                  │    │
-│  │  • Only Polymarket contracts allowed            │    │
+│  │  • Only Augur Turbo contracts allowed            │    │
 │  │  • NO external withdrawals permitted            │    │
 │  └─────────────────────────────────────────────────┘    │
 │                          │                              │
@@ -526,8 +526,8 @@ wallet:
 
   addresses:
     whitelist:
-      - "0x..."  # Polymarket CTF Exchange
-      - "0x..."  # Polymarket Neg Risk Exchange
+      - "0x..."  # Augur Turbo CTF Exchange
+      - "0x..."  # Augur Turbo Neg Risk Exchange
     # NO other addresses allowed
 ```
 
@@ -635,7 +635,7 @@ User: "Buy $50 on Tesla deliveries YES"
          │
          ▼
 ┌─────────────────────────────────────────────────────┐
-│ 6. Submit to Polymarket                            │
+│ 6. Submit to Augur Turbo                            │
 │    • Send signed order to DEX                      │
 │    • Wait for confirmation                         │
 └─────────────────────────────────────────────────────┘
@@ -684,10 +684,10 @@ User: "Buy $50 on Tesla deliveries YES"
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
          │                    │                    │
-         │ Channels           │ Intel APIs         │ Polymarket
+         │ Channels           │ Intel APIs         │ Augur Turbo
          ▼                    ▼                    ▼
     ┌─────────┐          ┌─────────┐          ┌─────────┐
-    │WhatsApp │          │ NewsAPI │          │Polymarket│
+    │WhatsApp │          │ NewsAPI │          │Augur Turbo│
     │Telegram │          │Twitter  │          │   API    │
     │ etc.    │          │ etc.    │          │          │
     └─────────┘          └─────────┘          └─────────┘
@@ -705,7 +705,7 @@ User: "Buy $50 on Tesla deliveries YES"
 | Vector DB (optional) | ChromaDB | Advanced search at scale |
 | Database | SQLite (dev) / Postgres (prod) | Simple start, scale later |
 | Wallet | ethers.js | Standard Ethereum library |
-| Polymarket | @polymarket/sdk | Official SDK |
+| Augur Turbo | @augur/sdk | Official SDK |
 
 ## Future Considerations
 

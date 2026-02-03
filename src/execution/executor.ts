@@ -1,4 +1,4 @@
-import type { Market } from './polymarket/markets.js';
+import type { Market } from './markets.js';
 
 export interface TradeDecision {
   action: 'buy' | 'sell' | 'hold';
@@ -13,6 +13,19 @@ export interface TradeResult {
   message: string;
 }
 
+export interface Order {
+  id: string;
+  marketId: string;
+  outcome?: 'YES' | 'NO';
+  side?: 'buy' | 'sell';
+  price?: number | null;
+  amount?: number | null;
+  status?: string;
+  createdAt?: string;
+}
+
 export interface ExecutionAdapter {
   execute(market: Market, decision: TradeDecision): Promise<TradeResult>;
+  getOpenOrders(): Promise<Order[]>;
+  cancelOrder(id: string): Promise<void>;
 }

@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 
-import type { ExecutionAdapter, TradeDecision, TradeResult } from '../executor.js';
-import type { Market } from '../polymarket/markets.js';
+import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../executor.js';
+import type { Market } from '../markets.js';
 import { createPrediction, recordExecution } from '../../memory/predictions.js';
 import { recordTrade } from '../../memory/trades.js';
 import { logWalletOperation } from '../../memory/audit.js';
@@ -76,5 +76,13 @@ export class WebhookExecutor implements ExecutionAdapter {
     });
 
     return { executed: true, message: 'Trade forwarded to webhook executor.' };
+  }
+
+  async getOpenOrders(): Promise<Order[]> {
+    return [];
+  }
+
+  async cancelOrder(_id: string): Promise<void> {
+    throw new Error('Order cancellation is not supported for webhook execution.');
   }
 }

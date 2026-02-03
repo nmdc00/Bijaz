@@ -1,5 +1,5 @@
 import type { ThufirConfig } from './config.js';
-import { PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import { AugurMarketClient } from '../execution/augur/markets.js';
 import { listUnresolvedPredictions } from '../memory/predictions.js';
 import { recordOutcome } from '../memory/calibration.js';
 
@@ -8,7 +8,7 @@ export async function resolveOutcomes(
   limit = 25
 ): Promise<number> {
   let updated = 0;
-  const marketClient = new PolymarketMarketClient(config);
+  const marketClient = new AugurMarketClient(config);
   const unresolved = listUnresolvedPredictions(limit);
   for (const prediction of unresolved) {
     try {

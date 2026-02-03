@@ -1,6 +1,6 @@
 # Thufir Progress
 
-Last updated: 2026-02-01
+Last updated: 2026-02-02
 
 ## North Star
 Autonomous trading assistant for prediction markets with strong guardrails:
@@ -43,10 +43,88 @@ These docs formalize Thufir’s next evolution: from “autonomous trader + chat
 
 ### V1: Autonomous Core (Week 1-2) - MOSTLY COMPLETE
 - [ ] Fork Clawdbot (gateway + sessions) - using lightweight substitute
-- [x] Basic Polymarket read/write
+- [x] ~~Basic Polymarket read/write~~ → Migrating to Augur Turbo
 - [x] AI trade decision loop (autonomous scanning)
 - [x] Record every prediction + trade
 - [x] **Conversational chat** - free-form discussion about events/markets
+
+### V8: Platform Migration - Augur Turbo
+- [x] **Augur Client** - GraphQL subgraph queries for markets
+- [x] **AMM Trader** - Direct contract interaction for buy/sell
+- [x] **Execution Adapter** - `AugurLiveExecutor` implementing `ExecutionAdapter`
+- [x] **Market Normalization** - Convert Augur markets to common `Market` interface
+
+See: `docs/AUGUR_IMPLEMENTATION.md`
+
+### V9: Technical Analysis Pivot (NEW PRIORITY)
+**Goal:** Add short-term crypto trading capabilities via technical analysis.
+
+**Phase 1: Price Data + Indicators**
+- [x] Add CCXT for exchange data (Binance, etc.)
+- [x] Implement PriceService with OHLCV caching
+- [x] Add `technicalindicators` package
+- [x] Core indicators: RSI, MACD, Bollinger Bands, Moving Averages
+- [x] CLI: `thufir ta <symbol>` - show technical snapshot
+
+**Phase 2: Signal Generation**
+- [x] TechnicalSnapshot generation across timeframes
+- [x] Signal scoring algorithm (-1 to 1)
+- [x] Fuse with existing news sentiment (weighted combination)
+- [x] CLI: `thufir signals` - show current signals
+
+**Phase 3: On-Chain Data**
+- [ ] Coinglass integration (funding rates, OI, liquidations)
+- [ ] Whale Alert integration (large transactions)
+- [x] On-chain signal scoring (neutral placeholder)
+- [x] Add to signal fusion (neutral when disabled)
+
+**Phase 4: Strategy Framework**
+- [x] Strategy interface (entry/exit conditions, risk params)
+- [x] Implement strategies: Trend Following, Mean Reversion, News Catalyst
+- [x] CLI: `thufir strategy <name>` - run strategy scan
+
+**Phase 5: Execution**
+- [x] Map technical signals to Augur crypto markets (basic strike/timeframe match)
+- [ ] Signal → Bet decision → Execute flow
+- [ ] Track signal accuracy in calibration system
+
+**Architecture:**
+```
+Intel Layer (news) + Technical Layer (TA) + On-Chain Data
+                    ↓
+              Signal Fusion
+                    ↓
+         Strategy Evaluation
+                    ↓
+    Augur Turbo Crypto Markets (BTC/ETH above/below X)
+```
+
+See: `docs/TECHNICAL_ANALYSIS_PIVOT.md`
+
+### V10: Manifold Markets Integration (Calibration Platform)
+**Goal:** Use Manifold (play money) to calibrate event-driven predictions before real money.
+
+- [ ] **ManifoldClient** - Full API wrapper (markets, bets, users)
+- [ ] **ManifoldExecutor** - Implements `ExecutionAdapter` interface
+- [ ] **Market Normalization** - Convert to common `Market` interface
+- [ ] **Calibration Tracker** - Brier scores, calibration curves
+- [ ] **CLI Commands** - `thufir manifold search/bet/portfolio/calibration`
+- [ ] **Connect to Intel Layer** - Cross-reference news with Manifold markets
+- [ ] **Shadow Mode** - Record predictions without betting (baseline)
+- [ ] **Autonomous Mode** - Small bets, tune thresholds
+
+**Why Manifold:**
+- Play money (Mana) = zero financial risk
+- General event markets (politics, tech, culture) = matches Thufir's intel-driven design
+- Free API, generous rate limits
+- Perfect for calibration before real money deployment
+
+**Calibration Workflow:**
+1. Shadow mode (record predictions, no bets) → baseline data
+2. Small bets (10-50 mana) → tune confidence thresholds
+3. Full deployment → apply learnings to real money
+
+See: `docs/MANIFOLD_INTEGRATION.md`
 
 ### V2: Memory & Calibration (Week 3-4) - COMPLETE
 - [x] Track outcomes when markets resolve
@@ -60,7 +138,7 @@ These docs formalize Thufir’s next evolution: from “autonomous trader + chat
 - [x] NewsAPI integration
 - [x] Twitter/X integration
 - [x] Google News (SerpAPI) integration
-- [x] Polymarket comments integration
+- [ ] Polymarket comments integration (removed in Augur migration)
 - [x] Vector search (SQLite embeddings)
 
 ### V4: Proactive Intelligence (NEW PRIORITY)
@@ -114,6 +192,62 @@ These docs formalize Thufir’s next evolution: from “autonomous trader + chat
   - Enforced across non-user-facing and background paths
 
 ## Current Work Log
+
+### 2026-02-02 (Session 14)
+- **Platform Migration Decision: Polymarket → Augur Turbo**
+  - Polymarket CLOB authentication issues (L2 HMAC signature rejected despite correct implementation)
+  - Investigated Polymarket Python/TypeScript clients - found `owner` field should be API key, signature inside order object
+  - Still getting 401 errors - likely access restrictions
+  - Decided to migrate to Augur Turbo as alternative
+
+- **Augur Research**
+  - Augur Turbo: AMM on Polygon, sports/crypto markets, active but limited
+  - Augur v2: Ethereum mainnet, rebooting, low activity
+  - Created `docs/AUGUR_IMPLEMENTATION.md` - migration guide
+
+- **Strategic Pivot: Short-Term Trading + Technical Analysis**
+  - Problem: Thufir designed for event-driven prediction (news → bet on outcomes)
+  - Augur Turbo markets (crypto prices, sports) don't match intel-driven approach
+  - Solution: Add technical analysis layer for short-term crypto trading
+  - Created `docs/TECHNICAL_ANALYSIS_PIVOT.md` - comprehensive design
+
+- **Technical Analysis Components Designed**
+  - Price Data: CCXT for OHLCV from Binance/exchanges
+  - Indicators: RSI, MACD, Bollinger Bands, Moving Averages (via `technicalindicators` npm)
+  - On-Chain: Coinglass (funding rates, OI), Whale Alert
+  - Signal Fusion: Combine TA + existing news sentiment + on-chain
+  - Strategies: Trend Following, Mean Reversion, News Catalyst
+  - Execution: Map signals to Augur crypto markets
+
+- **New Architecture**
+  - Intel Layer (existing) + Technical Layer (new) → Signal Fusion → Strategy → Execute
+  - Keeps existing news/intel as confirming factor
+  - TA becomes primary signal generator for short-term trades
+
+### 2026-02-02 (Session 15)
+- **Augur Turbo Implementation (Core)**
+  - Added Augur subgraph client + normalizer + AMM trader + live executor.
+  - Replaced Polymarket live execution paths with `AugurLiveExecutor`.
+  - Added Augur config defaults + wallet RPC alignment.
+- **Market/Tool Updates**
+  - Market cache sync now uses Augur client.
+  - Tools updated to describe Augur market IDs and AMM behavior.
+  - Order book + price history tools return Augur-safe snapshots.
+- **Infra Cleanup**
+  - Removed Polymarket stream usage from gateway (Augur has no stream).
+  - Updated whitelist to Augur contracts and tests accordingly.
+  - Removed Polymarket-specific tests (comments, stream) and updated remaining tests/configs.
+  - Removed Polymarket execution/comment code paths and added Augur subgraph positions to portfolio output.
+  - Updated ExecutionAdapter contract (open orders + cancel) and aligned docs.
+  - Implemented technical analysis pivot core: price service, indicators, signals, strategy CLI, Augur mapping.
+
+- **Manifold Markets Integration (Calibration Platform)**
+  - Play money (Mana) for zero-risk calibration
+  - General event markets match Thufir's intel-driven design
+  - Created `docs/MANIFOLD_INTEGRATION.md` - full implementation guide
+  - API: REST + WebSocket, 500 req/min, free
+  - Calibration tracking: Brier scores, calibration curves, overconfidence ratio
+  - Workflow: Shadow mode → Small bets → Full deployment → Apply to real money
 
 ### 2026-02-01 (Session 12)
 - **LLM infrastructure hardening**

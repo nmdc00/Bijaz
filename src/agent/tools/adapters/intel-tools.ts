@@ -85,7 +85,7 @@ export const twitterSearchTool: ToolDefinition = {
   description: 'Search recent tweets via Twitter API. Use to find real-time discussion on a topic.',
   category: 'intel',
   schema: z.object({
-    query: z.string().describe('Search query for Twitter (e.g., "Polymarket", "Palantir earnings")'),
+    query: z.string().describe('Search query for Twitter (e.g., "Augur", "Palantir earnings")'),
     limit: z.number().optional().describe('Maximum number of results (default: 10, max: 50)'),
   }),
   execute: async (input, ctx): Promise<ToolResult> => {
@@ -97,7 +97,7 @@ export const twitterSearchTool: ToolDefinition = {
 };
 
 /**
- * Comments get tool - fetch recent Polymarket comments from intel store.
+ * Comments get tool - fetch recent market discussion items from intel store.
  */
 const commentsGetSchema = z.object({
   query: z.string().optional().describe('Optional search query to filter comments'),
@@ -107,7 +107,7 @@ const commentsGetSchema = z.object({
 
 export const commentsGetTool: ToolDefinition = {
   name: 'comments.get',
-  description: 'Get recent Polymarket comments stored in intel. Useful for market sentiment and user discussion.',
+  description: 'Get recent market discussion items stored in intel. Useful for sentiment and user discussion.',
   category: 'intel',
   schema: commentsGetSchema,
   execute: async (input, _ctx): Promise<ToolResult> => {
@@ -120,9 +120,10 @@ export const commentsGetTool: ToolDefinition = {
       ? searchIntel({ query, limit, fromDays })
       : listRecentIntel(Math.max(limit * 2, 20));
 
-    const comments = items.filter((item) =>
-      item.source.toLowerCase().includes('polymarket')
-    );
+    const comments = items.filter((item) => {
+      const source = item.source?.toLowerCase?.() ?? '';
+      return source.includes('comment') || source.includes('discussion');
+    });
 
     return { success: true, data: comments.slice(0, limit) };
   },

@@ -11,7 +11,7 @@
 import { EventEmitter } from 'eventemitter3';
 import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
-import type { PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { AugurMarketClient } from '../execution/augur/markets.js';
 import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { checkExposureLimits } from './exposure.js';
@@ -77,7 +77,7 @@ export interface AutonomousEvents {
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
   private llm: LlmClient;
-  private marketClient: PolymarketMarketClient;
+  private marketClient: AugurMarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
   private logger: Logger;
@@ -92,7 +92,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
   constructor(
     llm: LlmClient,
-    marketClient: PolymarketMarketClient,
+    marketClient: AugurMarketClient,
     executor: ExecutionAdapter,
     limiter: DbSpendingLimitEnforcer,
     thufirConfig: ThufirConfig,

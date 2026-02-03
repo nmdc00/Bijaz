@@ -43,13 +43,6 @@ describe('runIntelPipelineDetailed', () => {
         }
       },
     }));
-    vi.doMock('../../src/intel/polymarket_comments.js', () => ({
-      PolymarketCommentsFetcher: class {
-        async fetch() {
-          return [];
-        }
-      },
-    }));
     vi.doMock('../../src/intel/vectorstore.js', () => ({
       IntelVectorStore: class {
         async add() {

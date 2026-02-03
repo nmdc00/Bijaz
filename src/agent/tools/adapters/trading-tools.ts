@@ -24,7 +24,7 @@ export const placeBetTool: ToolDefinition = {
   description: 'Place a bet on a prediction market. Use after researching a market to execute a trade. System spending/exposure limits apply automatically.',
   category: 'trading',
   schema: z.object({
-    market_id: z.string().describe('The Polymarket market ID to bet on'),
+    market_id: z.string().describe('The Augur market ID to bet on'),
     outcome: z.enum(['YES', 'NO']).describe('The outcome to bet on (YES or NO)'),
     amount: z.number().positive().describe('Amount in USD to bet'),
     reasoning: z.string().optional().describe('Your reasoning for this bet (stored for calibration tracking)'),
@@ -45,7 +45,7 @@ export const tradePlaceTool: ToolDefinition = {
   description: 'Place a bet on a prediction market. Use after researching a market to execute a trade. System spending/exposure limits apply automatically.',
   category: 'trading',
   schema: z.object({
-    market_id: z.string().describe('The Polymarket market ID to bet on'),
+    market_id: z.string().describe('The Augur market ID to bet on'),
     outcome: z.enum(['YES', 'NO']).describe('The outcome to bet on (YES or NO)'),
     amount: z.number().positive().describe('Amount in USD to bet'),
     reasoning: z.string().optional().describe('Your reasoning for this bet (stored for calibration tracking)'),
@@ -94,6 +94,22 @@ export const getPredictionsTool: ToolDefinition = {
 };
 
 /**
+ * Get open orders tool - view open orders from the executor.
+ */
+export const getOpenOrdersTool: ToolDefinition = {
+  name: 'get_open_orders',
+  description: 'Get currently open orders. For Augur AMM trades this will typically be empty.',
+  category: 'trading',
+  schema: z.object({}),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('get_open_orders', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  sideEffects: false,
+  requiresConfirmation: false,
+  cacheTtlMs: 10_000,
+};
+
+/**
  * All trading tools.
  */
 export const tradingTools: ToolDefinition[] = [
@@ -101,4 +117,5 @@ export const tradingTools: ToolDefinition[] = [
   tradePlaceTool,
   getPortfolioTool,
   getPredictionsTool,
+  getOpenOrdersTool,
 ];

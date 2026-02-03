@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import type { Market } from '../src/execution/polymarket/markets.js';
+import type { Market } from '../src/execution/augur/markets.js';
 import type { ExecutionAdapter, TradeResult } from '../src/execution/executor.js';
 import type { SpendingLimitEnforcer, LimitCheckResult } from '../src/execution/wallet/limits.js';
 
@@ -30,6 +30,13 @@ const mockMarket: Market = {
   prices: { Yes: 0.65, No: 0.35 },
   volume: 10000,
   category: 'weather',
+  platform: 'augur',
+  augur: {
+    marketFactory: '0xFactory',
+    marketIndex: 1,
+    type: 'crypto',
+    shareTokens: [],
+  },
 };
 
 function createMockMarketClient() {
@@ -43,6 +50,8 @@ function createMockMarketClient() {
 function createMockExecutor(executeResult: TradeResult): ExecutionAdapter {
   return {
     execute: vi.fn().mockResolvedValue(executeResult),
+    getOpenOrders: vi.fn().mockResolvedValue([]),
+    cancelOrder: vi.fn().mockResolvedValue(undefined),
   };
 }
 

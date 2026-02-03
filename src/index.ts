@@ -7,10 +7,10 @@
 import { loadConfig, type ThufirConfig } from './core/config.js';
 import { createLlmClient, createTrivialTaskClient } from './core/llm.js';
 import { ConversationHandler } from './core/conversation.js';
-import { PolymarketMarketClient } from './execution/polymarket/markets.js';
+import { AugurMarketClient } from './execution/augur/markets.js';
 import { PaperExecutor } from './execution/modes/paper.js';
 import { WebhookExecutor } from './execution/modes/webhook.js';
-import { LiveExecutor } from './execution/modes/live.js';
+import { AugurLiveExecutor } from './execution/modes/augur-live.js';
 import type { ExecutionAdapter } from './execution/executor.js';
 import { DbSpendingLimitEnforcer } from './execution/wallet/limits_db.js';
 import { listCalibrationSummaries } from './memory/calibration.js';
@@ -29,7 +29,7 @@ export {
   assertWhitelisted,
   WhitelistError,
   getWhitelistedAddresses,
-  POLYMARKET_WHITELIST,
+  AUGUR_WHITELIST,
 } from './execution/wallet/whitelist.js';
 
 export {
@@ -72,7 +72,7 @@ export class Thufir {
   private config!: ThufirConfig;
   private userId: string;
   private llm?: ReturnType<typeof createLlmClient>;
-  private marketClient?: PolymarketMarketClient;
+  private marketClient?: AugurMarketClient;
   private executor?: ExecutionAdapter;
   private limiter?: DbSpendingLimitEnforcer;
   private conversation?: ConversationHandler;
@@ -98,7 +98,7 @@ export class Thufir {
     }
 
     this.llm = createLlmClient(config);
-    this.marketClient = new PolymarketMarketClient(config);
+    this.marketClient = new AugurMarketClient(config);
     this.executor = this.createExecutor(config);
     this.limiter = new DbSpendingLimitEnforcer({
       daily: config.wallet?.limits?.daily ?? 100,
@@ -119,7 +119,7 @@ export class Thufir {
           'Live execution mode requires THUFIR_WALLET_PASSWORD environment variable'
         );
       }
-      return new LiveExecutor({ config, password });
+      return new AugurLiveExecutor({ config, password });
     }
 
     if (config.execution.mode === 'webhook' && config.execution.webhookUrl) {

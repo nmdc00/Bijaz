@@ -41,7 +41,7 @@ const ConfigSchema = z.object({
     maxPromptChars: z.number().default(120000),
     maxToolResultChars: z.number().default(8000),
     mentatAutoScan: z.boolean().default(false),
-    mentatSystem: z.string().default('Polymarket'),
+    mentatSystem: z.string().default('Augur'),
     mentatMarketQuery: z.string().optional(),
     mentatMarketLimit: z.number().optional(),
     mentatIntelLimit: z.number().optional(),
@@ -123,31 +123,70 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
-  polymarket: z.object({
-    api: z.object({
-      gamma: z.string(),
-      clob: z.string(),
-    }),
-    rpcUrl: z.string().optional(),
-    credentials: z
-      .object({
-        apiKey: z.string(),
-        secret: z.string(),
-        passphrase: z.string(),
-      })
-      .optional(),
-    stream: z
-      .object({
-        enabled: z.boolean().default(false),
-        wsUrl: z.string().optional(),
-        watchlistOnly: z.boolean().default(true),
-        maxWatchlist: z.number().default(50),
-        reconnectSeconds: z.number().default(10),
-        staleAfterSeconds: z.number().default(180),
-        refreshIntervalSeconds: z.number().default(300),
-      })
-      .default({}),
-  }),
+  polymarket: z
+    .object({
+      rpcUrl: z.string().optional(),
+    })
+    .optional(),
+  augur: z
+    .object({
+      enabled: z.boolean().default(true),
+      subgraph: z.string().default('https://api.thegraph.com/subgraphs/name/augurproject/augur-turbo-matic'),
+      rpcUrl: z.string().optional(),
+      slippageTolerance: z.number().default(0.02),
+      marketTypes: z.array(z.enum(['crypto', 'sports', 'mma'])).default(['crypto']),
+    })
+    .default({}),
+  technical: z
+    .object({
+      enabled: z.boolean().default(false),
+      priceSource: z.enum(['binance', 'coinbase', 'coingecko']).default('binance'),
+      symbols: z.array(z.string()).default(['BTC/USDT', 'ETH/USDT']),
+      timeframes: z.array(z.enum(['1m', '5m', '15m', '1h', '4h', '1d'])).default(['1h', '4h', '1d']),
+      indicators: z
+        .object({
+          rsi: z
+            .object({
+              period: z.number().default(14),
+              overbought: z.number().default(70),
+              oversold: z.number().default(30),
+            })
+            .default({}),
+          macd: z
+            .object({
+              fast: z.number().default(12),
+              slow: z.number().default(26),
+              signal: z.number().default(9),
+            })
+            .default({}),
+          bollingerBands: z
+            .object({
+              period: z.number().default(20),
+              stdDev: z.number().default(2),
+            })
+            .default({}),
+        })
+        .default({}),
+      signals: z
+        .object({
+          minConfidence: z.number().default(0.5),
+          weights: z
+            .object({
+              technical: z.number().default(0.5),
+              news: z.number().default(0.3),
+              onChain: z.number().default(0.2),
+            })
+            .default({}),
+        })
+        .default({}),
+      onChain: z
+        .object({
+          enabled: z.boolean().default(false),
+          coinglassApiKey: z.string().optional(),
+        })
+        .default({}),
+    })
+    .default({ enabled: false }),
   intel: z
     .object({
       embeddings: z
@@ -202,19 +241,6 @@ const ConfigSchema = z.object({
               keywords: z.array(z.string()).default([]),
               accounts: z.array(z.string()).default([]),
               maxTweetsPerFetch: z.number().default(25),
-            })
-            .default({ enabled: false }),
-          polymarketComments: z
-            .object({
-              enabled: z.boolean().default(false),
-              trackWatchlist: z.boolean().default(true),
-              watchlistLimit: z.number().default(50),
-              trackTopMarkets: z.number().default(0),
-              maxCommentsPerMarket: z.number().default(20),
-              holdersOnly: z.boolean().default(false),
-              getPositions: z.boolean().default(false),
-              order: z.string().optional(),
-              ascending: z.boolean().optional(),
             })
             .default({ enabled: false }),
         })
@@ -468,7 +494,7 @@ const ConfigSchema = z.object({
           time: z.string().default('09:00'),
           intervalMinutes: z.number().optional(),
           channels: z.array(z.string()).default([]),
-          system: z.string().default('Polymarket'),
+          system: z.string().default('Augur'),
           marketQuery: z.string().optional(),
           marketLimit: z.number().default(25),
           intelLimit: z.number().default(40),

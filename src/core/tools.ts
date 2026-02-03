@@ -1,5 +1,5 @@
 import type { ThufirConfig } from './config.js';
-import type { Market, PolymarketMarketClient } from '../execution/polymarket/markets.js';
+import type { Market, AugurMarketClient } from '../execution/augur/markets.js';
 import { listCalibrationSummaries } from '../memory/calibration.js';
 import { listMarketCategories } from '../memory/market_cache.js';
 import { listRecentIntel, searchIntel } from '../intel/store.js';
@@ -9,7 +9,7 @@ export type ToolResult = Record<string, unknown>;
 
 export interface ToolContext {
   config: ThufirConfig;
-  marketClient: PolymarketMarketClient;
+  marketClient: AugurMarketClient;
 }
 
 type ToolHandler = (ctx: ToolContext, params: Record<string, unknown>) => Promise<ToolResult>;
