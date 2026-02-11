@@ -40,6 +40,62 @@ export const THUFIR_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'proactive_search_run',
+    description:
+      'Run the iterative proactive web research loop now and store findings. Use when user asks for proactive scouting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        max_queries: {
+          type: 'number',
+          description: 'Maximum number of queries to run (default: 8)',
+        },
+        iterations: {
+          type: 'number',
+          description: 'Research rounds (default: 2, max: 3)',
+        },
+        watchlist_limit: {
+          type: 'number',
+          description: 'Watchlist seed limit (default: 20)',
+        },
+        use_llm: {
+          type: 'boolean',
+          description: 'Use LLM for query refinement/follow-up generation (default: true)',
+        },
+        recent_intel_limit: {
+          type: 'number',
+          description: 'Recent intel seed limit (default: 25)',
+        },
+        extra_queries: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Additional seed queries',
+        },
+        include_learned_queries: {
+          type: 'boolean',
+          description: 'Include learned high-signal query seeds (default: true)',
+        },
+        learned_query_limit: {
+          type: 'number',
+          description: 'Max learned query seeds to include (default: 8)',
+        },
+        web_limit_per_query: {
+          type: 'number',
+          description: 'Web results per query (default: 5)',
+        },
+        fetch_per_query: {
+          type: 'number',
+          description: 'Fetched pages per query (default: 1)',
+        },
+        fetch_max_chars: {
+          type: 'number',
+          description: 'Max chars kept per fetched page (default: 4000)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'calibration_stats',
     description:
       "Get the user's historical trade calibration stats (accuracy, track record).",

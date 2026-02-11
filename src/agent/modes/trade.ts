@@ -27,6 +27,7 @@ const TRADE_TOOLS = [
   'intel.search',
   'intel_recent',
   'twitter_search',
+  'proactive_search_run',
   'comments.get',
 
   // Memory tools
