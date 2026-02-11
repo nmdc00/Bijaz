@@ -97,6 +97,42 @@ export const twitterSearchTool: ToolDefinition = {
 };
 
 /**
+ * Proactive search run tool - trigger iterative proactive research loop now.
+ */
+export const proactiveSearchRunTool: ToolDefinition = {
+  name: 'proactive_search_run',
+  description:
+    'Run iterative proactive web research now and store findings into intel memory.',
+  category: 'intel',
+  schema: z.object({
+    max_queries: z.number().optional().describe('Maximum queries to run (default: 8)'),
+    iterations: z.number().optional().describe('Research rounds (default: 2, max: 3)'),
+    watchlist_limit: z.number().optional().describe('Watchlist seed limit (default: 20)'),
+    use_llm: z.boolean().optional().describe('Use LLM for query refinement/follow-up'),
+    recent_intel_limit: z.number().optional().describe('Recent intel seed limit (default: 25)'),
+    extra_queries: z.array(z.string()).optional().describe('Additional seed queries'),
+    include_learned_queries: z
+      .boolean()
+      .optional()
+      .describe('Include learned query seeds (default: true)'),
+    learned_query_limit: z.number().optional().describe('Max learned seeds (default: 8)'),
+    web_limit_per_query: z.number().optional().describe('Web results per query (default: 5)'),
+    fetch_per_query: z.number().optional().describe('Fetched pages per query (default: 1)'),
+    fetch_max_chars: z.number().optional().describe('Max chars per fetched page (default: 4000)'),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall(
+      'proactive_search_run',
+      input as Record<string, unknown>,
+      toExecutorContext(ctx)
+    );
+  },
+  sideEffects: true,
+  requiresConfirmation: false,
+  cacheTtlMs: 0,
+};
+
+/**
  * Comments get tool - fetch recent market discussion items from intel store.
  */
 const commentsGetSchema = z.object({
@@ -140,5 +176,6 @@ export const intelTools: ToolDefinition[] = [
   intelSearchAliasTool,
   intelRecentTool,
   twitterSearchTool,
+  proactiveSearchRunTool,
   commentsGetTool,
 ];

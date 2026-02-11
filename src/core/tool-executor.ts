@@ -379,6 +379,62 @@ export async function executeToolCall(
         return { success: true, data: formatIntelForTool(items) };
       }
 
+      case 'proactive_search_run': {
+        const { runProactiveSearch, formatProactiveSummary } = await import('./proactive_search.js');
+
+        const toNumber = (value: unknown): number | undefined => {
+          if (value === undefined || value === null || value === '') return undefined;
+          const n = Number(value);
+          return Number.isFinite(n) ? n : undefined;
+        };
+        const toBoolean = (value: unknown): boolean | undefined => {
+          if (value === undefined || value === null) return undefined;
+          if (typeof value === 'boolean') return value;
+          if (typeof value === 'string') {
+            const v = value.trim().toLowerCase();
+            if (v === 'true') return true;
+            if (v === 'false') return false;
+          }
+          return undefined;
+        };
+
+        const extraQueriesRaw =
+          toolInput.extra_queries ?? toolInput.extraQueries ?? [];
+        const extraQueries = Array.isArray(extraQueriesRaw)
+          ? extraQueriesRaw.map((entry) => String(entry).trim()).filter(Boolean)
+          : [];
+
+        const result = await runProactiveSearch(ctx.config, {
+          maxQueries: toNumber(toolInput.max_queries ?? toolInput.maxQueries),
+          iterations: toNumber(toolInput.iterations),
+          watchlistLimit: toNumber(toolInput.watchlist_limit ?? toolInput.watchlistLimit),
+          useLlm: toBoolean(toolInput.use_llm ?? toolInput.useLlm),
+          recentIntelLimit: toNumber(
+            toolInput.recent_intel_limit ?? toolInput.recentIntelLimit
+          ),
+          extraQueries,
+          includeLearnedQueries: toBoolean(
+            toolInput.include_learned_queries ?? toolInput.includeLearnedQueries
+          ),
+          learnedQueryLimit: toNumber(
+            toolInput.learned_query_limit ?? toolInput.learnedQueryLimit
+          ),
+          webLimitPerQuery: toNumber(
+            toolInput.web_limit_per_query ?? toolInput.webLimitPerQuery
+          ),
+          fetchPerQuery: toNumber(toolInput.fetch_per_query ?? toolInput.fetchPerQuery),
+          fetchMaxChars: toNumber(toolInput.fetch_max_chars ?? toolInput.fetchMaxChars),
+        });
+
+        return {
+          success: true,
+          data: {
+            ...result,
+            summary: formatProactiveSummary(result),
+          },
+        };
+      }
+
       case 'signal_price_vol_regime': {
         const symbol = String(toolInput.symbol ?? '');
         if (!symbol) {
