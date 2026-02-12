@@ -200,10 +200,10 @@ const ConfigSchema = z.object({
             .object({
               tokenMessenger: z
                 .string()
-                .default('0x9daF8cA8E7D0c6Aef7c3D06d1C0c9A9b32a0cC7c'),
+                .default('0x9daF8c91AEFAE50b9c0E69629D3F6Ca40cA3B3FE'),
               messageTransmitter: z
                 .string()
-                .default('0xF3be935536e7a0E6dE3881F5fC6B7A3068F70e34'),
+                .default('0xF3be9355363857F3e001be68856A2f96b4C39Ba9'),
             })
             .default({}),
           arbitrum: z
