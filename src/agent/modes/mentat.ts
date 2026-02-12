@@ -46,6 +46,8 @@ const MENTAT_TOOLS = [
   'calculator',
   'system_exec',
   'system_install',
+  'tools_list',
+  'tools.list',
 
   // Portfolio analysis (no trading)
   'get_portfolio',

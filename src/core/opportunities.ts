@@ -213,7 +213,7 @@ Return a JSON array with your analysis.`;
             llm,
             toolRegistry: registry,
             identity,
-            toolContext: { config, marketClient },
+            toolContext: { config, marketClient, agentToolRegistry: registry } as any,
             memorySystem: {
               getRelevantContext: async () => prompt,
             },

@@ -1517,6 +1517,7 @@ agent
       marketClient,
       executor,
       limiter,
+      agentToolRegistry: registry,
     };
 
     const registry = new AgentToolRegistry();

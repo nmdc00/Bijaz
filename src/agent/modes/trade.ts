@@ -48,6 +48,8 @@ const TRADE_TOOLS = [
   'calculator',
   'system_exec',
   'system_install',
+  'tools_list',
+  'tools.list',
 
   // Trading tools
   'get_portfolio',

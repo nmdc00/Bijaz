@@ -132,6 +132,55 @@ export const systemInstallTool: ToolDefinition = {
 };
 
 /**
+ * Tools list - enumerate tools currently registered/available to the agent.
+ */
+export const toolsListTool: ToolDefinition = {
+  name: 'tools_list',
+  description: 'List available tools in the current agent session (name, category, confirmation/side-effects).',
+  category: 'system',
+  schema: z.object({
+    category: z
+      .enum(['markets', 'intel', 'memory', 'trading', 'web', 'system'])
+      .optional()
+      .describe('Optional category filter'),
+    read_only: z.boolean().optional().describe('Only include tools without side effects'),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    const registry = (ctx as any).agentToolRegistry as ToolContext['agentToolRegistry'] | undefined;
+    if (!registry) {
+      return { success: false, error: 'Tool registry not available in context' };
+    }
+    const category = (input as any).category;
+    const readOnly = Boolean((input as any).read_only ?? false);
+
+    const tools = registry.list().filter((t) => {
+      if (category && t.category !== category) return false;
+      if (readOnly && t.sideEffects) return false;
+      return true;
+    });
+
+    return {
+      success: true,
+      data: {
+        count: tools.length,
+        tools,
+      },
+    };
+  },
+  sideEffects: false,
+  requiresConfirmation: false,
+  cacheTtlMs: 1_000,
+};
+
+/**
+ * tools.list alias (dot-notation).
+ */
+export const toolsListAliasTool: ToolDefinition = {
+  ...toolsListTool,
+  name: 'tools.list',
+};
+
+/**
  * All system tools.
  */
 export const systemTools: ToolDefinition[] = [
@@ -140,4 +189,6 @@ export const systemTools: ToolDefinition[] = [
   calculatorTool,
   systemExecTool,
   systemInstallTool,
+  toolsListTool,
+  toolsListAliasTool,
 ];

@@ -338,7 +338,10 @@ export class ConversationHandler {
             llm: this.llm,
             toolRegistry: this.orchestratorRegistry,
             identity: this.orchestratorIdentity,
-            toolContext: this.toolContext,
+            toolContext: {
+              ...(this.toolContext as any),
+              agentToolRegistry: this.orchestratorRegistry,
+            },
             memorySystem,
             onConfirmation: async (_prompt, toolName) => {
               if (tradeToolNames.has(toolName)) {
