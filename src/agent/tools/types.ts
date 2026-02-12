@@ -36,6 +36,21 @@ export interface ToolContext {
   executor?: unknown;
   /** Spending limiter */
   limiter?: unknown;
+  /**
+   * Optional reference to the agent tool registry itself.
+   * This enables meta-tools like tools_list to introspect available tools.
+   */
+  agentToolRegistry?: {
+    listNames: (options?: unknown) => string[];
+    list: (options?: unknown) => Array<{
+      name: string;
+      description: string;
+      category: ToolCategory;
+      sideEffects: boolean;
+      requiresConfirmation: boolean;
+      cacheTtlMs: number;
+    }>;
+  };
 }
 
 /**

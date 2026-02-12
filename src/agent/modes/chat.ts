@@ -45,6 +45,8 @@ const CHAT_TOOLS = [
   'calculator',
   'system_exec',
   'system_install',
+  'tools_list',
+  'tools.list',
 
   // Portfolio viewing (no trading)
   'get_portfolio',

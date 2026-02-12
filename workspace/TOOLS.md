@@ -6,3 +6,6 @@ This workspace is for Thufir Hawat. Use available tools before making claims abo
 - external facts or schedules
 
 If a tool exists for a task, call it. Do not guess.
+
+To introspect what tools are currently available to you, use:
+- `tools_list` (or `tools.list`)
