@@ -152,6 +152,20 @@ export class ThufirAgent {
     const isCapabilityQuestion = this.isCapabilityQuestion(trimmed);
     const isAccessQuestion = this.isAccessQuestion(trimmed);
 
+    // Natural language "enable full auto" should not go through the LLM/tool loop.
+    // This prevents "allowed number of steps" failures on vague confirmations like "Go for it."
+    const nlFullAutoOn =
+      /\b(go\s+for\s+it|do\s+it|proceed|start|begin|enable)\b/i.test(trimmed) &&
+      /\b(autonomous|full\s*auto|auto[- ]?execute)\b/i.test(trimmed);
+    if (nlFullAutoOn) {
+      const autonomyEnabled = (this.config.autonomy as any)?.enabled === true;
+      if (!autonomyEnabled) {
+        return 'Autonomous trading is disabled in config. Set `autonomy.enabled: true`, then use /fullauto on.';
+      }
+      this.autonomous.setFullAuto(true);
+      return '🤖 Full autonomous mode ENABLED. Thufir will now auto-execute trades when edge is detected.';
+    }
+
     const tradeIntent = /\b(trade|buy|sell|long|short)\b/i.test(trimmed);
     if (tradeIntent && !trimmed.startsWith('/perp ')) {
       const autoEnabled =
