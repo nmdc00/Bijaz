@@ -53,3 +53,6 @@ Thumbs.db
 # Keep pnpm-lock.yaml
 .RATES_LLM.md
 RATES_LLM.md
+
+# Local-only Codex skills (do not commit deploy details)
+workspace/skills/

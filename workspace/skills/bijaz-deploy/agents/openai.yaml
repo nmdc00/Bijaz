@@ -1,4 +1,0 @@
-interface:
-  display_name: "Bijaz Deploy"
-  short_description: "Push, SSH deploy, restart thufir on bijaz"
-  default_prompt: "Deploy latest changes: commit/push, then update /opt/bijaz on 77.42.29.26 and restart thufir."
