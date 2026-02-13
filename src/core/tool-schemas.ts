@@ -548,6 +548,11 @@ export const THUFIR_TOOLS: Tool[] = [
         price: { type: 'number', description: 'Limit price (required for limit orders)' },
         leverage: { type: 'number', description: 'Leverage to apply' },
         reduce_only: { type: 'boolean', description: 'Reduce-only order' },
+        reasoning: {
+          type: 'string',
+          description:
+            'Optional trade rationale to store in the local journal (used for learning/audit).',
+        },
       },
       required: ['symbol', 'side', 'size'],
     },

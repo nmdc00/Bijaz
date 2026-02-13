@@ -635,10 +635,21 @@ export async function executeToolCall(
         const price = toolInput.price !== undefined ? Number(toolInput.price) : undefined;
         const leverage = toolInput.leverage !== undefined ? Number(toolInput.leverage) : undefined;
         const reduceOnly = Boolean(toolInput.reduce_only ?? false);
+        const reasoningRaw = toolInput.reasoning !== undefined ? String(toolInput.reasoning) : '';
+        const reasoning =
+          reasoningRaw.trim() ||
+          `perp_place_order(${symbol.toUpperCase()} ${side} size=${size}${orderType === 'limit' && Number.isFinite(price) ? ` price=${price}` : ''}${reduceOnly ? ' reduceOnly' : ''})`;
         if (!symbol || !size || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
+        if (orderType === 'limit' && (!Number.isFinite(price) || (price as number) <= 0)) {
+          return { success: false, error: 'Limit orders require a valid positive price' };
+        }
         const market = await ctx.marketClient.getMarket(symbol);
+        const notionalUsd =
+          typeof market.markPrice === 'number' && Number.isFinite(market.markPrice) && market.markPrice > 0
+            ? market.markPrice * size
+            : size;
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
           symbol,
@@ -647,6 +658,7 @@ export async function executeToolCall(
           leverage,
           reduceOnly,
           markPrice: market.markPrice ?? null,
+          notionalUsd,
           marketMaxLeverage:
             typeof market.metadata?.maxLeverage === 'number'
               ? (market.metadata.maxLeverage as number)
@@ -669,13 +681,17 @@ export async function executeToolCall(
               reasoning: `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
+              snapshot: {
+                requestedPrice: orderType === 'limit' ? price ?? null : null,
+                notionalUsd,
+              },
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
           return { success: false, error: riskCheck.reason ?? 'perp risk limits exceeded' };
         }
-        const limitCheck = await ctx.limiter.checkAndReserve(size);
+        const limitCheck = await ctx.limiter.checkAndReserve(notionalUsd);
         if (!limitCheck.allowed) {
           try {
             recordPerpTradeJournal({
@@ -693,6 +709,10 @@ export async function executeToolCall(
               reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
               outcome: 'blocked',
               error: limitCheck.reason ?? 'limit exceeded',
+              snapshot: {
+                requestedPrice: orderType === 'limit' ? price ?? null : null,
+                notionalUsd,
+              },
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
@@ -709,10 +729,11 @@ export async function executeToolCall(
           leverage,
           reduceOnly,
           confidence: 'medium' as const,
+          reasoning,
         };
         const result = await ctx.executor.execute(market, decision);
         if (!result.executed) {
-          ctx.limiter.release(size);
+          ctx.limiter.release(notionalUsd);
           try {
             const tradeId = recordPerpTrade({
               hypothesisId: null,
@@ -736,16 +757,20 @@ export async function executeToolCall(
               reduceOnly,
               markPrice: market.markPrice ?? null,
               confidence: 'medium',
-              reasoning: null,
+              reasoning: decision.reasoning ?? null,
               outcome: 'failed',
               error: result.message,
+              snapshot: {
+                requestedPrice: orderType === 'limit' ? price ?? null : null,
+                notionalUsd,
+              },
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
           return { success: false, error: result.message };
         }
-        ctx.limiter.confirm(size);
+        ctx.limiter.confirm(notionalUsd);
         try {
           const tradeId = recordPerpTrade({
             hypothesisId: null,
@@ -769,9 +794,13 @@ export async function executeToolCall(
             reduceOnly,
             markPrice: market.markPrice ?? null,
             confidence: 'medium',
-            reasoning: null,
+            reasoning: decision.reasoning ?? null,
             outcome: 'executed',
             message: result.message,
+            snapshot: {
+              requestedPrice: orderType === 'limit' ? price ?? null : null,
+              notionalUsd,
+            },
           });
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
