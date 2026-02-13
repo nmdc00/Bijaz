@@ -16,6 +16,8 @@ import {
   signalHyperliquidOrderflowImbalance,
 } from '../discovery/signals.js';
 import { listPerpTrades } from '../memory/perp_trades.js';
+import { recordPerpTrade } from '../memory/perp_trades.js';
+import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
 import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains.js';
@@ -651,10 +653,50 @@ export async function executeToolCall(
               : null,
         });
         if (!riskCheck.allowed) {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              orderType,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              confidence: null,
+              reasoning: `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`,
+              outcome: 'blocked',
+              error: riskCheck.reason ?? 'perp risk limits exceeded',
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
           return { success: false, error: riskCheck.reason ?? 'perp risk limits exceeded' };
         }
         const limitCheck = await ctx.limiter.checkAndReserve(size);
         if (!limitCheck.allowed) {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              orderType,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              confidence: null,
+              reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
+              outcome: 'blocked',
+              error: limitCheck.reason ?? 'limit exceeded',
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
           return { success: false, error: limitCheck.reason ?? 'limit exceeded' };
         }
         const decision: TradeDecision = {
@@ -671,9 +713,69 @@ export async function executeToolCall(
         const result = await ctx.executor.execute(market, decision);
         if (!result.executed) {
           ctx.limiter.release(size);
+          try {
+            const tradeId = recordPerpTrade({
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              price: market.markPrice ?? null,
+              leverage: leverage ?? null,
+              orderType,
+              status: 'failed',
+            });
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId,
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              orderType,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              confidence: 'medium',
+              reasoning: null,
+              outcome: 'failed',
+              error: result.message,
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
           return { success: false, error: result.message };
         }
         ctx.limiter.confirm(size);
+        try {
+          const tradeId = recordPerpTrade({
+            hypothesisId: null,
+            symbol,
+            side: side as 'buy' | 'sell',
+            size,
+            price: market.markPrice ?? null,
+            leverage: leverage ?? null,
+            orderType,
+            status: 'executed',
+          });
+          recordPerpTradeJournal({
+            kind: 'perp_trade_journal',
+            tradeId,
+            hypothesisId: null,
+            symbol,
+            side: side as 'buy' | 'sell',
+            size,
+            leverage: leverage ?? null,
+            orderType,
+            reduceOnly,
+            markPrice: market.markPrice ?? null,
+            confidence: 'medium',
+            reasoning: null,
+            outcome: 'executed',
+            message: result.message,
+          });
+        } catch {
+          // Best-effort journaling: never block trading due to local DB issues.
+        }
         return { success: true, data: result };
       }
 
@@ -775,6 +877,18 @@ export async function executeToolCall(
         try {
           const review = await buildTradeReview(ctx, symbol || undefined, limit);
           return { success: true, data: review };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          return { success: false, error: message };
+        }
+      }
+
+      case 'perp_trade_journal_list': {
+        const limit = Math.min(Math.max(Number(toolInput.limit ?? 50), 1), 200);
+        const symbol = String(toolInput.symbol ?? '').trim();
+        try {
+          const entries = listPerpTradeJournals({ symbol: symbol || undefined, limit });
+          return { success: true, data: { entries } };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };

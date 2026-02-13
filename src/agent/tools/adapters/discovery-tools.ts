@@ -227,6 +227,24 @@ export const tradeReviewTool: ToolDefinition = {
   ...READ_TOOL_META,
 };
 
+export const perpTradeJournalListTool: ToolDefinition = {
+  name: 'perp_trade_journal_list',
+  description: 'List recent perp trade journal entries (post-trade notes + metadata).',
+  category: 'intel',
+  schema: z.object({
+    symbol: z.string().optional(),
+    limit: z.number().optional(),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall(
+      'perp_trade_journal_list',
+      input as Record<string, unknown>,
+      toExecutorContext(ctx)
+    );
+  },
+  ...READ_TOOL_META,
+};
+
 export const discoveryTools: ToolDefinition[] = [
   perpMarketListTool,
   perpMarketGetTool,
@@ -238,6 +256,7 @@ export const discoveryTools: ToolDefinition[] = [
   positionAnalysisTool,
   discoveryReportTool,
   tradeReviewTool,
+  perpTradeJournalListTool,
   signalPriceVolRegimeTool,
   signalCrossAssetDivergenceTool,
   signalHyperliquidFundingOISkewTool,

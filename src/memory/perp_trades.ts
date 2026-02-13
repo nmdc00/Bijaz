@@ -16,9 +16,9 @@ export interface PerpTradeRecord extends PerpTradeInput {
   createdAt: string;
 }
 
-export function recordPerpTrade(input: PerpTradeInput): void {
+export function recordPerpTrade(input: PerpTradeInput): number {
   const db = openDatabase();
-  db.prepare(
+  const result = db.prepare(
     `
       INSERT INTO perp_trades (
         hypothesis_id,
@@ -50,6 +50,7 @@ export function recordPerpTrade(input: PerpTradeInput): void {
     orderType: input.orderType ?? null,
     status: input.status ?? null,
   });
+  return Number(result.lastInsertRowid ?? 0);
 }
 
 export function listPerpTrades(params?: { symbol?: string; limit?: number }): PerpTradeRecord[] {

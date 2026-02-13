@@ -294,6 +294,8 @@ export class ThufirAgent {
         const markPrice = market.markPrice ?? 0;
         const size = markPrice > 0 ? sizeUsd / markPrice : sizeUsd;
         const { checkPerpRiskLimits } = await import('../execution/perp-risk.js');
+        const { recordPerpTrade } = await import('../memory/perp_trades.js');
+        const { recordPerpTradeJournal } = await import('../memory/perp_trade_journal.js');
         const riskCheck = await checkPerpRiskLimits({
           config: this.config,
           symbol,
@@ -309,10 +311,50 @@ export class ThufirAgent {
               : null,
         });
         if (!riskCheck.allowed) {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              orderType: 'market',
+              reduceOnly: false,
+              markPrice: markPrice || null,
+              confidence: null,
+              reasoning: `Manual /perp blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`,
+              outcome: 'blocked',
+              error: riskCheck.reason ?? 'perp risk limits exceeded',
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
           return `Trade blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`;
         }
         const limitCheck = await this.limiter.checkAndReserve(sizeUsd);
         if (!limitCheck.allowed) {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              orderType: 'market',
+              reduceOnly: false,
+              markPrice: markPrice || null,
+              confidence: null,
+              reasoning: `Manual /perp blocked: ${limitCheck.reason}`,
+              outcome: 'blocked',
+              error: limitCheck.reason,
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
           return `Trade blocked: ${limitCheck.reason}`;
         }
         const decision = {
@@ -329,6 +371,37 @@ export class ThufirAgent {
           this.limiter.confirm(sizeUsd);
         } else {
           this.limiter.release(sizeUsd);
+        }
+        try {
+          const tradeId = recordPerpTrade({
+            hypothesisId: null,
+            symbol,
+            side: side as 'buy' | 'sell',
+            size,
+            price: markPrice || null,
+            leverage: leverage ?? null,
+            orderType: 'market',
+            status: result.executed ? 'executed' : 'failed',
+          });
+          recordPerpTradeJournal({
+            kind: 'perp_trade_journal',
+            tradeId,
+            hypothesisId: null,
+            symbol,
+            side: side as 'buy' | 'sell',
+            size,
+            leverage: leverage ?? null,
+            orderType: 'market',
+            reduceOnly: false,
+            markPrice: markPrice || null,
+            confidence: 'manual',
+            reasoning: `Manual /perp from ${sender}`,
+            outcome: result.executed ? 'executed' : 'failed',
+            message: result.executed ? result.message : null,
+            error: result.executed ? null : result.message,
+          });
+        } catch {
+          // Best-effort journaling: never block trading due to local DB issues.
         }
         return result.message;
       } catch (error) {

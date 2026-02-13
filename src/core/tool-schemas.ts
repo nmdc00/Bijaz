@@ -766,6 +766,18 @@ export const THUFIR_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'perp_trade_journal_list',
+    description: 'List recent perp trade journal entries (post-trade notes + metadata).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Optional symbol filter (e.g., ETH)' },
+        limit: { type: 'number', description: 'Number of entries to include (default: 50)' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'signal_price_vol_regime',
     description: 'Compute price/vol regime signals for a symbol.',
     input_schema: {

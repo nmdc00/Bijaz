@@ -16,6 +16,7 @@ import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
+import { recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
 import { getDailyPnLRollup } from './daily_pnl.js';
 import { openDatabase } from '../memory/db.js';
@@ -285,16 +286,36 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       } else {
         this.limiter.release(probeUsd);
       }
-      recordPerpTrade({
-        hypothesisId: expr.hypothesisId,
-        symbol,
-        side: expr.side,
-        size,
-        price: markPrice || null,
-        leverage: expr.leverage,
-        orderType: expr.orderType,
-        status: tradeResult.executed ? 'executed' : 'failed',
-      });
+      try {
+        const tradeId = recordPerpTrade({
+          hypothesisId: expr.hypothesisId,
+          symbol,
+          side: expr.side,
+          size,
+          price: markPrice || null,
+          leverage: expr.leverage,
+          orderType: expr.orderType,
+          status: tradeResult.executed ? 'executed' : 'failed',
+        });
+        recordPerpTradeJournal({
+          kind: 'perp_trade_journal',
+          tradeId,
+          hypothesisId: expr.hypothesisId ?? null,
+          symbol,
+          side: expr.side,
+          size,
+          leverage: expr.leverage ?? null,
+          orderType: expr.orderType ?? null,
+          reduceOnly: false,
+          markPrice: markPrice || null,
+          confidence: expr.confidence != null ? String(expr.confidence) : null,
+          reasoning: decision.reasoning ?? null,
+          outcome: tradeResult.executed ? 'executed' : 'failed',
+          message: tradeResult.message,
+        });
+      } catch {
+        // Best-effort journaling: never block trading due to local DB issues.
+      }
       outputs.push(tradeResult.message);
     }
 
