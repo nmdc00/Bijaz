@@ -46,6 +46,7 @@ import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import { isIP } from 'node:net';
 import { exec, spawn } from 'node:child_process';
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -2639,11 +2640,40 @@ async function fetchAndExtract(url: string, maxChars: number): Promise<ToolResul
  */
 async function isQmdAvailable(): Promise<boolean> {
   try {
-    await execAsync('qmd --version');
+    const cmd = resolveQmdCommand();
+    // qmd does not reliably support --version; use a cheap command that exits 0 when installed.
+    await execAsync(`${cmd} status`, { timeout: 5000 });
     return true;
   } catch {
     return false;
   }
+}
+
+function resolveQmdCommand(): string {
+  const fromEnv = (process.env.QMD_BIN ?? '').trim();
+  if (fromEnv) return fromEnv;
+
+  const candidates = [
+    'qmd',
+    join(homedir(), '.local', 'bin', 'qmd'),
+    join(homedir(), '.bun', 'bin', 'qmd'),
+    '/usr/local/bin/qmd',
+    '/usr/bin/qmd',
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === 'qmd') return candidate; // allow PATH resolution first
+    try {
+      if (existsSync(candidate)) {
+        accessSync(candidate, fsConstants.X_OK);
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return 'qmd';
 }
 
 /**
@@ -2683,12 +2713,13 @@ async function qmdQuery(
   }
 
   try {
-    const args = [mode, JSON.stringify(query), '--format', 'json', '--limit', String(limit)];
+    const cmd = resolveQmdCommand();
+    const args = [mode, JSON.stringify(query), '--json', '-n', String(limit)];
     if (collection) {
-      args.push('--collection', collection);
+      args.push('-c', JSON.stringify(collection));
     }
 
-    const { stdout, stderr } = await execAsync(`qmd ${args.join(' ')}`, {
+    const { stdout, stderr } = await execAsync(`${cmd} ${args.join(' ')}`, {
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -2750,7 +2781,8 @@ async function qmdIndex(
   try {
     // Create a temporary markdown file for QMD to index
     const filename = `${Date.now()}-${randomUUID().slice(0, 8)}.md`;
-    const collectionPath = join(knowledgePath, collection.replace('thufir-', ''));
+    const cmd = resolveQmdCommand();
+    const collectionPath = join(knowledgePath, collection);
     await mkdir(collectionPath, { recursive: true });
     const filepath = join(collectionPath, filename);
 
@@ -2767,11 +2799,28 @@ async function qmdIndex(
 
     await writeFile(filepath, frontmatter.join('\n'), 'utf-8');
 
-    // Run qmd embed to update embeddings
+    // Ensure the collection is registered with qmd (best-effort).
+    // qmd uses a persistent index DB, so we must add collections at least once.
     try {
-      await execAsync(`qmd embed --collection ${collection}`, {
-        timeout: 60000,
-      });
+      const { stdout } = await execAsync(`${cmd} collection list`, { timeout: 10000 });
+      if (!stdout.includes(collection)) {
+        await execAsync(
+          `${cmd} collection add ${JSON.stringify(collectionPath)} --name ${JSON.stringify(collection)} --mask "**/*.md"`,
+          { timeout: 30000 }
+        );
+      }
+    } catch {
+      // ignore
+    }
+
+    // Re-index and update embeddings (best-effort; BM25 indexing should still work even if embed fails).
+    try {
+      await execAsync(`${cmd} update`, { timeout: 60000 });
+    } catch {
+      // ignore
+    }
+    try {
+      await execAsync(`${cmd} embed`, { timeout: 120000 });
     } catch {
       // Embedding failure is non-fatal, content is still indexed for BM25 search
     }
