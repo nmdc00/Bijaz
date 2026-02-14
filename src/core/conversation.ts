@@ -466,9 +466,14 @@ export class ConversationHandler {
         // Call LLM
         const response = await this.completeWithFallback(messages, { temperature: 0.7 });
 
-        // Don't store empty responses (prevents history corruption from failed calls)
+        // Don't store empty responses (prevents history corruption from failed calls).
+        // Returning a user-facing message is better than throwing; empty can happen when
+        // LLM infra degrades to MONITOR_ONLY due to budget/cooldowns/rate limits.
         if (!response.content || response.content.trim() === '') {
-          throw new Error('LLM returned empty response');
+          return [
+            'LLM is temporarily unavailable (rate limit/cooldown/budget).',
+            'Try again in ~30-60 seconds.',
+          ].join(' ');
         }
 
         const userEntry: ChatMessage = { role: 'user', content: message };
