@@ -417,6 +417,43 @@ class RateLimitFailoverClient implements LlmClient {
   }
 }
 
+function resolveRateLimitFailover(config: ThufirConfig): { provider: 'anthropic' | 'openai'; model: string } {
+  const provider = (config.agent.rateLimitFallbackProvider ?? 'openai') as 'anthropic' | 'openai' | 'local';
+  if (provider === 'local') {
+    // Don't allow "local" as an automatic failover route for full agentic calls.
+    return { provider: 'openai', model: config.agent.rateLimitFallbackModel ?? config.agent.executorModel ?? 'gpt-5' };
+  }
+  const model =
+    config.agent.rateLimitFallbackModel ??
+    config.agent.executorModel ??
+    // Prefer gpt-5 because llm-mux previously rejected gpt-5.2 as unknown.
+    'gpt-5';
+  return { provider, model };
+}
+
+function wrapWithRateLimitFailoverIfNeeded(primary: LlmClient, config: ThufirConfig): LlmClient {
+  const primaryModel = primary.meta?.model ?? '';
+  const looksClaude = primaryModel.toLowerCase().includes('claude');
+  const explicit =
+    !!config.agent.rateLimitFallbackModel || !!config.agent.rateLimitFallbackProvider;
+  if (!looksClaude && !explicit) {
+    return primary;
+  }
+
+  const fallback = resolveRateLimitFailover(config);
+  // If the fallback is identical to primary, don't wrap.
+  if (primary.meta?.provider === fallback.provider && primary.meta?.model === fallback.model) {
+    return primary;
+  }
+
+  const fallbackRaw =
+    fallback.provider === 'anthropic'
+      ? (new AnthropicClient(config, fallback.model) as LlmClient)
+      : (new OpenAiClient(config, fallback.model) as LlmClient);
+  const fallbackClient = wrapWithInfra(fallbackRaw, config);
+  return new RateLimitFailoverClient([primary, fallbackClient], config);
+}
+
 function assertLocalProviderNotAllowed(
   provider: 'anthropic' | 'openai' | 'local',
   context: string
@@ -438,37 +475,8 @@ export function createLlmClient(config: ThufirConfig): LlmClient {
         : (new LocalClient(config) as LlmClient);
 
   const primary = wrapWithInfra(primaryRaw, config);
-
-  // If the configured model routes to Claude (direct or via proxy), allow automatic failover to a GPT model.
-  const looksClaude = (primaryRaw.meta?.model ?? '').toLowerCase().includes('claude');
-  const wantsFailover =
-    !!config.agent.rateLimitFallbackModel ||
-    !!config.agent.rateLimitFallbackProvider ||
-    looksClaude;
-
-  if (!wantsFailover) {
-    return wrapWithLimiter(primary);
-  }
-
-  const fallbackProvider = config.agent.rateLimitFallbackProvider ?? 'openai';
-  const fallbackModel =
-    config.agent.rateLimitFallbackModel ??
-    config.agent.executorModel ??
-    // Prefer gpt-5 because llm-mux previously rejected gpt-5.2 as unknown.
-    'gpt-5';
-
-  let fallbackRaw: LlmClient;
-  if (fallbackProvider === 'anthropic') {
-    fallbackRaw = new AnthropicClient(config, fallbackModel);
-  } else if (fallbackProvider === 'openai') {
-    fallbackRaw = new OpenAiClient(config, fallbackModel);
-  } else {
-    // Local is not permitted for primary reasoning; only allow if explicitly configured.
-    fallbackRaw = new LocalClient(config, fallbackModel);
-  }
-  const fallback = wrapWithInfra(fallbackRaw, config);
-
-  return wrapWithLimiter(new RateLimitFailoverClient([primary, fallback], config));
+  const withFailover = wrapWithRateLimitFailoverIfNeeded(primary, config);
+  return wrapWithLimiter(withFailover);
 }
 
 export function createOpenAiClient(
@@ -517,11 +525,16 @@ export function createAgenticExecutorClient(
     const primary = new AgenticAnthropicClient(config, toolContext, model);
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
     const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel);
-    return wrapWithLimiter(
-      wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+    const withinProvider = wrapWithInfra(
+      new FallbackLlmClient(primary, fallback, isRateLimitError, config),
+      config
     );
+    const withFailover = wrapWithRateLimitFailoverIfNeeded(withinProvider, config);
+    return wrapWithLimiter(withFailover);
   }
-  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config));
+  const primary = wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config);
+  const withFailover = wrapWithRateLimitFailoverIfNeeded(primary, config);
+  return wrapWithLimiter(withFailover);
 }
 
 export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null {
