@@ -465,33 +465,43 @@ export class ConversationHandler {
           return response;
         }
 
-        const forcedToolContext = await this.runForcedTooling(message);
-        const marketSnapshot = await this.buildMarketSnapshot(message);
-        const toolFirstContext = await this.runToolFirstGuard(message);
         const summary = this.sessions.getSummary(userId);
         const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
         const compactAfterTokens = this.config.memory?.compactAfterTokens ?? 12000;
         const keepRecent = this.config.memory?.keepRecentMessages ?? 12;
 
-        await this.sessions.compactIfNeeded({
-          userId,
-          llm: this.infoLlm ?? this.llm,
-          maxMessages: maxHistory,
-          compactAfterTokens,
-          keepRecent,
-        });
+        // Run all independent pre-LLM steps in parallel
+        const [
+          forcedToolContext,
+          marketSnapshot,
+          toolFirstContext,
+          ,
+          semanticIntelContext,
+          semanticChatContext,
+        ] = await Promise.all([
+          this.runForcedTooling(message),
+          this.buildMarketSnapshot(message),
+          this.runToolFirstGuard(message),
+          this.sessions.compactIfNeeded({
+            userId,
+            llm: this.infoLlm ?? this.llm,
+            maxMessages: maxHistory,
+            compactAfterTokens,
+            keepRecent,
+          }),
+          wantsNewsContext(message)
+            ? buildSemanticIntelContext(message, this.config)
+            : Promise.resolve(''),
+          message.trim().length >= 24
+            ? this.buildSemanticChatContext(message, userId)
+            : Promise.resolve(''),
+        ]);
 
         const history = this.sessions.buildContextMessages(userId, maxHistory);
 
         // Build context
         const userContext = buildUserContext(userId, this.config);
         const intelContext = buildIntelContext();
-        const semanticIntelContext = wantsNewsContext(message)
-          ? await buildSemanticIntelContext(message, this.config)
-          : '';
-        // Semantic chat retrieval can be expensive and is low value for very short prompts.
-        const semanticChatContext =
-          message.trim().length >= 24 ? await this.buildSemanticChatContext(message, userId) : '';
 
         // Build the full context for this turn
         const contextBlock = [
