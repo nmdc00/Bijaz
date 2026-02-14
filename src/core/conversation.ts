@@ -68,6 +68,8 @@ const SYSTEM_PROMPT_BASE = `## Operating Rules
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
 - If tool outputs are JSON, interpret them and respond with a concise narrative summary
+- Be concise by default. Avoid preambles and repetition.
+- If your reply would exceed ~3000 characters, summarize first and offer to continue.
 - Be conversational, not robotic - use markdown when helpful`;
 
 
@@ -191,6 +193,27 @@ async function buildSemanticIntelContext(message: string, config: ThufirConfig):
   }
   lines.push('');
   return lines.join('\n');
+}
+
+function wantsNewsContext(message: string): boolean {
+  const text = message.toLowerCase();
+  return /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(
+    text
+  );
+}
+
+function wantsMarketContext(message: string): boolean {
+  const text = message.toLowerCase();
+  return /\b(price|prices|market|markets|probability|odds|volume|liquidity|bid|ask|btc|eth)\b/.test(
+    text
+  );
+}
+
+function wantsTradeHistoryContext(message: string): boolean {
+  const text = message.toLowerCase();
+  return /\b(previous trades|trade history|journal|pnl|win rate|loss streak|streak|last trades)\b/.test(
+    text
+  );
 }
 
 /**
@@ -443,6 +466,7 @@ export class ConversationHandler {
         }
 
         const forcedToolContext = await this.runForcedTooling(message);
+        const marketSnapshot = await this.buildMarketSnapshot(message);
         const toolFirstContext = await this.runToolFirstGuard(message);
         const summary = this.sessions.getSummary(userId);
         const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
@@ -462,14 +486,19 @@ export class ConversationHandler {
         // Build context
         const userContext = buildUserContext(userId, this.config);
         const intelContext = buildIntelContext();
-        const semanticIntelContext = await buildSemanticIntelContext(message, this.config);
-        const semanticChatContext = await this.buildSemanticChatContext(message, userId);
+        const semanticIntelContext = wantsNewsContext(message)
+          ? await buildSemanticIntelContext(message, this.config)
+          : '';
+        // Semantic chat retrieval can be expensive and is low value for very short prompts.
+        const semanticChatContext =
+          message.trim().length >= 24 ? await this.buildSemanticChatContext(message, userId) : '';
 
         // Build the full context for this turn
         const contextBlock = [
           userContext,
           timeContext,
           forcedToolContext,
+          marketSnapshot,
           toolFirstContext,
           summary ? `## Conversation Summary\n${summary}` : '',
           intelContext,
@@ -606,7 +635,8 @@ export class ConversationHandler {
     const text = message.toLowerCase();
     const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio)\b/.test(text);
     const wantsTrade = /\b(trade|order|place|execute)\b/.test(text);
-    if (!wantsWallet && !wantsTrade) {
+    const wantsHistory = wantsTradeHistoryContext(message);
+    if (!wantsWallet && !wantsTrade && !wantsHistory) {
       return '';
     }
 
@@ -626,8 +656,46 @@ export class ConversationHandler {
       );
     }
 
+    if (wantsHistory) {
+      const trades = await executeToolCall('perp_trade_journal_list', { limit: 20 }, this.toolContext);
+      lines.push(`Trade journal: ${JSON.stringify(trades)}`);
+    }
+
     lines.push('');
     return lines.join('\n');
+  }
+
+  private async buildMarketSnapshot(message: string): Promise<string> {
+    if (!wantsMarketContext(message)) return '';
+
+    const sections: string[] = ['## Market Snapshot'];
+    try {
+      // Run in parallel; these are independent calls.
+      const [portfolio, positions, btc, eth] = await Promise.all([
+        executeToolCall('get_portfolio', {}, this.toolContext),
+        executeToolCall('perp_positions', {}, this.toolContext),
+        executeToolCall('perp_market_get', { symbol: 'BTC' }, this.toolContext),
+        executeToolCall('perp_market_get', { symbol: 'ETH' }, this.toolContext),
+      ]);
+
+      if (portfolio.success) {
+        sections.push(`### get_portfolio\n${JSON.stringify(portfolio.data, null, 2)}`);
+      }
+      if (positions.success) {
+        sections.push(`### perp_positions\n${JSON.stringify(positions.data, null, 2)}`);
+      }
+      if (btc.success) {
+        sections.push(`### perp_market_get (BTC)\n${JSON.stringify(btc.data, null, 2)}`);
+      }
+      if (eth.success) {
+        sections.push(`### perp_market_get (ETH)\n${JSON.stringify(eth.data, null, 2)}`);
+      }
+
+      if (sections.length === 1) return '';
+      return sections.join('\n\n') + '\n';
+    } catch {
+      return '';
+    }
   }
 
   private shouldResumePlan(message: string): boolean {

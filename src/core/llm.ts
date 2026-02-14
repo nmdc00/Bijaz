@@ -1331,11 +1331,14 @@ export class AgenticOpenAiClient implements LlmClient {
                             }))
                           : [{ type: 'text', text: msg.content ?? '' }],
                     })),
+                  // Responses API expects OpenAI's canonical tool schema.
                   tools: THUFIR_TOOLS.map((tool) => ({
-                    type: 'function',
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: tool.input_schema as Record<string, unknown>,
+                    type: 'function' as const,
+                    function: {
+                      name: tool.name,
+                      description: tool.description,
+                      parameters: tool.input_schema as Record<string, unknown>,
+                    },
                   })),
                 }
               : {
