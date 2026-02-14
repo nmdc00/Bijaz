@@ -1295,8 +1295,43 @@ export class AgenticOpenAiClient implements LlmClient {
       content: msg.content,
     }));
 
+    // llm-mux's /v1/responses follows the Responses API shape where tool calls are returned as
+    // top-level output items of type "function_call" (not nested inside message.content[]).
+    // Keep a separate input-item transcript for that path.
+    const responsesInstructions = this.useResponsesApi
+      ? openaiMessages
+          .filter((m) => m.role === 'system')
+          .map((m) => m.content)
+          .join('\n\n---\n\n') || undefined
+      : undefined;
+    let responsesInput: Array<Record<string, unknown>> | null = this.useResponsesApi
+      ? openaiMessages
+          .filter((msg) => msg.role !== 'system')
+          .map((msg) => ({
+            role: msg.role,
+            content:
+              msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
+                ? msg.tool_calls.map((call) => ({
+                    type: 'function_call',
+                    name: call.function.name,
+                    arguments: call.function.arguments,
+                    call_id: call.id,
+                  }))
+                : [{ type: 'text', text: msg.content ?? '' }],
+          }))
+      : null;
+
     const tools: OpenAiTool[] = THUFIR_TOOLS.map((tool) => ({
       type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.input_schema as Record<string, unknown>,
+      },
+    }));
+
+    const responseTools = THUFIR_TOOLS.map((tool) => ({
+      type: 'function' as const,
       function: {
         name: tool.name,
         description: tool.description,
@@ -1319,32 +1354,10 @@ export class AgenticOpenAiClient implements LlmClient {
               ? {
                   model: this.model,
                   // Merge ALL system messages into instructions (identity + task prompts)
-                  instructions: openaiMessages
-                    .filter((m) => m.role === 'system')
-                    .map((m) => m.content)
-                    .join('\n\n---\n\n') || undefined,
-                  input: openaiMessages
-                    .filter((msg) => msg.role !== 'system')
-                    .map((msg) => ({
-                      role: msg.role,
-                      content:
-                        msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
-                          ? msg.tool_calls.map((call) => ({
-                              type: 'function_call',
-                              name: call.function.name,
-                              arguments: call.function.arguments,
-                            }))
-                          : [{ type: 'text', text: msg.content ?? '' }],
-                    })),
+                  instructions: responsesInstructions,
+                  input: responsesInput ?? [],
                   // Responses API expects OpenAI's canonical tool schema.
-                  tools: THUFIR_TOOLS.map((tool) => ({
-                    type: 'function' as const,
-                    function: {
-                      name: tool.name,
-                      description: tool.description,
-                      parameters: tool.input_schema as Record<string, unknown>,
-                    },
-                  })),
+                  tools: responseTools,
                 }
               : {
                   model: this.model,
@@ -1368,61 +1381,81 @@ export class AgenticOpenAiClient implements LlmClient {
       }
 
       const data = (await response.json()) as {
-        response?: {
-          output?: Array<{
-            type?: string;
-            content?: Array<
-              | { type: 'output_text'; text?: string }
-              | { type: 'function_call'; name: string; arguments: string; call_id?: string }
-            >;
-          }>;
-        };
+        response?: Record<string, unknown>;
         choices?: Array<{
           message: {
             content: string | null;
             tool_calls?: OpenAiToolCall[];
           };
         }>;
-        output?: Array<{
-          type?: string;
-          content?: Array<
-            | { type: 'output_text'; text?: string }
-            | { type: 'function_call'; name: string; arguments: string; call_id?: string }
-          >;
-        }>;
+        output?: unknown;
       };
 
       if (this.useResponsesApi) {
-        const root = data.response ?? data;
-        const contentParts =
-          root.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
-        const toolCalls = contentParts
-          .filter((part) => part.type === 'function_call')
-          .map((part) => ({
-            id: 'call_id' in part && part.call_id ? part.call_id : `call_${Date.now()}`,
+        const root = (data.response ?? data) as any;
+        if (root?.error) {
+          const msg =
+            typeof root.error === 'string'
+              ? root.error
+              : typeof root.error?.message === 'string'
+                ? root.error.message
+                : JSON.stringify(root.error);
+          throw new Error(`LLM request failed: ${msg}`);
+        }
+
+        const outputItems: any[] = Array.isArray(root?.output) ? root.output : [];
+
+        // llm-mux returns tool calls as top-level output items with shape:
+        // { type: "function_call", name, arguments, call_id, ... } (no content array)
+        const toolCallsFromItems = outputItems
+          .filter((item) => item && item.type === 'function_call' && typeof item.name === 'string')
+          .map((item) => ({
+            id: typeof item.call_id === 'string' && item.call_id ? item.call_id : `call_${Date.now()}`,
             type: 'function' as const,
             function: {
-              name: (part as { name: string }).name,
-              arguments: (part as { arguments: string }).arguments,
+              name: String(item.name),
+              arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
             },
           }));
 
+        // Also support canonical Responses format where function_call appears inside message.content[].
+        const contentParts: any[] = outputItems.flatMap((item) =>
+          Array.isArray(item?.content) ? item.content : []
+        );
+        const toolCallsFromContent = contentParts
+          .filter((part) => part && part.type === 'function_call' && typeof part.name === 'string')
+          .map((part) => ({
+            id: typeof part.call_id === 'string' && part.call_id ? part.call_id : `call_${Date.now()}`,
+            type: 'function' as const,
+            function: {
+              name: String(part.name),
+              arguments: typeof part.arguments === 'string' ? part.arguments : JSON.stringify(part.arguments ?? {}),
+            },
+          }));
+
+        const toolCalls = [...toolCallsFromItems, ...toolCallsFromContent];
+
         if (toolCalls.length === 0) {
           const text = contentParts
-            .filter((part) => part.type === 'output_text')
-            .map((part) => (part as { text?: string }).text ?? '')
+            .filter((part) => part && (part.type === 'output_text' || part.type === 'text'))
+            .map((part) => String(part.text ?? ''))
             .join('')
             .trim();
           return { content: text, model: this.model };
         }
 
-        openaiMessages.push({
-          role: 'assistant',
-          content: null,
-          tool_calls: toolCalls,
-        });
-
+        if (!responsesInput) {
+          responsesInput = [];
+        }
         for (const toolCall of toolCalls) {
+          // Append the function call event.
+          responsesInput.push({
+            type: 'function_call',
+            call_id: toolCall.id,
+            name: toolCall.function.name,
+            arguments: toolCall.function.arguments,
+          });
+
           let parsed: Record<string, unknown> = {};
           try {
             parsed = JSON.parse(toolCall.function.arguments ?? '{}');
@@ -1430,13 +1463,13 @@ export class AgenticOpenAiClient implements LlmClient {
             parsed = {};
           }
           const result = await executeToolCall(toolCall.function.name, parsed, this.toolContext);
-          openaiMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result.success ? result.data : { error: result.error }),
+          // Append the function call output event.
+          responsesInput.push({
+            type: 'function_call_output',
+            call_id: toolCall.id,
+            output: JSON.stringify(result.success ? result.data : { error: result.error }),
           });
         }
-
         continue;
       }
 
