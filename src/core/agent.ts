@@ -27,6 +27,7 @@ import { AutonomousManager } from './autonomous.js';
 import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
+import { executeToolCall } from './tool-executor.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -151,6 +152,10 @@ export class ThufirAgent {
     const isQuestion = this.isQuestion(trimmed);
     const isCapabilityQuestion = this.isCapabilityQuestion(trimmed);
     const isAccessQuestion = this.isAccessQuestion(trimmed);
+    const wantsPerpStatus =
+      /\b(can\s+you\s+see)\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
+      /\b(show|what('s| is))\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
+      /\b(how('s| is))\b.*\b(my\s+)?(trade|position)\b.*\b(looking|doing)\b/i.test(trimmed);
 
     // Natural language "enable full auto" should not go through the LLM/tool loop.
     // This prevents "allowed number of steps" failures on vague confirmations like "Go for it."
@@ -184,6 +189,42 @@ export class ThufirAgent {
 
     if (isCapabilityQuestion || isAccessQuestion) {
       return this.buildAccessReport();
+    }
+
+    // Fast-path: if the user is asking about current positions/orders, query tools directly
+    // (avoids the LLM/tool-planning loop and any tool-name mangling).
+    if (wantsPerpStatus) {
+      try {
+        const positions = await executeToolCall('get_positions', {}, this.toolContext);
+        const orders = await executeToolCall('get_open_orders', {}, this.toolContext);
+        const lines: string[] = [];
+        lines.push('Perp Status:');
+        if (positions.success) {
+          const ps = (positions.data as any)?.positions;
+          const count = Array.isArray(ps) ? ps.length : 0;
+          lines.push(`- Positions: ${count}`);
+          if (count > 0) {
+            const top = ps.slice(0, 5).map((p: any) => JSON.stringify(p));
+            lines.push(...top.map((s: string) => `  ${s}`));
+          }
+        } else {
+          lines.push(`- Positions: error: ${(positions as any).error ?? 'unknown'}`);
+        }
+        if (orders.success) {
+          const os = (orders.data as any)?.orders;
+          const count = Array.isArray(os) ? os.length : 0;
+          lines.push(`- Open orders: ${count}`);
+          if (count > 0) {
+            const top = os.slice(0, 5).map((o: any) => JSON.stringify(o));
+            lines.push(...top.map((s: string) => `  ${s}`));
+          }
+        } else {
+          lines.push(`- Open orders: error: ${(orders as any).error ?? 'unknown'}`);
+        }
+        return lines.join('\n');
+      } catch (error) {
+        return `Failed to load perp status: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      }
     }
 
     // Command: /watch <marketId>

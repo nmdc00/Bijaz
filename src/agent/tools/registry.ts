@@ -108,12 +108,57 @@ export class AgentToolRegistry {
     input: unknown,
     ctx: ToolContext
   ): Promise<ToolExecution> {
-    const tool = this.tools.get(name);
+    const normalizedName = String(name ?? '').trim();
+    const tool = this.tools.get(normalizedName);
     if (!tool) {
+      // Some models sometimes "bundle" multiple tool names into one string
+      // (e.g. "get_wallet_info + get_portfolio"). If every segment exists,
+      // execute them sequentially and return a combined result.
+      if (normalizedName.includes('+')) {
+        const parts = normalizedName
+          .split('+')
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length > 1 && parts.every((p) => this.tools.has(p))) {
+          const calls: Array<{ tool: string; result: ToolResult }> = [];
+          const start = Date.now();
+          for (const part of parts) {
+            const exec = await this.execute(part, input, ctx);
+            calls.push({ tool: part, result: exec.result });
+            if (!exec.result.success) {
+              const execution: ToolExecution = {
+                toolName: normalizedName,
+                input,
+                result: {
+                  success: false,
+                  error: `Bundled tool failed: ${part}: ${(exec.result as { success: false; error: string }).error}`,
+                  data: { calls },
+                } as any,
+                timestamp: new Date().toISOString(),
+                durationMs: Date.now() - start,
+                cached: false,
+              };
+              this.executionHistory.push(execution);
+              return execution;
+            }
+          }
+          const execution: ToolExecution = {
+            toolName: normalizedName,
+            input,
+            result: { success: true, data: { calls } },
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - start,
+            cached: false,
+          };
+          this.executionHistory.push(execution);
+          return execution;
+        }
+      }
+
       const execution: ToolExecution = {
-        toolName: name,
+        toolName: normalizedName,
         input,
-        result: { success: false, error: `Unknown tool: ${name}` },
+        result: { success: false, error: `Unknown tool: ${normalizedName}` },
         timestamp: new Date().toISOString(),
         durationMs: 0,
         cached: false,
