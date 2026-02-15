@@ -675,29 +675,33 @@ export async function executeToolCall(
           }
           return { success: false, error: riskCheck.reason ?? 'perp risk limits exceeded' };
         }
-        const limitCheck = await ctx.limiter.checkAndReserve(size);
-        if (!limitCheck.allowed) {
-          try {
-            recordPerpTradeJournal({
-              kind: 'perp_trade_journal',
-              tradeId: null,
-              hypothesisId: null,
-              symbol,
-              side: side as 'buy' | 'sell',
-              size,
-              leverage: leverage ?? null,
-              orderType,
-              reduceOnly,
-              markPrice: market.markPrice ?? null,
-              confidence: null,
-              reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
-              outcome: 'blocked',
-              error: limitCheck.reason ?? 'limit exceeded',
-            });
-          } catch {
-            // Best-effort journaling: never block trading due to local DB issues.
+        // Reduce-only orders are strictly risk-reducing; do not block them on spending limits.
+        // This is critical for safety loops (heartbeat/trade-management) that must be able to flatten.
+        if (!reduceOnly) {
+          const limitCheck = await ctx.limiter.checkAndReserve(size);
+          if (!limitCheck.allowed) {
+            try {
+              recordPerpTradeJournal({
+                kind: 'perp_trade_journal',
+                tradeId: null,
+                hypothesisId: null,
+                symbol,
+                side: side as 'buy' | 'sell',
+                size,
+                leverage: leverage ?? null,
+                orderType,
+                reduceOnly,
+                markPrice: market.markPrice ?? null,
+                confidence: null,
+                reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
+                outcome: 'blocked',
+                error: limitCheck.reason ?? 'limit exceeded',
+              });
+            } catch {
+              // Best-effort journaling: never block trading due to local DB issues.
+            }
+            return { success: false, error: limitCheck.reason ?? 'limit exceeded' };
           }
-          return { success: false, error: limitCheck.reason ?? 'limit exceeded' };
         }
         const decision: TradeDecision = {
           action: side as 'buy' | 'sell',

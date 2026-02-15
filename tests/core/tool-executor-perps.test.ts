@@ -94,6 +94,25 @@ describe('tool-executor perps', () => {
     expect(String(res.error)).toMatch(/notional/i);
   });
 
+  it('perp_place_order allows reduce-only even if spending limiter blocks', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: false, reason: 'nope' }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+  });
+
   it('perp_open_orders returns executor orders', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
