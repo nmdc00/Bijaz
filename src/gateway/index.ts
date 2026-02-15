@@ -22,7 +22,6 @@ import { formatProactiveSummary, runProactiveSearch } from '../core/proactive_se
 import { buildAgentPeerSessionKey, resolveThreadSessionKeys } from './session_keys.js';
 import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
-import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 
 const config = loadConfig();
 const rawLevel = (process.env.THUFIR_LOG_LEVEL ?? 'info').toLowerCase();
@@ -44,15 +43,6 @@ const whatsapp = config.channels.whatsapp.enabled ? new WhatsAppAdapter(config) 
 
 for (const instance of agentRegistry.agents.values()) {
   instance.start();
-}
-
-const positionHeartbeat =
-  config.heartbeat?.enabled === true
-    ? new PositionHeartbeatService({ toolContext: defaultAgent.getToolContext(), logger })
-    : null;
-if (positionHeartbeat) {
-  positionHeartbeat.start();
-  logger.info('Position heartbeat started');
 }
 
 // Market cache is refreshed on schedule (no websocket stream configured).
@@ -607,16 +597,10 @@ if (config.qmd?.enabled && qmdEmbedConfig?.enabled) {
 
   const runQmdEmbed = async () => {
     try {
-      const home = process.env.HOME ?? '/home/nmcdc';
-      const env = {
-        ...process.env,
-        PATH: `${home}/.local/bin:${home}/.bun/bin:${process.env.PATH ?? ''}`,
-      };
-
-      // Check if qmd is available. qmd does not reliably support --version.
-      await execAsync('qmd status', { timeout: 10_000, env });
+      // Check if qmd is available
+      await execAsync('qmd --version');
       // Run embedding update for all collections
-      const { stderr } = await execAsync('qmd embed', { timeout: 300_000, env });
+      const { stderr } = await execAsync('qmd embed', { timeout: 300_000 });
       if (stderr && !stderr.includes('warning')) {
         logger.warn(`QMD embed warning: ${stderr}`);
       }

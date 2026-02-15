@@ -18,7 +18,7 @@ import type {
   SynthesisRequest,
 } from './types.js';
 
-import { detectMode, getModeConfig } from '../modes/registry.js';
+import { detectMode, getModeConfig, getAllowedTools } from '../modes/registry.js';
 import { createPlan, revisePlan, getNextStep, completeStep, failStep } from '../planning/planner.js';
 import { reflect, createReflectionState, applyReflection } from '../reflection/reflector.js';
 import { runCritic, shouldRunCritic } from '../critic/critic.js';
@@ -384,11 +384,12 @@ export async function runOrchestrator(
   // Phase 3: Planning (unless skipped)
   if (!skipPlanning) {
     try {
+      const allowedTools = getAllowedTools(modeResult.mode);
       const planResult = await createPlan(
         ctx.llm,
         {
           goal,
-          availableTools: modeConfig.allowedTools,
+          availableTools: allowedTools,
           memoryContext: state.memoryContext ?? undefined,
           assumptions: state.assumptions.map((a) => a.statement),
           hypotheses: state.hypotheses.map((h) => h.statement),
@@ -835,45 +836,11 @@ async function runPreTradeFragilityScan(
  */
 async function executeToolStep(
   step: PlanStep,
-  state: AgentState,
+  _state: AgentState,
   ctx: OrchestratorContext
 ): Promise<ToolExecution> {
-  // Normalise tool name: strip "functions." prefix, reject internal wrappers
-  let toolName = step.toolName!;
-  if (toolName.startsWith('functions.')) toolName = toolName.slice('functions.'.length);
-  if (toolName === 'multi_tool_use.parallel') {
-    return {
-      toolName,
-      input: {},
-      result: { success: false, error: 'multi_tool_use.parallel is not a real tool; each tool must be a separate plan step' },
-      timestamp: new Date().toISOString(),
-      durationMs: 0,
-      cached: false,
-    };
-  }
-  // Safety net: if the planner bundled tool names ("a + b + c"), execute only the first one.
-  // The planner parser should have split these into separate steps, but revised plans may bypass that.
-  if (toolName.includes('+')) {
-    const first = toolName.split(/\s*\+\s*/).map((n) => n.trim()).filter(Boolean)[0];
-    if (first) toolName = first;
-  }
+  const toolName = step.toolName!;
   const input = step.toolInput ?? {};
-
-  // Enforce mode allowlist. The planner can hallucinate or ignore the provided list.
-  // This is a hard block to prevent side effects when a tool isn't allowed in the current mode.
-  if (!state.modeConfig.allowedTools.includes(toolName)) {
-    return {
-      toolName,
-      input,
-      result: {
-        success: false,
-        error: `Tool not allowed in mode '${state.mode}': ${toolName}`,
-      },
-      timestamp: new Date().toISOString(),
-      durationMs: 0,
-      cached: false,
-    };
-  }
 
   // Check if tool requires confirmation
   const toolDef = ctx.toolRegistry.get?.(toolName);

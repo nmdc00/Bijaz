@@ -118,34 +118,6 @@ export class LlmBudgetManager {
     return this.enabled;
   }
 
-  status(): {
-    enabled: boolean;
-    path: string;
-    windowMs: number;
-    usedCalls: number;
-    usedTokens: number;
-    maxCallsPerHour: number;
-    maxTokensPerHour: number;
-    reserveCalls: number;
-    reserveTokens: number;
-    includeLocal: boolean;
-  } {
-    this.prune();
-    const totals = this.totals();
-    return {
-      enabled: this.enabled,
-      path: this.path,
-      windowMs: WINDOW_MS,
-      usedCalls: totals.calls,
-      usedTokens: totals.tokens,
-      maxCallsPerHour: this.maxCalls,
-      maxTokensPerHour: this.maxTokens,
-      reserveCalls: this.reserveCalls,
-      reserveTokens: this.reserveTokens,
-      includeLocal: this.includeLocal,
-    };
-  }
-
   shouldCountProvider(provider: 'anthropic' | 'openai' | 'local'): boolean {
     if (provider === 'local') {
       return this.includeLocal;
@@ -210,26 +182,14 @@ export function isCooling(provider: string, model: string): CooldownState | null
   return state;
 }
 
-export function recordCooldown(
-  provider: string,
-  model: string,
-  opts?: { resetSeconds?: number | null }
-): CooldownState {
+export function recordCooldown(provider: string, model: string): CooldownState {
   const key = `${provider}:${model}`;
   const existing = cooldowns.get(key);
   const nextBackoff = Math.min(
     existing ? existing.backoffMs * 2 : COOLDOWN_MIN_MS,
     COOLDOWN_MAX_MS
   );
-  const resetMs =
-    typeof opts?.resetSeconds === 'number' && Number.isFinite(opts.resetSeconds) && opts.resetSeconds > 0
-      ? Math.floor(opts.resetSeconds * 1000)
-      : 0;
-  const durationMs = Math.min(
-    COOLDOWN_MAX_MS,
-    Math.max(COOLDOWN_MIN_MS, nextBackoff, resetMs)
-  );
-  const state = { until: Date.now() + durationMs, backoffMs: durationMs };
+  const state = { until: Date.now() + nextBackoff, backoffMs: nextBackoff };
   cooldowns.set(key, state);
   return state;
 }

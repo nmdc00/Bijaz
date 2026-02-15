@@ -2,7 +2,6 @@ import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../exe
 import type { Market } from '../markets.js';
 import type { ThufirConfig } from '../../core/config.js';
 import { HyperliquidClient } from '../hyperliquid/client.js';
-import { formatPrice, formatSize } from '@nktkas/hyperliquid/utils';
 
 export interface HyperliquidLiveExecutorOptions {
   config: ThufirConfig;
@@ -38,14 +37,6 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     const orderType = decision.orderType ?? 'market';
     const price = decision.price ?? null;
     const reduceOnly = decision.reduceOnly ?? false;
-    const slippageBps =
-      typeof decision.slippageBps === 'number' && Number.isFinite(decision.slippageBps)
-        ? Math.max(0, decision.slippageBps)
-        : this.defaultSlippageBps;
-    const clientOrderId =
-      typeof decision.clientOrderId === 'string' && decision.clientOrderId.trim().length > 0
-        ? decision.clientOrderId.trim()
-        : undefined;
 
     try {
       const exchange = this.client.getExchangeClient();
@@ -54,7 +45,6 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       if (!marketMeta) {
         return { executed: false, message: `Unknown Hyperliquid symbol: ${symbol}` };
       }
-      const szDecimals = marketMeta.szDecimals ?? 0;
 
       const leverageCap = marketMeta.maxLeverage ?? this.maxLeverage;
       const appliedLeverage = Math.min(leverage, leverageCap);
@@ -66,27 +56,20 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         });
       }
 
-      let sizeStr = '';
-      try {
-        sizeStr = formatSize(size, szDecimals);
-      } catch {
+      const sizeStr = formatDecimal(size, marketMeta.szDecimals ?? 6);
+      if (!Number.isFinite(Number(sizeStr)) || Number(sizeStr) <= 0) {
         return { executed: false, message: 'Invalid decision: size rounds to zero.' };
       }
 
       const orderPx =
         orderType === 'limit'
           ? price
-          : price ?? (await this.estimateMarketPrice(symbol, side, slippageBps));
+          : price ?? (await this.estimateMarketPrice(symbol, side));
       if (!orderPx || orderPx <= 0) {
         return { executed: false, message: 'Invalid decision: missing or invalid price.' };
       }
 
-      let priceStr = '';
-      try {
-        priceStr = formatPrice(orderPx, szDecimals, 'perp');
-      } catch {
-        return { executed: false, message: 'Invalid decision: price rejected by tick rules.' };
-      }
+      const priceStr = formatDecimal(orderPx, 8);
       const tif: 'Ioc' | 'Gtc' = orderType === 'market' ? 'Ioc' : 'Gtc';
       const payload: Parameters<ReturnType<HyperliquidClient['getExchangeClient']>['order']>[0] = {
         orders: [
@@ -97,7 +80,6 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
             s: sizeStr,
             r: reduceOnly,
             t: { limit: { tif } },
-            ...(clientOrderId ? { c: clientOrderId as any } : {}),
           },
         ],
         grouping: 'na' as const,
@@ -123,21 +105,14 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     }
   }
 
-  private async estimateMarketPrice(
-    symbol: string,
-    side: 'buy' | 'sell',
-    slippageBps: number
-  ): Promise<number> {
+  private async estimateMarketPrice(symbol: string, side: 'buy' | 'sell'): Promise<number> {
     const mids = await this.client.getAllMids();
     const mid = mids[symbol];
     if (typeof mid !== 'number' || !Number.isFinite(mid)) {
       throw new Error(`Missing mid price for ${symbol}.`);
     }
-    const slippage = (Number.isFinite(slippageBps) ? slippageBps : this.defaultSlippageBps) / 10000;
-    // Avoid float artifacts (e.g. 100.499999999) which can be truncated by tick formatting
-    // into a worse-than-intended IOC price. Keep this reasonably high precision.
-    const raw = side === 'buy' ? mid * (1 + slippage) : mid * (1 - slippage);
-    return Number(raw.toFixed(12));
+    const slippage = this.defaultSlippageBps / 10000;
+    return side === 'buy' ? mid * (1 + slippage) : mid * (1 - slippage);
   }
 
   async getOpenOrders(): Promise<Order[]> {
@@ -189,6 +164,12 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       cancels: [{ a: marketMeta.assetId, o: oid }],
     });
   }
+}
+
+function formatDecimal(value: number, decimals: number): string {
+  const bounded = Math.max(0, value);
+  const fixed = bounded.toFixed(decimals);
+  return fixed.replace(/\.?0+$/, '');
 }
 
 function summarizeOrderStatus(

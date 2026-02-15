@@ -18,19 +18,11 @@ import {
 import { listPerpTrades } from '../memory/perp_trades.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
-import type { ExpressionPlan } from '../discovery/types.js';
-import { buildTradeEnvelopeFromExpression } from '../trade-management/envelope.js';
-import { listOpenTradeEnvelopes, listRecentTradeCloses, recordTradeEnvelope, recordTradeSignals } from '../trade-management/db.js';
-import { placeExchangeSideTpsl } from '../trade-management/hyperliquid-stops.js';
-import { reconcileEntryFill } from '../trade-management/reconcile.js';
-import { createHyperliquidCloid } from '../execution/hyperliquid/cloid.js';
-import { buildTradeJournalSummary } from '../trade-management/summary.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
 import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains.js';
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
-import { formatPrice as formatHlPrice, formatSize as formatHlSize } from '@nktkas/hyperliquid/utils';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -47,7 +39,6 @@ import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import { isIP } from 'node:net';
 import { exec, spawn } from 'node:child_process';
-import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -380,19 +371,14 @@ export async function executeToolCall(
         const bps = Math.max(100, Math.min(9000, Number.isFinite(priceOffsetBps) ? priceOffsetBps : 5000));
         const offset = bps / 10000;
         const limitPx = side === 'buy' ? mid * (1 - offset) : mid * (1 + offset);
-        const szDecimals = marketMeta.szDecimals ?? 0;
-        let sizeStr = '';
-        let priceStr = '';
-        try {
-          sizeStr = formatHlSize(size, szDecimals);
-        } catch {
-          return { success: false, error: 'Invalid size: rounds to zero.' };
-        }
-        try {
-          priceStr = formatHlPrice(limitPx, szDecimals, 'perp');
-        } catch {
-          return { success: false, error: 'Invalid price: rejected by tick rules.' };
-        }
+
+        const formatDecimal = (value: number, decimals: number): string => {
+          const fixed = value.toFixed(decimals);
+          return fixed.replace(/\\.?0+$/, '');
+        };
+
+        const sizeStr = formatDecimal(size, marketMeta.szDecimals ?? 6);
+        const priceStr = formatDecimal(limitPx, 8);
 
         const result = await exchange.order({
           orders: [
@@ -649,21 +635,10 @@ export async function executeToolCall(
         const price = toolInput.price !== undefined ? Number(toolInput.price) : undefined;
         const leverage = toolInput.leverage !== undefined ? Number(toolInput.leverage) : undefined;
         const reduceOnly = Boolean(toolInput.reduce_only ?? false);
-        const reasoningRaw = toolInput.reasoning !== undefined ? String(toolInput.reasoning) : '';
-        const reasoning =
-          reasoningRaw.trim() ||
-          `perp_place_order(${symbol.toUpperCase()} ${side} size=${size}${orderType === 'limit' && Number.isFinite(price) ? ` price=${price}` : ''}${reduceOnly ? ' reduceOnly' : ''})`;
         if (!symbol || !size || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
-        if (orderType === 'limit' && (!Number.isFinite(price) || (price as number) <= 0)) {
-          return { success: false, error: 'Limit orders require a valid positive price' };
-        }
         const market = await ctx.marketClient.getMarket(symbol);
-        const notionalUsd =
-          typeof market.markPrice === 'number' && Number.isFinite(market.markPrice) && market.markPrice > 0
-            ? market.markPrice * size
-            : size;
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
           symbol,
@@ -672,7 +647,6 @@ export async function executeToolCall(
           leverage,
           reduceOnly,
           markPrice: market.markPrice ?? null,
-          notionalUsd,
           marketMaxLeverage:
             typeof market.metadata?.maxLeverage === 'number'
               ? (market.metadata.maxLeverage as number)
@@ -695,17 +669,13 @@ export async function executeToolCall(
               reasoning: `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
-              snapshot: {
-                requestedPrice: orderType === 'limit' ? price ?? null : null,
-                notionalUsd,
-              },
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
           return { success: false, error: riskCheck.reason ?? 'perp risk limits exceeded' };
         }
-        const limitCheck = await ctx.limiter.checkAndReserve(notionalUsd);
+        const limitCheck = await ctx.limiter.checkAndReserve(size);
         if (!limitCheck.allowed) {
           try {
             recordPerpTradeJournal({
@@ -723,10 +693,6 @@ export async function executeToolCall(
               reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
               outcome: 'blocked',
               error: limitCheck.reason ?? 'limit exceeded',
-              snapshot: {
-                requestedPrice: orderType === 'limit' ? price ?? null : null,
-                notionalUsd,
-              },
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
@@ -742,14 +708,11 @@ export async function executeToolCall(
           price,
           leverage,
           reduceOnly,
-          clientOrderId: createHyperliquidCloid(),
           confidence: 'medium' as const,
-          reasoning,
         };
-        const decisionStartMs = Date.now();
         const result = await ctx.executor.execute(market, decision);
         if (!result.executed) {
-          ctx.limiter.release(notionalUsd);
+          ctx.limiter.release(size);
           try {
             const tradeId = recordPerpTrade({
               hypothesisId: null,
@@ -773,20 +736,16 @@ export async function executeToolCall(
               reduceOnly,
               markPrice: market.markPrice ?? null,
               confidence: 'medium',
-              reasoning: decision.reasoning ?? null,
+              reasoning: null,
               outcome: 'failed',
               error: result.message,
-              snapshot: {
-                requestedPrice: orderType === 'limit' ? price ?? null : null,
-                notionalUsd,
-              },
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
           return { success: false, error: result.message };
         }
-        ctx.limiter.confirm(notionalUsd);
+        ctx.limiter.confirm(size);
         try {
           const tradeId = recordPerpTrade({
             hypothesisId: null,
@@ -810,65 +769,10 @@ export async function executeToolCall(
             reduceOnly,
             markPrice: market.markPrice ?? null,
             confidence: 'medium',
-            reasoning: decision.reasoning ?? null,
+            reasoning: null,
             outcome: 'executed',
             message: result.message,
-            snapshot: {
-              requestedPrice: orderType === 'limit' ? price ?? null : null,
-              notionalUsd,
-            },
           });
-          // Best-effort: record envelope + place exchange-side TP/SL triggers for any non-reduce-only entry.
-          if (!reduceOnly && typeof market.markPrice === 'number' && market.markPrice > 0) {
-            let entryPrice = market.markPrice;
-            let entryFeesUsd: number | null = null;
-            if (decision.clientOrderId && ctx.config.execution?.mode === 'live') {
-              const rec = await reconcileEntryFill({
-                config: ctx.config,
-                symbol,
-                entryCloid: decision.clientOrderId,
-                startTimeMs: decisionStartMs,
-              });
-              if (rec.avgPx != null) entryPrice = rec.avgPx;
-              entryFeesUsd = rec.feesUsd;
-            }
-            const expr: ExpressionPlan = {
-              id: `manual_${tradeId}`,
-              hypothesisId: `manual_${tradeId}`,
-              symbol,
-              side: side as 'buy' | 'sell',
-              confidence: 0.5,
-              expectedEdge: 0,
-              entryZone: orderType,
-              invalidation: '',
-              expectedMove: '',
-              orderType,
-              leverage: leverage ?? ctx.config.hyperliquid?.maxLeverage ?? 1,
-              probeSizeUsd: notionalUsd,
-              thesis: reasoning,
-              signalKinds: [],
-            };
-
-            const envelope = buildTradeEnvelopeFromExpression({
-              config: ctx.config,
-              tradeId: `perp_${tradeId}`,
-              expr,
-              entryPrice,
-              size,
-              notionalUsd,
-              entryCloid: decision.clientOrderId ?? null,
-              entryFeesUsd,
-            });
-            recordTradeEnvelope(envelope);
-            recordTradeSignals({ tradeId: envelope.tradeId, symbol: envelope.symbol, signals: [] });
-
-            const stops = await placeExchangeSideTpsl({ config: ctx.config, envelope });
-            if (stops.tpOid || stops.slOid) {
-              envelope.tpOid = stops.tpOid;
-              envelope.slOid = stops.slOid;
-              recordTradeEnvelope(envelope);
-            }
-          }
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
         }
@@ -917,38 +821,6 @@ export async function executeToolCall(
         }
       }
 
-      case 'trade_management_open_envelopes': {
-        const limit = Math.min(Math.max(Number(toolInput.limit ?? 50), 1), 200);
-        try {
-          const envelopes = listOpenTradeEnvelopes().slice(0, limit);
-          return { success: true, data: { envelopes } };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          return { success: false, error: message };
-        }
-      }
-
-      case 'trade_management_recent_closes': {
-        const limit = Math.min(Math.max(Number(toolInput.limit ?? 20), 1), 200);
-        try {
-          const closes = listRecentTradeCloses(limit);
-          return { success: true, data: { closes } };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          return { success: false, error: message };
-        }
-      }
-
-      case 'trade_management_summary': {
-        const limit = Math.min(Math.max(Number(toolInput.limit ?? 20), 1), 200);
-        try {
-          const summary = buildTradeJournalSummary({ limit });
-          return { success: true, data: { summary } };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          return { success: false, error: message };
-        }
-      }
       case 'perp_analyze': {
         const symbol = String(toolInput.symbol ?? '').trim();
         const horizon = String(toolInput.horizon ?? '').trim();
@@ -2646,39 +2518,11 @@ async function fetchAndExtract(url: string, maxChars: number): Promise<ToolResul
  */
 async function isQmdAvailable(): Promise<boolean> {
   try {
-    const cmd = resolveQmdCommand();
-    // qmd does not reliably support --version; use a cheap command that exits 0 when installed.
-    await execAsync(`${cmd} status`, { timeout: 5000 });
+    await execAsync('qmd --version');
     return true;
   } catch {
     return false;
   }
-}
-
-function resolveQmdCommand(): string {
-  const fromEnv = (process.env.QMD_BIN ?? '').trim();
-  if (fromEnv) return fromEnv;
-
-  const candidates = [
-    join(homedir(), '.local', 'bin', 'qmd'),
-    join(homedir(), '.bun', 'bin', 'qmd'),
-    '/usr/local/bin/qmd',
-    '/usr/bin/qmd',
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      if (existsSync(candidate)) {
-        accessSync(candidate, fsConstants.X_OK);
-        return candidate;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // Fall back to PATH resolution.
-  return 'qmd';
 }
 
 /**
@@ -2696,9 +2540,7 @@ async function qmdQuery(
   ctx: ToolExecutorContext
 ): Promise<ToolResult> {
   const query = String(toolInput.query ?? '').trim();
-  // Default to BM25 search. QMD "query" can hang when collections/embeddings are not initialized.
-  // Users/LLM can still explicitly request hybrid mode via mode="query".
-  const mode = String(toolInput.mode ?? 'search');
+  const mode = String(toolInput.mode ?? 'query');
   const limit = Math.min(Math.max(Number(toolInput.limit ?? 10), 1), 50);
   const collection = toolInput.collection ? String(toolInput.collection) : undefined;
 
@@ -2720,13 +2562,12 @@ async function qmdQuery(
   }
 
   try {
-    const cmd = resolveQmdCommand();
-    const args = [mode, JSON.stringify(query), '--json', '-n', String(limit)];
+    const args = [mode, JSON.stringify(query), '--format', 'json', '--limit', String(limit)];
     if (collection) {
-      args.push('-c', JSON.stringify(collection));
+      args.push('--collection', collection);
     }
 
-    const { stdout, stderr } = await execAsync(`${cmd} ${args.join(' ')}`, {
+    const { stdout, stderr } = await execAsync(`qmd ${args.join(' ')}`, {
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -2788,8 +2629,7 @@ async function qmdIndex(
   try {
     // Create a temporary markdown file for QMD to index
     const filename = `${Date.now()}-${randomUUID().slice(0, 8)}.md`;
-    const cmd = resolveQmdCommand();
-    const collectionPath = join(knowledgePath, collection);
+    const collectionPath = join(knowledgePath, collection.replace('thufir-', ''));
     await mkdir(collectionPath, { recursive: true });
     const filepath = join(collectionPath, filename);
 
@@ -2806,28 +2646,11 @@ async function qmdIndex(
 
     await writeFile(filepath, frontmatter.join('\n'), 'utf-8');
 
-    // Ensure the collection is registered with qmd (best-effort).
-    // qmd uses a persistent index DB, so we must add collections at least once.
+    // Run qmd embed to update embeddings
     try {
-      const { stdout } = await execAsync(`${cmd} collection list`, { timeout: 10000 });
-      if (!stdout.includes(collection)) {
-        await execAsync(
-          `${cmd} collection add ${JSON.stringify(collectionPath)} --name ${JSON.stringify(collection)} --mask "**/*.md"`,
-          { timeout: 30000 }
-        );
-      }
-    } catch {
-      // ignore
-    }
-
-    // Re-index and update embeddings (best-effort; BM25 indexing should still work even if embed fails).
-    try {
-      await execAsync(`${cmd} update`, { timeout: 60000 });
-    } catch {
-      // ignore
-    }
-    try {
-      await execAsync(`${cmd} embed`, { timeout: 120000 });
+      await execAsync(`qmd embed --collection ${collection}`, {
+        timeout: 60000,
+      });
     } catch {
       // Embedding failure is non-fatal, content is still indexed for BM25 search
     }

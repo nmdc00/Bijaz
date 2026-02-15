@@ -15,7 +15,7 @@ import { getUserContext, updateUserContext } from '../memory/user.js';
 import { listRecentIntel, listIntelByIds } from '../intel/store.js';
 import { IntelVectorStore } from '../intel/vectorstore.js';
 import { SessionStore } from '../memory/session_store.js';
-import { storeChatMessage, listChatMessagesByIds, clearChatMessages, searchChatMessagesLexical } from '../memory/chat.js';
+import { storeChatMessage, listChatMessagesByIds, clearChatMessages } from '../memory/chat.js';
 import { ChatVectorStore } from '../memory/chat_vectorstore.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -28,7 +28,6 @@ import {
   AgenticOpenAiClient,
   FallbackLlmClient,
   OrchestratorClient,
-  RateLimitFailoverClient,
   createAgenticExecutorClient,
   isRateLimitError,
   wrapWithLimiter,
@@ -47,13 +46,7 @@ import type { AgentPlan } from '../agent/planning/types.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
 import { Logger } from './logger.js';
-import {
-  estimateTokensFromMessages,
-  getExecutionContext,
-  getLlmBudgetManager,
-  isCooling,
-  withExecutionContext,
-} from './llm_infra.js';
+import { withExecutionContext } from './llm_infra.js';
 
 export interface ConversationContext {
   userId: string;
@@ -65,13 +58,9 @@ const SYSTEM_PROMPT_BASE = `## Operating Rules
 
 - Never claim a trade was placed unless a trading tool returned success
 - Never say you lack wallet access without first using get_wallet_info and/or get_portfolio
-- Do not claim "tools are not available" or "no live tools" unless a tool call actually failed. If you haven't checked, say you haven't checked.
-- "Chat mode" means no trade execution. It does not mean wallet/positions tools are unavailable.
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
 - If tool outputs are JSON, interpret them and respond with a concise narrative summary
-- Be concise by default. Avoid preambles and repetition.
-- If your reply would exceed ~3000 characters, summarize first and offer to continue.
 - Be conversational, not robotic - use markdown when helpful`;
 
 
@@ -197,27 +186,6 @@ async function buildSemanticIntelContext(message: string, config: ThufirConfig):
   return lines.join('\n');
 }
 
-function wantsNewsContext(message: string): boolean {
-  const text = message.toLowerCase();
-  return /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(
-    text
-  );
-}
-
-function wantsMarketContext(message: string): boolean {
-  const text = message.toLowerCase();
-  return /\b(price|prices|market|markets|probability|odds|volume|liquidity|bid|ask|btc|eth|position|positions|pnl|profit|loss|open orders|orders|fills|trade|trades|closed|close)\b/.test(
-    text
-  );
-}
-
-function wantsTradeHistoryContext(message: string): boolean {
-  const text = message.toLowerCase();
-  return /\b(previous trades|trade history|journal|pnl|profit|loss|win rate|loss streak|streak|last trades|fills|order history|closed|close)\b/.test(
-    text
-  );
-}
-
 /**
  * Format markets for display in conversation
  */
@@ -294,31 +262,9 @@ export class ConversationHandler {
       );
     }
     if (provider === 'openai' && hasAgentModel) {
-      const primary = wrapWithInfra(new AgenticOpenAiClient(config, context), config);
-      const explicitFailover =
-        !!config.agent?.rateLimitFallbackProvider || !!config.agent?.rateLimitFallbackModel;
-      if (!explicitFailover) {
-        this.agenticLlm = wrapWithLimiter(primary);
-      } else {
-        const fallbackProvider =
-          (config.agent?.rateLimitFallbackProvider ?? 'openai') as 'anthropic' | 'openai' | 'local';
-        // Never automatically fail over to the "local" provider for agentic calls.
-        const safeFallbackProvider = fallbackProvider === 'local' ? 'openai' : fallbackProvider;
-        const fallbackModel =
-          config.agent?.rateLimitFallbackModel ??
-          config.agent?.executorModel ??
-          (safeFallbackProvider === 'anthropic'
-            ? 'claude-3-5-haiku-20241022'
-            : 'gpt-5');
-        const fallbackRaw =
-          safeFallbackProvider === 'anthropic'
-            ? (new AgenticAnthropicClient(config, context, fallbackModel) as LlmClient)
-            : (new AgenticOpenAiClient(config, context, fallbackModel) as LlmClient);
-        const fallback = wrapWithInfra(fallbackRaw, config);
-        this.agenticLlm = wrapWithLimiter(
-          new RateLimitFailoverClient([primary, fallback], config, this.logger)
-        );
-      }
+      this.agenticLlm = wrapWithLimiter(
+        wrapWithInfra(new AgenticOpenAiClient(config, context), config)
+      );
     }
     if (config.agent?.model || config.agent?.openaiModel) {
       this.agenticOpenAi = wrapWithLimiter(
@@ -366,37 +312,21 @@ export class ConversationHandler {
         const timeContext = await this.buildCurrentTimeContext();
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
-          // Orchestrator path must still be tool-first for wallet/positions/orders questions.
-          // Otherwise the LLM may answer without calling tools and claim tools are unavailable.
-          const [forcedToolContext, marketSnapshot, toolFirstContext] = await Promise.all([
-            this.runForcedTooling(message),
-            this.buildMarketSnapshot(message),
-            this.runToolFirstGuard(message),
-          ]);
-
           const memorySystem = {
             getRelevantContext: async (query: string) => {
-              const base = (await this.getMemoryContextForOrchestrator(userId, query)) ?? '';
-              const combined = [
-                forcedToolContext,
-                marketSnapshot,
-                toolFirstContext,
-                base,
-              ]
-                .filter(Boolean)
-                .join('\n\n');
-              if (!timeContext) return combined;
-              return [combined, timeContext].filter(Boolean).join('\n\n');
+              const base = await this.getMemoryContextForOrchestrator(userId, query);
+              if (!timeContext) return base;
+              return [base, timeContext].filter(Boolean).join('\n\n');
             },
           };
 
-          const tradeToolNames = new Set(['perp_place_order']);
-          const fundingToolNames = new Set([
-            'cctp_bridge_usdc',
-            'hyperliquid_deposit_usdc',
-            'hyperliquid_order_roundtrip',
-            'playbook_upsert',
-          ]);
+    const tradeToolNames = new Set(['perp_place_order']);
+    const fundingToolNames = new Set([
+      'cctp_bridge_usdc',
+      'hyperliquid_deposit_usdc',
+      'hyperliquid_order_roundtrip',
+      'playbook_upsert',
+    ]);
           const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
           const autoApproveFunding = Boolean(
             this.config.autonomy?.fullAuto && this.config.autonomy?.allowFundingActions
@@ -404,13 +334,8 @@ export class ConversationHandler {
           const resumePlan = this.shouldResumePlan(message);
           const priorPlan = resumePlan ? this.sessions.getPlan(userId) : null;
 
-          // Orchestrator requires an agentic/tool-capable client. The base OpenAiClient can
-          // return tool calls (function_call) without any text content, which looks like an
-          // "empty response" and triggers cross-provider failover. Using the agentic client
-          // ensures tool-call parsing + execution happens correctly.
-          const orchestratorLlm = this.agenticLlm ?? this.agenticOpenAi ?? this.llm;
           const result = await runOrchestrator(message, {
-            llm: orchestratorLlm,
+            llm: this.llm,
             toolRegistry: this.orchestratorRegistry,
             identity: this.orchestratorIdentity,
             toolContext: {
@@ -488,52 +413,34 @@ export class ConversationHandler {
           return response;
         }
 
+        const forcedToolContext = await this.runForcedTooling(message);
+        const toolFirstContext = await this.runToolFirstGuard(message);
         const summary = this.sessions.getSummary(userId);
         const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
         const compactAfterTokens = this.config.memory?.compactAfterTokens ?? 12000;
         const keepRecent = this.config.memory?.keepRecentMessages ?? 12;
 
-        // Run all independent pre-LLM steps in parallel
-        const [
-          forcedToolContext,
-          marketSnapshot,
-          toolFirstContext,
-          ,
-          semanticIntelContext,
-          semanticChatContext,
-        ] = await Promise.all([
-          this.runForcedTooling(message),
-          this.buildMarketSnapshot(message),
-          this.runToolFirstGuard(message),
-          this.sessions.compactIfNeeded({
-            userId,
-            llm: this.infoLlm ?? this.llm,
-            maxMessages: maxHistory,
-            compactAfterTokens,
-            keepRecent,
-          }),
-          wantsNewsContext(message)
-            ? buildSemanticIntelContext(message, this.config)
-            : Promise.resolve(''),
-          message.trim().length >= 24
-            ? this.buildSemanticChatContext(message, userId)
-            : Promise.resolve(''),
-        ]);
+        await this.sessions.compactIfNeeded({
+          userId,
+          llm: this.infoLlm ?? this.llm,
+          maxMessages: maxHistory,
+          compactAfterTokens,
+          keepRecent,
+        });
 
-        // Prefer small, recent history in the prompt. Older context should come from
-        // summary + retrieval (semantic embeddings or lexical fallback) to reduce latency/cost.
-        const history = this.sessions.buildContextMessages(userId, Math.min(maxHistory, keepRecent));
+        const history = this.sessions.buildContextMessages(userId, maxHistory);
 
         // Build context
         const userContext = buildUserContext(userId, this.config);
         const intelContext = buildIntelContext();
+        const semanticIntelContext = await buildSemanticIntelContext(message, this.config);
+        const semanticChatContext = await this.buildSemanticChatContext(message, userId);
 
         // Build the full context for this turn
         const contextBlock = [
           userContext,
           timeContext,
           forcedToolContext,
-          marketSnapshot,
           toolFirstContext,
           summary ? `## Conversation Summary\n${summary}` : '',
           intelContext,
@@ -559,48 +466,9 @@ export class ConversationHandler {
         // Call LLM
         const response = await this.completeWithFallback(messages, { temperature: 0.7 });
 
-        // Don't store empty responses (prevents history corruption from failed calls).
-        // Returning a user-facing message is better than throwing; empty can happen when
-        // LLM infra degrades to MONITOR_ONLY due to budget/cooldowns/rate limits.
+        // Don't store empty responses (prevents history corruption from failed calls)
         if (!response.content || response.content.trim() === '') {
-          const meta = (this.agenticLlm ?? this.llm).meta ?? {
-            provider: 'openai' as const,
-            model: response.model || 'unknown',
-          };
-          const ctx = getExecutionContext();
-
-          if (ctx?.mode === 'MONITOR_ONLY') {
-            const reason = ctx.reason ? ` (${ctx.reason})` : '';
-            return `LLM suppressed: MONITOR_ONLY${reason}.`;
-          }
-
-          const budget = getLlmBudgetManager(this.config);
-          const estimatedTokens = estimateTokensFromMessages(messages);
-          if (
-            budget.isEnabled() &&
-            (meta.provider === 'openai' || meta.provider === 'anthropic' || meta.provider === 'local') &&
-            budget.shouldCountProvider(meta.provider) &&
-            !budget.canConsume(estimatedTokens, false, meta.provider)
-          ) {
-            const status = budget.status();
-            return [
-              `LLM suppressed: hourly budget exceeded (calls=${status.usedCalls}/${status.maxCallsPerHour}, tokens=${status.usedTokens}/${status.maxTokensPerHour}).`,
-              `It will recover automatically as the rolling hour window advances.`,
-              `To unblock immediately, delete ${status.path} or raise/disable agent.llmBudget in config.`,
-            ].join(' ');
-          }
-
-          if (meta.provider && meta.model) {
-            const cooldown = isCooling(meta.provider, meta.model);
-            if (cooldown) {
-              return [
-                `LLM suppressed: provider cooldown active for ${meta.provider}/${meta.model}.`,
-                `Try again after ${new Date(cooldown.until).toISOString()}.`,
-              ].join(' ');
-            }
-          }
-
-          return 'LLM is temporarily unavailable. Try again in ~30-60 seconds.';
+          throw new Error('LLM returned empty response');
         }
 
         const userEntry: ChatMessage = { role: 'user', content: message };
@@ -668,10 +536,9 @@ export class ConversationHandler {
 
   private async runForcedTooling(message: string): Promise<string> {
     const text = message.toLowerCase();
-    const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio|pnl|profit|loss)\b/.test(text);
-    const wantsTrade = /\b(trade|trades|order|orders|open orders|position|positions|fills|place|execute|close|closed)\b/.test(text);
-    const wantsHistory = wantsTradeHistoryContext(message);
-    if (!wantsWallet && !wantsTrade && !wantsHistory) {
+    const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio)\b/.test(text);
+    const wantsTrade = /\b(trade|order|place|execute)\b/.test(text);
+    if (!wantsWallet && !wantsTrade) {
       return '';
     }
 
@@ -682,10 +549,6 @@ export class ConversationHandler {
       lines.push(`Wallet info: ${JSON.stringify(walletInfo)}`);
       const portfolio = await executeToolCall('get_portfolio', {}, this.toolContext);
       lines.push(`Portfolio: ${JSON.stringify(portfolio)}`);
-      const positions = await executeToolCall('perp_positions', {}, this.toolContext);
-      lines.push(`Perp positions: ${JSON.stringify(positions)}`);
-      const openOrders = await executeToolCall('perp_open_orders', {}, this.toolContext);
-      lines.push(`Perp open orders: ${JSON.stringify(openOrders)}`);
     }
 
     if (wantsTrade) {
@@ -695,50 +558,8 @@ export class ConversationHandler {
       );
     }
 
-    if (wantsHistory) {
-      const trades = await executeToolCall('perp_trade_journal_list', { limit: 20 }, this.toolContext);
-      lines.push(`Trade journal: ${JSON.stringify(trades)}`);
-      const closes = await executeToolCall('trade_management_recent_closes', { limit: 20 }, this.toolContext);
-      lines.push(`Recent closes: ${JSON.stringify(closes)}`);
-      const summary = await executeToolCall('trade_management_summary', { limit: 20 }, this.toolContext);
-      lines.push(`Trade summary: ${JSON.stringify(summary)}`);
-    }
-
     lines.push('');
     return lines.join('\n');
-  }
-
-  private async buildMarketSnapshot(message: string): Promise<string> {
-    if (!wantsMarketContext(message)) return '';
-
-    const sections: string[] = ['## Market Snapshot'];
-    try {
-      // Run in parallel; these are independent calls.
-      const [portfolio, positions, btc, eth] = await Promise.all([
-        executeToolCall('get_portfolio', {}, this.toolContext),
-        executeToolCall('perp_positions', {}, this.toolContext),
-        executeToolCall('perp_market_get', { symbol: 'BTC' }, this.toolContext),
-        executeToolCall('perp_market_get', { symbol: 'ETH' }, this.toolContext),
-      ]);
-
-      if (portfolio.success) {
-        sections.push(`### get_portfolio\n${JSON.stringify(portfolio.data, null, 2)}`);
-      }
-      if (positions.success) {
-        sections.push(`### perp_positions\n${JSON.stringify(positions.data, null, 2)}`);
-      }
-      if (btc.success) {
-        sections.push(`### perp_market_get (BTC)\n${JSON.stringify(btc.data, null, 2)}`);
-      }
-      if (eth.success) {
-        sections.push(`### perp_market_get (ETH)\n${JSON.stringify(eth.data, null, 2)}`);
-      }
-
-      if (sections.length === 1) return '';
-      return sections.join('\n\n') + '\n';
-    } catch {
-      return '';
-    }
   }
 
   private shouldResumePlan(message: string): boolean {
@@ -804,7 +625,7 @@ export class ConversationHandler {
 
   private async buildSemanticChatContext(message: string, _userId: string): Promise<string> {
     if (!this.config.memory?.embeddings?.enabled) {
-      return this.buildLexicalChatContext(message, _userId);
+      return '';
     }
     const hits = await this.chatVectorStore.query(message, 5);
     if (hits.length === 0) {
@@ -817,23 +638,6 @@ export class ConversationHandler {
     const lines: string[] = ['## Relevant Past Conversation'];
     for (const item of items) {
       lines.push(`- ${item.role}: ${item.content.slice(0, 200)}`);
-    }
-    lines.push('');
-    return lines.join('\n');
-  }
-
-  private buildLexicalChatContext(message: string, userId: string): string {
-    const sessionId = this.sessions.getSessionId(userId);
-    const hits = searchChatMessagesLexical({ sessionId, query: message, limit: 6 });
-    if (hits.length === 0) {
-      return '';
-    }
-    const lines: string[] = ['## Relevant Past Conversation (Lexical)'];
-    for (const item of hits) {
-      const content = String(item.content ?? '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      lines.push(`- ${item.role}: ${content.slice(0, 220)}`);
     }
     lines.push('');
     return lines.join('\n');

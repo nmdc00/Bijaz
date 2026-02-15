@@ -6,10 +6,6 @@ import type {
   MetaAndAssetCtxsResponse,
   PortfolioResponse,
   RecentTradesResponse,
-  HistoricalOrdersResponse,
-  OrderStatusResponse,
-  UserFillsResponse,
-  UserFillsByTimeResponse,
   SpotClearinghouseStateResponse,
   UserFeesResponse,
 } from '@nktkas/hyperliquid/api/info';
@@ -35,12 +31,7 @@ export class HyperliquidClient {
 
   constructor(private config: ThufirConfig) {
     const baseUrl = config.hyperliquid?.baseUrl ?? 'https://api.hyperliquid.xyz';
-    const timeoutMsRaw = (config.hyperliquid as any)?.httpTimeoutMs;
-    const timeoutMs =
-      typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
-        ? Math.floor(timeoutMsRaw)
-        : undefined;
-    this.transport = new HttpTransport({ apiUrl: baseUrl, timeout: timeoutMs });
+    this.transport = new HttpTransport({ apiUrl: baseUrl });
     this.info = new InfoClient({ transport: this.transport });
   }
 
@@ -130,60 +121,6 @@ export class HyperliquidClient {
       );
     }
     return this.info.openOrders({ user });
-  }
-
-  async getOrderStatus(params: { oid: number }): Promise<OrderStatusResponse> {
-    const user = this.getAccountAddress();
-    if (!user) {
-      throw new Error(
-        'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
-      );
-    }
-    return this.info.orderStatus({ user, oid: params.oid });
-  }
-
-  async getHistoricalOrders(): Promise<HistoricalOrdersResponse> {
-    const user = this.getAccountAddress();
-    if (!user) {
-      throw new Error(
-        'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
-      );
-    }
-    return this.info.historicalOrders({ user });
-  }
-
-  async getUserFills(params?: { aggregateByTime?: boolean }): Promise<UserFillsResponse> {
-    const user = this.getAccountAddress();
-    if (!user) {
-      throw new Error(
-        'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
-      );
-    }
-    return this.info.userFills({ user, aggregateByTime: params?.aggregateByTime });
-  }
-
-  async getUserFillsByTime(params: {
-    startTimeMs: number;
-    endTimeMs?: number;
-    aggregateByTime?: boolean;
-  }): Promise<UserFillsByTimeResponse> {
-    const user = this.getAccountAddress();
-    if (!user) {
-      throw new Error(
-        'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
-      );
-    }
-    const startTime = Math.max(0, Math.floor(params.startTimeMs));
-    const endTime =
-      typeof params.endTimeMs === 'number' && Number.isFinite(params.endTimeMs)
-        ? Math.max(0, Math.floor(params.endTimeMs))
-        : undefined;
-    return this.info.userFillsByTime({
-      user,
-      startTime,
-      endTime,
-      aggregateByTime: params.aggregateByTime,
-    });
   }
 
   async getClearinghouseState(): Promise<unknown> {

@@ -27,10 +27,6 @@ import { AutonomousManager } from './autonomous.js';
 import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
-import { TradeManagementService } from '../trade-management/service.js';
-import { openDatabase } from '../memory/db.js';
-import { HyperliquidClient } from '../execution/hyperliquid/client.js';
-import { listOpenTradeEnvelopes } from '../trade-management/db.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -43,7 +39,6 @@ export class ThufirAgent {
   private scanTimer: NodeJS.Timeout | null = null;
   private conversation: ConversationHandler;
   private autonomous: AutonomousManager;
-  private tradeManagement: TradeManagementService;
   private toolContext: ToolExecutorContext;
 
   constructor(private config: ThufirConfig, logger?: Logger) {
@@ -97,14 +92,6 @@ export class ThufirAgent {
       this.config,
       this.logger
     );
-
-    this.tradeManagement = new TradeManagementService({
-      config: this.config,
-      marketClient: this.marketClient,
-      executor: this.executor,
-      llm: this.autonomyLlm,
-      logger: this.logger,
-    });
   }
 
   private createExecutor(config: ThufirConfig): ExecutionAdapter {
@@ -123,9 +110,6 @@ export class ThufirAgent {
   }
 
   start(): void {
-    // Always start trade management when enabled (mechanical exit enforcement).
-    this.tradeManagement.start();
-
     // Start autonomous manager (handles its own scheduling)
     this.autonomous.start();
 
@@ -149,7 +133,6 @@ export class ThufirAgent {
 
   stop(): void {
     this.autonomous.stop();
-    this.tradeManagement.stop();
     if (this.scanTimer) {
       clearInterval(this.scanTimer);
       this.scanTimer = null;
@@ -163,39 +146,11 @@ export class ThufirAgent {
     return this.autonomous;
   }
 
-  /**
-   * Gateway-level services (e.g. position heartbeat) may need access to the same execution context
-   * (executor + limiter) without going through the full agentic loop.
-   */
-  getToolContext(): ToolExecutorContext {
-    return this.toolContext;
-  }
-
   async handleMessage(sender: string, text: string): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);
-
-    // Natural language "background monitoring" / autonomy affirmation shouldn't rely on the LLM.
-    // These messages tend to arrive when rate limits are active; respond deterministically.
-    const wantsBackgroundAutonomy =
-      /\b(background|keep\s+monitoring|monitor(ing)?\s+(my\s+)?(trades?|positions?)|run\s+in\s+the\s+background|keep\s+watching|always\s+watch)\b/i.test(
-        trimmed
-      ) ||
-      /\bremember\b.*\b(autonomous\s+agent|fully\s+autonomous)\b/i.test(trimmed);
-    if (wantsBackgroundAutonomy) {
-      const autonomyEnabled = (this.config.autonomy as any)?.enabled === true;
-      const status = this.autonomous.getStatus();
-      if (!autonomyEnabled) {
-        return 'Autonomous trading is disabled in config. Set `autonomy.enabled: true`, then use /fullauto on.';
-      }
-      const mode = status.fullAuto ? 'Full auto: ON' : 'Full auto: OFF (report-only)';
-      const paused = status.isPaused ? `Paused: YES (${status.pauseReason})` : 'Paused: NO';
-      return [
-        'Autonomy is running in the background.',
-        `${mode}. ${paused}.`,
-        'Use /status to see live PnL/trade count, /pause to stop, /resume to continue.',
-      ].join('\n');
-    }
+    const isCapabilityQuestion = this.isCapabilityQuestion(trimmed);
+    const isAccessQuestion = this.isAccessQuestion(trimmed);
 
     // Natural language "enable full auto" should not go through the LLM/tool loop.
     // This prevents "allowed number of steps" failures on vague confirmations like "Go for it."
@@ -216,20 +171,19 @@ export class ThufirAgent {
       const autoEnabled =
         (this.config.autonomy as any)?.enabled === true &&
         (this.config.autonomy as any)?.fullAuto === true;
-      if (!autoEnabled && !isQuestion) {
+      if (!autoEnabled && !isCapabilityQuestion && !isAccessQuestion && !isQuestion) {
         if (this.config.execution?.provider === 'hyperliquid') {
           return 'To place a live perp trade, use `/perp <symbol> <buy|sell> <sizeUsd> [leverage]` (example: `/perp BTC buy 25 3`).';
         }
       }
     }
 
-    // Command: /access - show execution readiness (fast-path; avoids the LLM/tool loop).
-    if (trimmed === '/access' || trimmed === '/access-status') {
-      return this.buildAccessReport();
-    }
-
     if (this.isSetupRequest(trimmed)) {
       return this.buildLiveTradingSetupPrompt();
+    }
+
+    if (isCapabilityQuestion || isAccessQuestion) {
+      return this.buildAccessReport();
     }
 
     // Command: /watch <marketId>
@@ -583,72 +537,7 @@ export class ThufirAgent {
     // Command: /status - Get autonomous mode status
     if (trimmed === '/status') {
       const status = this.autonomous.getStatus();
-      const todayUtc = new Date().toISOString().slice(0, 10);
-      const db = openDatabase();
-      const statusRows = db
-        .prepare(
-          `
-            SELECT status, COUNT(*) as n
-            FROM perp_trades
-            WHERE date(created_at) = ?
-            GROUP BY status
-          `
-        )
-        .all(todayUtc) as Array<{ status: string; n: number }>;
-      let attempted = 0;
-      let executed = 0;
-      let failed = 0;
-      for (const row of statusRows) {
-        const n = Number(row.n ?? 0);
-        attempted += n;
-        if (row.status === 'executed') executed += n;
-        if (row.status === 'failed') failed += n;
-      }
-      const closes = db
-        .prepare(
-          `
-            SELECT
-              COUNT(*) as n,
-              SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN pnl_usd < 0 THEN 1 ELSE 0 END) as losses,
-              SUM(pnl_usd) as pnl
-            FROM trade_closes
-            WHERE date(closed_at) = ?
-          `
-        )
-        .get(todayUtc) as { n?: number; wins?: number; losses?: number; pnl?: number } | undefined;
-      const wins = Number(closes?.wins ?? 0);
-      const losses = Number(closes?.losses ?? 0);
-      const realizedPnl = Number(closes?.pnl ?? 0);
-      const openManaged = listOpenTradeEnvelopes().length;
-
-      let accountValueUsd: number | null = null;
-      let unrealizedPnlUsd: number | null = null;
-      try {
-        if (this.config.execution?.mode === 'live' && this.config.execution?.provider === 'hyperliquid') {
-          const client = new HyperliquidClient(this.config);
-          const state = (await client.getClearinghouseState()) as any;
-          const rawValue =
-            state?.marginSummary?.accountValue ??
-            state?.crossMarginSummary?.accountValue ??
-            null;
-          const valueNum = typeof rawValue === 'string' || typeof rawValue === 'number' ? Number(rawValue) : NaN;
-          accountValueUsd = Number.isFinite(valueNum) ? valueNum : null;
-
-          const positions = Array.isArray(state?.assetPositions) ? state.assetPositions : [];
-          let unrl = 0;
-          for (const entry of positions) {
-            const p = entry?.position ?? {};
-            const szi = Number((p as any).szi ?? 0);
-            if (!Number.isFinite(szi) || szi === 0) continue;
-            const pnl = Number((p as any).unrealizedPnl ?? 0);
-            if (Number.isFinite(pnl)) unrl += pnl;
-          }
-          unrealizedPnlUsd = Number.isFinite(unrl) ? unrl : null;
-        }
-      } catch {
-        // Best-effort; keep nulls.
-      }
+      const pnl = this.autonomous.getDailyPnL();
 
       const lines: string[] = [];
       lines.push('**Thufir Status**');
@@ -660,18 +549,9 @@ export class ThufirAgent {
       lines.push(`• Consecutive losses: ${status.consecutiveLosses}`);
       lines.push('');
       lines.push('**Today\'s Activity:**');
-      lines.push(`• Date (UTC): ${todayUtc}`);
-      lines.push(`• Trade attempts: ${attempted} (executed:${executed} failed:${failed})`);
-      lines.push(`• Closed trades: ${wins + losses} (W:${wins} L:${losses})`);
-      lines.push(`• Realized P&L (closes): ${realizedPnl >= 0 ? '+' : ''}$${realizedPnl.toFixed(2)}`);
-      if (unrealizedPnlUsd != null) {
-        lines.push(`• Unrealized P&L (open): ${unrealizedPnlUsd >= 0 ? '+' : ''}$${unrealizedPnlUsd.toFixed(2)}`);
-      }
-      if (accountValueUsd != null) {
-        lines.push(`• Perps account value: $${accountValueUsd.toFixed(2)}`);
-      }
-      lines.push(`• Open managed positions: ${openManaged}`);
-      lines.push(`• Remaining daily spend limit: $${status.remainingDaily.toFixed(2)}`);
+      lines.push(`• Trades: ${pnl.tradesExecuted} (W:${pnl.wins} L:${pnl.losses} P:${pnl.pending})`);
+      lines.push(`• Realized P&L: ${pnl.realizedPnl >= 0 ? '+' : ''}$${pnl.realizedPnl.toFixed(2)}`);
+      lines.push(`• Remaining budget: $${status.remainingDaily.toFixed(2)}`);
 
       return lines.join('\n');
     }
@@ -738,17 +618,6 @@ Just type naturally to chat about markets, risks, or positioning.
       return await this.conversation.chat(sender, trimmed);
     } catch (error) {
       this.logger.error('Conversation error', error);
-      const msg = error instanceof Error ? error.message : String(error);
-      const lower = msg.toLowerCase();
-      const isTimeout = lower.includes('timed out') || lower.includes('timeout');
-      const isRateLimit =
-        lower.includes('rate limit') || lower.includes('429') || lower.includes('cooldown');
-      if (isTimeout || isRateLimit) {
-        return [
-          'LLM is temporarily unavailable (rate limit/timeout).',
-          'Autonomy is still running in the background; use /status.',
-        ].join(' ');
-      }
       return `Sorry, I encountered an error. Try again or use /help for commands.`;
     }
   }
@@ -856,6 +725,24 @@ Just type naturally to chat about markets, risks, or positioning.
     return (
       /\?\s*$/.test(message) ||
       /^(should|can|could|would|do|does|did|are|is|am|will|may)\b/i.test(message)
+    );
+  }
+
+  private isCapabilityQuestion(message: string): boolean {
+    return (
+      this.isQuestion(message) &&
+      /\b(suited|capable|able)\b/i.test(message) &&
+      /\b(trade|buy|sell|long|short)\b/i.test(message)
+    );
+  }
+
+  private isAccessQuestion(message: string): boolean {
+    return (
+      this.isQuestion(message) &&
+      (/\baccess\b/i.test(message) ||
+        /\bwhere\b.*\baccess\b/i.test(message) ||
+        /\bcan you\b.*\b(trade|buy|sell|long|short)\b/i.test(message) ||
+        /\bdo you\b.*\b(access|trade)\b/i.test(message))
     );
   }
 

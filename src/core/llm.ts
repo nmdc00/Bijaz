@@ -234,12 +234,7 @@ class LlmQueue {
 }
 
 class LimitedLlmClient implements LlmClient {
-  meta?: LlmClientMeta;
-
-  constructor(private inner: LlmClient, private limiter: LlmQueue) {
-    // Preserve meta for observability/debugging and infra routing decisions.
-    this.meta = inner.meta;
-  }
+  constructor(private inner: LlmClient, private limiter: LlmQueue) {}
 
   complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
     return this.limiter.enqueue(() => this.inner.complete(messages, options));
@@ -317,19 +312,9 @@ class InfraLlmClient implements LlmClient {
     }
 
     try {
-      const explicitTimeoutMs = options?.timeoutMs;
-      // OpenAI GPT-5.1 can legitimately exceed the global watchdog timeout during tool-heavy
-      // or long-chain reasoning. If the caller did not explicitly set a timeout, disable the
-      // infra-level timeout for this model to avoid spurious failovers.
-      const disableDefaultTimeout =
-        explicitTimeoutMs === undefined && meta.provider === 'openai' && meta.model.startsWith('gpt-5.1');
-      const timeoutMs = disableDefaultTimeout ? 0 : explicitTimeoutMs ?? resolveDefaultLlmTimeoutMs();
-      // Preserve inner-client default timeouts (notably TrivialTaskClient soft timeouts) by
-      // only forwarding timeoutMs when the caller explicitly provided one.
-      const forwardedOptions =
-        explicitTimeoutMs !== undefined ? { ...options, timeoutMs: explicitTimeoutMs } : options;
+      const timeoutMs = options?.timeoutMs ?? resolveDefaultLlmTimeoutMs();
       const response = await runWithTimeout(
-        () => this.inner.complete(finalized, forwardedOptions),
+        () => this.inner.complete(finalized, { ...options, timeoutMs }),
         timeoutMs,
         `LLM request (${meta.provider}/${meta.model})`
       );
@@ -338,9 +323,7 @@ class InfraLlmClient implements LlmClient {
       return response;
     } catch (error) {
       if (isRateLimitError(error)) {
-        const state = recordCooldown(meta.provider, meta.model, {
-          resetSeconds: extractResetSeconds(error),
-        });
+        const state = recordCooldown(meta.provider, meta.model);
         this.logger.warn('LLM rate limit detected; entering cooldown', {
           provider: meta.provider,
           model: meta.model,
@@ -356,150 +339,6 @@ export function wrapWithInfra(client: LlmClient, config: ThufirConfig, logger?: 
   return new InfraLlmClient(client, config, logger);
 }
 
-function extractResetSeconds(error: unknown): number | null {
-  const message = extractErrorMessage(error);
-  if (!message) return null;
-  // llm-mux often nests JSON into a string; a regex is the most robust approach here.
-  const m = message.match(/reset_seconds\"?\s*:\s*(\d+)/i);
-  if (!m) return null;
-  const n = Number(m[1]);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function isFailoverEligibleError(error: unknown): boolean {
-  if (isRateLimitError(error)) return true;
-  const message = extractErrorMessage(error).toLowerCase();
-  // Proxies can fail in non-429 ways (bad routing, missing auth, schema mismatch) where a
-  // configured fallback route is still desirable.
-  return (
-    message.includes('auth_not_found') ||
-    message.includes('unknown provider for model') ||
-    message.includes('unsupported parameter') ||
-    message.includes('missing management key') ||
-    message.includes('invalid_request_error') ||
-    message.includes('timed out') ||
-    message.includes('timeout') ||
-    message.includes('connect') && message.includes('refused')
-  );
-}
-
-export class RateLimitFailoverClient implements LlmClient {
-  meta?: LlmClientMeta;
-  private logger: Logger;
-  private config: ThufirConfig;
-  private candidates: LlmClient[];
-
-  constructor(candidates: LlmClient[], config: ThufirConfig, logger?: Logger) {
-    this.candidates = candidates;
-    this.config = config;
-    this.logger = logger ?? new Logger('info');
-    this.meta = candidates[0]?.meta;
-  }
-
-  async complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
-    const ctx = getExecutionContext();
-    const allowNonCritical = this.config?.agent?.allowFallbackNonCritical ?? true;
-
-    let lastError: unknown = null;
-    for (let i = 0; i < this.candidates.length; i += 1) {
-      const candidate = this.candidates[i];
-      if (!candidate) continue;
-      const meta = candidate.meta ?? { provider: 'unknown', model: 'unknown' };
-      const cooldown = meta.provider !== 'unknown' && meta.model !== 'unknown'
-        ? isCooling(meta.provider, meta.model)
-        : null;
-      if (cooldown) {
-        // Skip cooled routes and keep trying alternatives.
-        this.logger.warn('LLM route cooling; skipping', {
-          provider: meta.provider,
-          model: meta.model,
-          until: new Date(cooldown.until).toISOString(),
-        });
-        continue;
-      }
-
-      try {
-        const response = await candidate.complete(messages, options);
-        const empty = response.content.trim().length === 0;
-        if (empty) {
-          // Treat empty output as a soft failure. This can happen when a proxy returns an
-          // "ok" response with no assistant text, or when infra suppresses calls.
-          this.logger.warn('LLM returned empty response; trying next route', {
-            from: meta,
-            to: (this.candidates[i + 1]?.meta ?? { provider: 'unknown', model: 'unknown' }),
-          });
-          if (this.candidates[i + 1]) {
-            continue;
-          }
-        }
-        return response;
-      } catch (error) {
-        lastError = error;
-        const isCooldownError = (error as { code?: string } | null)?.code === 'model_cooldown';
-        if (!isCooldownError && !isFailoverEligibleError(error)) {
-          throw error;
-        }
-        if (!ctx?.critical && !allowNonCritical) {
-          throw error;
-        }
-
-        const reason = extractErrorMessage(error);
-        const next = this.candidates[i + 1];
-        const nextMeta = next?.meta ?? { provider: 'unknown', model: 'unknown' };
-        if (!next) {
-          throw error;
-        }
-        this.logger.warn('LLM failover triggered', {
-          from: meta,
-          to: nextMeta,
-          reason,
-        });
-        continue;
-      }
-    }
-
-    if (lastError) throw lastError;
-    return { content: '', model: this.meta?.model ?? 'unknown' };
-  }
-}
-
-function resolveRateLimitFailover(config: ThufirConfig): { provider: 'anthropic' | 'openai'; model: string } {
-  const provider = (config.agent.rateLimitFallbackProvider ?? 'openai') as 'anthropic' | 'openai' | 'local';
-  if (provider === 'local') {
-    // Don't allow "local" as an automatic failover route for full agentic calls.
-    return { provider: 'openai', model: config.agent.rateLimitFallbackModel ?? config.agent.executorModel ?? 'gpt-5' };
-  }
-  const model =
-    config.agent.rateLimitFallbackModel ??
-    config.agent.executorModel ??
-    // Prefer gpt-5 because llm-mux previously rejected gpt-5.2 as unknown.
-    'gpt-5';
-  return { provider, model };
-}
-
-function wrapWithRateLimitFailoverIfNeeded(primary: LlmClient, config: ThufirConfig): LlmClient {
-  const primaryModel = primary.meta?.model ?? '';
-  const looksClaude = primaryModel.toLowerCase().includes('claude');
-  const explicit =
-    !!config.agent.rateLimitFallbackModel || !!config.agent.rateLimitFallbackProvider;
-  if (!looksClaude && !explicit) {
-    return primary;
-  }
-
-  const fallback = resolveRateLimitFailover(config);
-  // If the fallback is identical to primary, don't wrap.
-  if (primary.meta?.provider === fallback.provider && primary.meta?.model === fallback.model) {
-    return primary;
-  }
-
-  const fallbackRaw =
-    fallback.provider === 'anthropic'
-      ? (new AnthropicClient(config, fallback.model) as LlmClient)
-      : (new OpenAiClient(config, fallback.model) as LlmClient);
-  const fallbackClient = wrapWithInfra(fallbackRaw, config);
-  return new RateLimitFailoverClient([primary, fallbackClient], config);
-}
-
 function assertLocalProviderNotAllowed(
   provider: 'anthropic' | 'openai' | 'local',
   context: string
@@ -513,16 +352,16 @@ function assertLocalProviderNotAllowed(
 
 export function createLlmClient(config: ThufirConfig): LlmClient {
   assertLocalProviderNotAllowed(config.agent.provider, 'primary LLM usage');
-  const primaryRaw =
-    config.agent.provider === 'anthropic'
-      ? (new AnthropicClient(config) as LlmClient)
-      : config.agent.provider === 'openai'
-        ? (new OpenAiClient(config) as LlmClient)
-        : (new LocalClient(config) as LlmClient);
-
-  const primary = wrapWithInfra(primaryRaw, config);
-  const withFailover = wrapWithRateLimitFailoverIfNeeded(primary, config);
-  return wrapWithLimiter(withFailover);
+  switch (config.agent.provider) {
+    case 'anthropic':
+      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+    case 'openai':
+      return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config), config));
+    case 'local':
+      return wrapWithLimiter(wrapWithInfra(new LocalClient(config), config));
+    default:
+      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+  }
 }
 
 export function createOpenAiClient(
@@ -571,44 +410,18 @@ export function createAgenticExecutorClient(
     const primary = new AgenticAnthropicClient(config, toolContext, model);
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
     const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel);
-    const withinProvider = wrapWithInfra(
-      new FallbackLlmClient(primary, fallback, isRateLimitError, config),
-      config
+    return wrapWithLimiter(
+      wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
     );
-    const withFailover = wrapWithRateLimitFailoverIfNeeded(withinProvider, config);
-    return wrapWithLimiter(withFailover);
   }
-  const primary = wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config);
-  const withFailover = wrapWithRateLimitFailoverIfNeeded(primary, config);
-  return wrapWithLimiter(withFailover);
+  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config));
 }
 
 export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null {
   const trivialConfig = config.agent?.trivial;
   if (!trivialConfig?.enabled) return null;
   const provider = config.agent?.trivialTaskProvider ?? 'local';
-  const modelRaw = config.agent?.trivialTaskModel ?? 'qwen2.5:1.5b-instruct';
-  const model = (() => {
-    // Guard against common misconfig: selecting a remote provider but leaving the local-model default.
-    // This can happen when users switch trivialTaskProvider to anthropic/openai but forget to change
-    // trivialTaskModel, which defaults to an Ollama-style model id.
-    const looksLocal = modelRaw.includes(':') || modelRaw.includes('/');
-    if (provider === 'anthropic') {
-      const looksAnthropic = modelRaw.toLowerCase().includes('claude');
-      if (!looksAnthropic && looksLocal) {
-        return config.agent.fallbackModel ?? config.agent.model;
-      }
-      return modelRaw;
-    }
-    if (provider === 'openai') {
-      // OpenAI models will not look like "qwen2.5:..." or "llama3:..." (Ollama-style).
-      if (looksLocal) {
-        return config.agent.openaiModel ?? config.agent.model;
-      }
-      return modelRaw;
-    }
-    return modelRaw;
-  })();
+  const model = config.agent?.trivialTaskModel ?? 'qwen2.5:1.5b-instruct';
   const defaults: LlmClientOptions = {
     temperature: trivialConfig.temperature ?? 0.2,
     timeoutMs: trivialConfig.timeoutMs,
@@ -640,16 +453,10 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
     };
 
     const primary = new TrivialTaskClient(guarded, localDefaults);
-    // Prefer OpenAI as the default remote fallback. We route through the same proxy (if enabled) and
-    // llm-mux supports OpenAI-style chat endpoints for gpt-* models; falling back to Anthropic here
-    // makes trivial tasks depend on Claude OAuth health unnecessarily.
+    // Under llm-mux proxy, OpenAI requests may be unsupported; use Anthropic as the default remote fallback.
     const fallbackRemote =
-      config.agent.provider === 'anthropic'
-        ? new AnthropicClient(
-            config,
-            config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022',
-            'trivial'
-          )
+      config.agent.provider === 'anthropic' || config.agent.useProxy
+        ? new AnthropicClient(config, config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022', 'trivial')
         : new OpenAiClient(config, config.agent.openaiModel ?? config.agent.model, 'trivial');
     const fallback = new TrivialTaskClient(fallbackRemote, defaults);
 
@@ -755,7 +562,7 @@ function resolveLocalBaseUrl(config: ThufirConfig): string {
 
 const LOCAL_HEALTH_TTL_MS = 2 * 60 * 1000;
 const LOCAL_HEALTH_COOLDOWN_MS = 5 * 60 * 1000;
-const LOCAL_HEALTH_TIMEOUT_MS = 3000;
+const LOCAL_HEALTH_TIMEOUT_MS = 1500;
 
 type LocalHealthState = {
   lastChecked: number;
@@ -1259,112 +1066,12 @@ async function fetchWithRetry(factory: () => Promise<FetchResponse>): Promise<Fe
   return factory();
 }
 
-// ---------------------------------------------------------------------------
-// Text-based tool calling helpers
-// ---------------------------------------------------------------------------
-// When going through a proxy that strips the `tools` API parameter, we inject
-// tool definitions into the system prompt as text and parse structured
-// <tool_call> blocks from the model's response.
-
-interface TextToolCall {
-  name: string;
-  arguments: Record<string, unknown>;
-}
-
-function buildTextToolPrompt(): string {
-  const toolDefs = THUFIR_TOOLS.map((tool) => {
-    const schema = tool.input_schema as {
-      properties?: Record<string, { type?: string; description?: string; enum?: string[] }>;
-      required?: string[];
-    };
-    const props = schema.properties ?? {};
-    const required = new Set(schema.required ?? []);
-    const paramLines = Object.entries(props).map(([name, prop]) => {
-      const req = required.has(name) ? '' : '?';
-      const enumPart = prop.enum ? ` [${prop.enum.join(', ')}]` : '';
-      return `    ${name}${req} (${prop.type ?? 'any'}${enumPart}): ${prop.description ?? ''}`;
-    });
-    const paramsBlock = paramLines.length > 0 ? '\n' + paramLines.join('\n') : '';
-    return `- **${tool.name}**: ${tool.description}${paramsBlock}`;
-  }).join('\n');
-
-  return `## Available Tools
-
-To call a tool, output a <tool_call> block:
-
-<tool_call>
-{"name": "tool_name", "arguments": {"key": "value"}}
-</tool_call>
-
-IMPORTANT: Each tool call MUST be a separate <tool_call> block with exactly one tool name.
-Do NOT combine tool names (e.g. "tool_a + tool_b" is WRONG).
-To call multiple tools, use multiple blocks:
-
-<tool_call>
-{"name": "get_wallet_info", "arguments": {}}
-</tool_call>
-
-<tool_call>
-{"name": "get_portfolio", "arguments": {}}
-</tool_call>
-
-Wait for results; never fabricate outputs.
-
-${toolDefs}`;
-}
-
-function parseTextToolCalls(text: string): TextToolCall[] {
-  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
-  const calls: TextToolCall[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const raw = match[1]!;
-      // Handle potential markdown code fences inside the block
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-      const parsed = JSON.parse(cleaned);
-      if (typeof parsed.name === 'string') {
-        // Detect and split "tool_a + tool_b + ..." concatenated names
-        if (parsed.name.includes('+')) {
-          const names = parsed.name.split(/\s*\+\s*/).map((n: string) => n.trim()).filter(Boolean);
-          for (const name of names) {
-            calls.push({ name, arguments: typeof parsed.arguments === 'object' && parsed.arguments !== null ? parsed.arguments : {} });
-          }
-        } else {
-          calls.push({
-            name: parsed.name,
-            arguments:
-              typeof parsed.arguments === 'object' && parsed.arguments !== null
-                ? parsed.arguments
-                : {},
-          });
-        }
-      }
-    } catch {
-      // Skip malformed tool calls
-    }
-  }
-  return calls;
-}
-
-function formatTextToolResults(
-  results: Array<{ name: string; data: unknown; success: boolean }>
-): string {
-  return results
-    .map((r) => {
-      const content = JSON.stringify(r.success ? r.data : { error: r.data });
-      return `<tool_result name="${r.name}">\n${content}\n</tool_result>`;
-    })
-    .join('\n\n');
-}
-
 export class AgenticOpenAiClient implements LlmClient {
   private model: string;
   private baseUrl: string;
   private toolContext: ToolExecutorContext;
   private includeTemperature: boolean;
   private useResponsesApi: boolean;
-  private useTextToolCalling: boolean;
   meta?: LlmClientMeta;
 
   constructor(
@@ -1377,7 +1084,6 @@ export class AgenticOpenAiClient implements LlmClient {
     this.toolContext = toolContext;
     this.includeTemperature = !config.agent.useProxy;
     this.useResponsesApi = config.agent.useResponsesApi ?? config.agent.useProxy;
-    this.useTextToolCalling = config.agent.useProxy ?? false;
     this.meta = { provider: 'openai', model: this.model, kind: 'agentic' };
   }
 
@@ -1393,11 +1099,6 @@ export class AgenticOpenAiClient implements LlmClient {
       bootstrapMaxChars: this.toolContext.config.agent?.identityBootstrapMaxChars,
       includeMissing: this.toolContext.config.agent?.identityBootstrapIncludeMissing,
     }).prelude;
-
-    if (this.useTextToolCalling) {
-      return this.completeWithTextTools(messages, maxIterations, temperature, prelude);
-    }
-
     let openaiMessages: OpenAiMessage[] = injectIdentity(
       messages,
       prelude
@@ -1406,43 +1107,8 @@ export class AgenticOpenAiClient implements LlmClient {
       content: msg.content,
     }));
 
-    // llm-mux's /v1/responses follows the Responses API shape where tool calls are returned as
-    // top-level output items of type "function_call" (not nested inside message.content[]).
-    // Keep a separate input-item transcript for that path.
-    const responsesInstructions = this.useResponsesApi
-      ? openaiMessages
-          .filter((m) => m.role === 'system')
-          .map((m) => m.content)
-          .join('\n\n---\n\n') || undefined
-      : undefined;
-    let responsesInput: Array<Record<string, unknown>> | null = this.useResponsesApi
-      ? openaiMessages
-          .filter((msg) => msg.role !== 'system')
-          .map((msg) => ({
-            role: msg.role,
-            content:
-              msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
-                ? msg.tool_calls.map((call) => ({
-                    type: 'function_call',
-                    name: call.function.name,
-                    arguments: call.function.arguments,
-                    call_id: call.id,
-                  }))
-                : [{ type: 'text', text: msg.content ?? '' }],
-          }))
-      : null;
-
     const tools: OpenAiTool[] = THUFIR_TOOLS.map((tool) => ({
       type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.input_schema as Record<string, unknown>,
-      },
-    }));
-
-    const responseTools = THUFIR_TOOLS.map((tool) => ({
-      type: 'function' as const,
       function: {
         name: tool.name,
         description: tool.description,
@@ -1465,10 +1131,29 @@ export class AgenticOpenAiClient implements LlmClient {
               ? {
                   model: this.model,
                   // Merge ALL system messages into instructions (identity + task prompts)
-                  instructions: responsesInstructions,
-                  input: responsesInput ?? [],
-                  // Responses API expects OpenAI's canonical tool schema.
-                  tools: responseTools,
+                  instructions: openaiMessages
+                    .filter((m) => m.role === 'system')
+                    .map((m) => m.content)
+                    .join('\n\n---\n\n') || undefined,
+                  input: openaiMessages
+                    .filter((msg) => msg.role !== 'system')
+                    .map((msg) => ({
+                      role: msg.role,
+                      content:
+                        msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
+                          ? msg.tool_calls.map((call) => ({
+                              type: 'function_call',
+                              name: call.function.name,
+                              arguments: call.function.arguments,
+                            }))
+                          : [{ type: 'text', text: msg.content ?? '' }],
+                    })),
+                  tools: THUFIR_TOOLS.map((tool) => ({
+                    type: 'function',
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.input_schema as Record<string, unknown>,
+                  })),
                 }
               : {
                   model: this.model,
@@ -1492,81 +1177,61 @@ export class AgenticOpenAiClient implements LlmClient {
       }
 
       const data = (await response.json()) as {
-        response?: Record<string, unknown>;
+        response?: {
+          output?: Array<{
+            type?: string;
+            content?: Array<
+              | { type: 'output_text'; text?: string }
+              | { type: 'function_call'; name: string; arguments: string; call_id?: string }
+            >;
+          }>;
+        };
         choices?: Array<{
           message: {
             content: string | null;
             tool_calls?: OpenAiToolCall[];
           };
         }>;
-        output?: unknown;
+        output?: Array<{
+          type?: string;
+          content?: Array<
+            | { type: 'output_text'; text?: string }
+            | { type: 'function_call'; name: string; arguments: string; call_id?: string }
+          >;
+        }>;
       };
 
       if (this.useResponsesApi) {
-        const root = (data.response ?? data) as any;
-        if (root?.error) {
-          const msg =
-            typeof root.error === 'string'
-              ? root.error
-              : typeof root.error?.message === 'string'
-                ? root.error.message
-                : JSON.stringify(root.error);
-          throw new Error(`LLM request failed: ${msg}`);
-        }
-
-        const outputItems: any[] = Array.isArray(root?.output) ? root.output : [];
-
-        // llm-mux returns tool calls as top-level output items with shape:
-        // { type: "function_call", name, arguments, call_id, ... } (no content array)
-        const toolCallsFromItems = outputItems
-          .filter((item) => item && item.type === 'function_call' && typeof item.name === 'string')
-          .map((item) => ({
-            id: typeof item.call_id === 'string' && item.call_id ? item.call_id : `call_${Date.now()}`,
-            type: 'function' as const,
-            function: {
-              name: String(item.name),
-              arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
-            },
-          }));
-
-        // Also support canonical Responses format where function_call appears inside message.content[].
-        const contentParts: any[] = outputItems.flatMap((item) =>
-          Array.isArray(item?.content) ? item.content : []
-        );
-        const toolCallsFromContent = contentParts
-          .filter((part) => part && part.type === 'function_call' && typeof part.name === 'string')
+        const root = data.response ?? data;
+        const contentParts =
+          root.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
+        const toolCalls = contentParts
+          .filter((part) => part.type === 'function_call')
           .map((part) => ({
-            id: typeof part.call_id === 'string' && part.call_id ? part.call_id : `call_${Date.now()}`,
+            id: 'call_id' in part && part.call_id ? part.call_id : `call_${Date.now()}`,
             type: 'function' as const,
             function: {
-              name: String(part.name),
-              arguments: typeof part.arguments === 'string' ? part.arguments : JSON.stringify(part.arguments ?? {}),
+              name: (part as { name: string }).name,
+              arguments: (part as { arguments: string }).arguments,
             },
           }));
-
-        const toolCalls = [...toolCallsFromItems, ...toolCallsFromContent];
 
         if (toolCalls.length === 0) {
           const text = contentParts
-            .filter((part) => part && (part.type === 'output_text' || part.type === 'text'))
-            .map((part) => String(part.text ?? ''))
+            .filter((part) => part.type === 'output_text')
+            .map((part) => (part as { text?: string }).text ?? '')
             .join('')
             .trim();
           return { content: text, model: this.model };
         }
 
-        if (!responsesInput) {
-          responsesInput = [];
-        }
-        for (const toolCall of toolCalls) {
-          // Append the function call event.
-          responsesInput.push({
-            type: 'function_call',
-            call_id: toolCall.id,
-            name: toolCall.function.name,
-            arguments: toolCall.function.arguments,
-          });
+        openaiMessages.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: toolCalls,
+        });
 
+        for (const toolCall of toolCalls) {
           let parsed: Record<string, unknown> = {};
           try {
             parsed = JSON.parse(toolCall.function.arguments ?? '{}');
@@ -1574,13 +1239,13 @@ export class AgenticOpenAiClient implements LlmClient {
             parsed = {};
           }
           const result = await executeToolCall(toolCall.function.name, parsed, this.toolContext);
-          // Append the function call output event.
-          responsesInput.push({
-            type: 'function_call_output',
-            call_id: toolCall.id,
-            output: JSON.stringify(result.success ? result.data : { error: result.error }),
+          openaiMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result.success ? result.data : { error: result.error }),
           });
         }
+
         continue;
       }
 
@@ -1614,151 +1279,6 @@ export class AgenticOpenAiClient implements LlmClient {
           content: JSON.stringify(result.success ? result.data : { error: result.error }),
         });
       }
-    }
-
-    return {
-      content: 'I was unable to complete the request within the allowed number of steps.',
-      model: this.model,
-    };
-  }
-
-  /**
-   * Text-based tool calling: injects tool definitions into the system prompt
-   * and parses <tool_call> blocks from the model's text response.
-   * Used when a proxy strips the native `tools` API parameter.
-   */
-  private async completeWithTextTools(
-    messages: ChatMessage[],
-    maxIterations: number,
-    temperature: number,
-    prelude: string
-  ): Promise<LlmResponse> {
-    const toolPrompt = buildTextToolPrompt();
-
-    // Build conversation with identity prelude injected
-    const conversation: Array<{ role: string; content: string }> = injectIdentity(
-      messages,
-      prelude
-    ).map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    }));
-
-    // Inject tool definitions into the system message
-    const sysIdx = conversation.findIndex((m) => m.role === 'system');
-    if (sysIdx >= 0) {
-      conversation[sysIdx] = {
-        role: 'system',
-        content: `${conversation[sysIdx]!.content}\n\n${toolPrompt}`,
-      };
-    } else {
-      conversation.unshift({ role: 'system', content: toolPrompt });
-    }
-
-    let iteration = 0;
-    while (iteration < maxIterations) {
-      iteration += 1;
-
-      const endpoint = this.useResponsesApi ? '/v1/responses' : '/v1/chat/completions';
-      let body: Record<string, unknown>;
-
-      if (this.useResponsesApi) {
-        const instructions =
-          conversation
-            .filter((m) => m.role === 'system')
-            .map((m) => m.content)
-            .join('\n\n---\n\n') || undefined;
-        const input = conversation
-          .filter((m) => m.role !== 'system')
-          .map((m) => ({
-            role: m.role,
-            content: [{ type: 'text', text: m.content }],
-          }));
-        body = { model: this.model, instructions, input };
-      } else {
-        body = {
-          model: this.model,
-          ...(this.includeTemperature ? { temperature } : {}),
-          messages: conversation,
-        };
-      }
-
-      const response = await fetchWithRetry(() =>
-        fetch(`${this.baseUrl}${endpoint}`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(body),
-        })
-      );
-
-      if (!response.ok) {
-        let detail = '';
-        try {
-          detail = await response.text();
-        } catch {
-          detail = '';
-        }
-        const errorMsg = detail ? parseProxyError(detail) : `status ${response.status}`;
-        throw new Error(`LLM request failed: ${errorMsg}`);
-      }
-
-      const data = (await response.json()) as any;
-
-      // Extract text from the response
-      let text: string;
-      if (this.useResponsesApi) {
-        const root = data.response ?? data;
-        if (root?.error) {
-          const msg =
-            typeof root.error === 'string'
-              ? root.error
-              : typeof root.error?.message === 'string'
-                ? root.error.message
-                : JSON.stringify(root.error);
-          throw new Error(`LLM request failed: ${msg}`);
-        }
-        const outputItems: any[] = Array.isArray(root?.output) ? root.output : [];
-        text = outputItems
-          .flatMap((item: any) => (Array.isArray(item?.content) ? item.content : []))
-          .filter((part: any) => part && (part.type === 'output_text' || part.type === 'text'))
-          .map((part: any) => String(part.text ?? ''))
-          .join('');
-      } else {
-        const message = data.choices?.[0]?.message;
-        text = message?.content ?? '';
-      }
-
-      // Parse text for <tool_call> blocks
-      const toolCalls = parseTextToolCalls(text);
-
-      if (toolCalls.length === 0) {
-        // No tool calls — return the model's text as the final response.
-        // Strip any leftover <tool_call> artifacts just in case.
-        return { content: text.trim(), model: this.model };
-      }
-
-      // Append the assistant's full response (including tool_call blocks) to conversation
-      conversation.push({ role: 'assistant', content: text });
-
-      // Execute each tool call
-      const results: Array<{ name: string; data: unknown; success: boolean }> = [];
-      for (const tc of toolCalls) {
-        const result = await executeToolCall(tc.name, tc.arguments, this.toolContext);
-        results.push({
-          name: tc.name,
-          data: result.success ? result.data : result.error,
-          success: result.success,
-        });
-      }
-
-      // Feed tool results back as a user message
-      conversation.push({
-        role: 'user',
-        content: formatTextToolResults(results),
-      });
     }
 
     return {
@@ -1849,9 +1369,6 @@ class OpenAiClient implements LlmClient {
     // Inject workspace identity at the start (Moltbot pattern)
     const openaiMessages = injectIdentity(messages, prelude);
     const maxTokens = options?.maxTokens;
-    // llm-mux's /v1/responses currently rejects token limit parameters entirely.
-    // When talking to OpenAI directly, `max_output_tokens` is fine.
-    const shouldSendResponsesTokenLimit = !this.config.agent.useProxy;
     const response = await fetchWithRetry(() =>
       fetch(`${this.baseUrl}${this.useResponsesApi ? '/v1/responses' : '/v1/chat/completions'}`, {
         method: 'POST',
@@ -1863,9 +1380,7 @@ class OpenAiClient implements LlmClient {
           this.useResponsesApi
             ? {
                 model: this.model,
-                ...(shouldSendResponsesTokenLimit && typeof maxTokens === 'number'
-                  ? { max_output_tokens: maxTokens }
-                  : {}),
+                ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
                 // Merge ALL system messages into instructions (identity + task prompts)
                 instructions: openaiMessages
                   .filter((m) => m.role === 'system')
@@ -1997,7 +1512,6 @@ export class FallbackLlmClient implements LlmClient {
     logger?: Logger
   ) {
     this.logger = logger ?? new Logger('info');
-    this.meta = primary.meta;
   }
 
   async complete(
@@ -2092,4 +1606,15 @@ export function isRateLimitError(error: unknown): boolean {
     message.includes('circuit open') ||
     message.includes('circuit breaker')
   );
+}
+
+function createAnthropicClientWithFallback(config: ThufirConfig): LlmClient {
+  const primary = new AnthropicClient(config);
+
+  // When using a proxy (llm-mux), OpenAI-shaped requests may not be supported.
+  // Prefer an Anthropic fallback model instead of switching providers.
+  const fallbackModel =
+    config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
+  const fallback = new AnthropicClient(config, fallbackModel);
+  return new FallbackLlmClient(primary, fallback, isRateLimitError, config);
 }

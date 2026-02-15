@@ -11,49 +11,12 @@ import {
 import { generateHypotheses } from './hypotheses.js';
 import { mapExpressionPlan } from './expressions.js';
 
-const horizonRank = (h: SignalPrimitive['timeHorizon']): number =>
-  h === 'minutes' ? 0 : h === 'hours' ? 1 : 2;
-
-const DEFAULT_SIGNAL_WEIGHTS: Record<SignalPrimitive['kind'], number> = {
-  reflexivity_fragility: 1.0,
-  funding_oi_skew: 0.8,
-  cross_asset_divergence: 0.6,
-  orderflow_imbalance: 0.4,
-  price_vol_regime: 0.3,
-  onchain_flow: 0.3,
-};
-
-function resolveSignalWeight(config: ThufirConfig, kind: SignalPrimitive['kind']): number {
-  const weights = (config as any)?.tradeManagement?.signalConvergence?.weights ?? {};
-  const raw = Number(weights[kind]);
-  // Important: missing config should not disable discovery. If a weight is omitted,
-  // fall back to sane defaults; explicit `0` should still disable the signal.
-  return Number.isFinite(raw) ? raw : (DEFAULT_SIGNAL_WEIGHTS[kind] ?? 1.0);
-}
-
-function clusterSignals(
-  config: ThufirConfig,
-  symbol: string,
-  signals: Array<SignalPrimitive | null>
-): SignalCluster {
+function clusterSignals(symbol: string, signals: Array<SignalPrimitive | null>): SignalCluster {
   const flat = signals.filter((s): s is NonNullable<typeof s> => !!s);
   const biasScore = flat.reduce((acc, s) => acc + (s.directionalBias === 'up' ? 1 : s.directionalBias === 'down' ? -1 : 0), 0);
   const directionalBias = biasScore > 0 ? 'up' : biasScore < 0 ? 'down' : 'neutral';
   const confidence = flat.length ? Math.min(1, flat.reduce((a, b) => a + b.confidence, 0) / flat.length) : 0;
-  // Time horizon should be set by the *shortest* horizon among high-weight, agreeing signals.
-  const highWeight = 0.6;
-  const contributing = flat.filter((s) => {
-    if (directionalBias === 'neutral') return false;
-    if (s.directionalBias === 'neutral') return false;
-    if (directionalBias === 'up' && s.directionalBias !== 'up') return false;
-    if (directionalBias === 'down' && s.directionalBias !== 'down') return false;
-    return resolveSignalWeight(config, s.kind) >= highWeight;
-  });
-  const horizonCandidates = contributing.length ? contributing : flat;
-  const timeHorizon =
-    horizonCandidates
-      .map((s) => s.timeHorizon)
-      .sort((a, b) => horizonRank(a) - horizonRank(b))[0] ?? 'hours';
+  const timeHorizon = flat[0]?.timeHorizon ?? 'hours';
   return {
     id: `cluster_${symbol}_${Date.now()}`,
     symbol,
@@ -62,35 +25,6 @@ function clusterSignals(
     confidence,
     timeHorizon,
   };
-}
-
-function passesSignalConvergence(config: ThufirConfig, cluster: SignalCluster): boolean {
-  const sc = (config as any)?.tradeManagement?.signalConvergence ?? {};
-  const minCount = Number(sc.minAgreeingSignals ?? 2);
-  const threshold = Number(sc.threshold ?? 1.5);
-  if (cluster.directionalBias === 'neutral') return false;
-  const bias = cluster.directionalBias;
-  let count = 0;
-  let weighted = 0;
-  let maxPossibleWeighted = 0;
-  let maxPossibleCount = 0;
-  for (const s of cluster.signals) {
-    if (s.directionalBias === 'neutral') continue;
-    if (bias === 'up' && s.directionalBias !== 'up') continue;
-    if (bias === 'down' && s.directionalBias !== 'down') continue;
-    count += 1;
-    const w = resolveSignalWeight(config, s.kind);
-    weighted += w;
-    maxPossibleWeighted += w;
-    maxPossibleCount += 1;
-  }
-
-  // Prevent "no trades ever" deadlocks when config threshold is higher than the maximum
-  // achievable weight from the signals actually produced for this cluster.
-  const effectiveThreshold = Math.min(threshold, maxPossibleWeighted);
-  const effectiveMinCount = Math.min(minCount, maxPossibleCount);
-
-  return count >= effectiveMinCount && weighted >= effectiveThreshold;
 }
 
 export async function runDiscovery(config: ThufirConfig): Promise<{
@@ -115,7 +49,7 @@ export async function runDiscovery(config: ThufirConfig): Promise<{
 
   const clusters = formatted.map((symbol, idx) => {
     const matchingCross = crossSignals.filter((s) => s.symbol === symbol);
-    return clusterSignals(config, symbol, [
+    return clusterSignals(symbol, [
       priceSignals[idx] ?? null,
       fundingSignals[idx] ?? null,
       orderflowSignals[idx] ?? null,
@@ -124,9 +58,7 @@ export async function runDiscovery(config: ThufirConfig): Promise<{
     ]);
   });
 
-  const eligibleClusters = clusters.filter((cluster) => passesSignalConvergence(config, cluster));
-
-  const hypotheses = eligibleClusters.flatMap((cluster) => {
+  const hypotheses = clusters.flatMap((cluster) => {
     const items = generateHypotheses(cluster);
     for (const hyp of items) {
       storeDecisionArtifact({

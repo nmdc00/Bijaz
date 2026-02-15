@@ -23,10 +23,6 @@ const ConfigSchema = z.object({
     model: z.string(),
     fallbackModel: z.string().optional(),
     openaiModel: z.string().default('gpt-5.2'),
-    // Optional cross-provider/model failover when the primary route is cooling down (429/rate limit).
-    // Example: primary Claude via proxy, fail over to a GPT model.
-    rateLimitFallbackProvider: z.enum(['anthropic', 'openai', 'local']).optional(),
-    rateLimitFallbackModel: z.string().optional(),
     executorModel: z.string().optional(),
     executorProvider: z.enum(['anthropic', 'openai', 'local']).default('openai'),
     useExecutorModel: z.boolean().default(false),
@@ -231,9 +227,6 @@ const ConfigSchema = z.object({
       enabled: z.boolean().default(true),
       baseUrl: z.string().default('https://api.hyperliquid.xyz'),
       wsUrl: z.string().default('wss://api.hyperliquid.xyz/ws'),
-      // HTTP polling timeout for Hyperliquid Info/Exchange clients (ms).
-      // The upstream client defaults to ~10s which can be too aggressive on small VPS links.
-      httpTimeoutMs: z.number().default(30000),
       accountAddress: z.string().optional(),
       privateKey: z.string().optional(),
       maxLeverage: z.number().default(5),
@@ -558,120 +551,6 @@ const ConfigSchema = z.object({
       pauseOnLossStreak: z.number().default(3),
       dailyReportTime: z.string().default('20:00'),
       maxTradesPerScan: z.number().default(3),
-    })
-    .default({}),
-  heartbeat: z
-    .object({
-      enabled: z.boolean().default(false),
-      tickIntervalSeconds: z.number().default(30),
-      rollingBufferSize: z.number().default(60),
-      triggers: z
-        .object({
-          pnlShiftPct: z.number().default(1.5),
-          approachingStopPct: z.number().default(1.0),
-          approachingTpPct: z.number().default(1.0),
-          liquidationProximityPct: z.number().default(5.0),
-          fundingSpike: z.number().default(0.0001),
-          volatilitySpikePct: z.number().default(2.0),
-          volatilitySpikeWindowTicks: z.number().default(10),
-          timeCeilingMinutes: z.number().default(15),
-          triggerCooldownSeconds: z.number().default(180),
-        })
-        .default({}),
-      llm: z
-        .object({
-          provider: z.enum(['anthropic', 'openai']).nullable().default(null),
-          model: z.string().nullable().default(null),
-          maxTokens: z.number().default(1024),
-          maxCallsPerHour: z.number().default(20),
-        })
-        .default({}),
-    })
-    .default({}),
-  tradeManagement: z
-    .object({
-      enabled: z.boolean().default(true),
-
-      defaults: z
-        .object({
-          stopLossPct: z.number().default(3.0),
-          takeProfitPct: z.number().default(5.0),
-          maxHoldHours: z.number().default(72),
-          trailingStopPct: z.number().default(2.0),
-          trailingActivationPct: z.number().default(1.0),
-        })
-        .default({}),
-
-      bounds: z
-        .object({
-          stopLossPct: z
-            .object({ min: z.number().default(1.0), max: z.number().default(8.0) })
-            .default({}),
-          takeProfitPct: z
-            .object({ min: z.number().default(2.0), max: z.number().default(15.0) })
-            .default({}),
-          maxHoldHours: z
-            .object({ min: z.number().default(1), max: z.number().default(168) })
-            .default({}),
-          trailingStopPct: z
-            .object({ min: z.number().default(0.5), max: z.number().default(5.0) })
-            .default({}),
-          trailingActivationPct: z
-            .object({ min: z.number().default(0.0), max: z.number().default(5.0) })
-            .default({}),
-        })
-        .default({}),
-
-      maxAccountRiskPct: z.number().default(5.0),
-
-      monitorIntervalSeconds: z.number().default(900),
-      activeMonitorIntervalSeconds: z.number().default(60),
-
-      useExchangeStops: z.boolean().default(true),
-
-      liquidationGuardDistanceBps: z.number().default(800),
-
-      closeExecution: z
-        .object({
-          closeTimeoutSeconds: z.number().default(5),
-          closeSlippageMultiplier: z.number().default(2.0),
-        })
-        .default({}),
-      closeRetryMinSeconds: z.number().default(30),
-
-      // If residual position remains after close attempts but is below this notional, treat it as dust.
-      dustMaxRemainingNotionalUsd: z.number().default(0.5),
-
-      antiOvertrading: z
-        .object({
-          maxConcurrentPositions: z.number().default(2),
-          cooldownAfterCloseSeconds: z.number().default(3600),
-          maxDailyEntries: z.number().default(4),
-          lossStreakPause: z
-            .object({
-              consecutiveLosses: z.number().default(3),
-              pauseSeconds: z.number().default(21600),
-            })
-            .default({}),
-        })
-        .default({}),
-
-      signalConvergence: z
-        .object({
-          minAgreeingSignals: z.number().default(2),
-          threshold: z.number().default(1.5),
-          weights: z
-            .object({
-              reflexivity_fragility: z.number().default(1.0),
-              funding_oi_skew: z.number().default(0.8),
-              cross_asset_divergence: z.number().default(0.6),
-              orderflow_imbalance: z.number().default(0.4),
-              price_vol_regime: z.number().default(0.3),
-              onchain_flow: z.number().default(0.3),
-            })
-            .default({}),
-        })
-        .default({}),
     })
     .default({}),
   notifications: z

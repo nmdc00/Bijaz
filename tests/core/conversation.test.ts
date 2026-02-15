@@ -82,15 +82,6 @@ vi.mock('../../src/memory/chat.js', () => ({
       sessionId: 's1',
     },
   ],
-  searchChatMessagesLexical: () => [
-    {
-      id: 'm1',
-      role: 'user',
-      content: 'Old message',
-      createdAt: '2026-01-26T00:00:00Z',
-      sessionId: 's1',
-    },
-  ],
   clearChatMessages: () => undefined,
   pruneChatMessages: () => 0,
 }));
@@ -123,7 +114,7 @@ describe('ConversationHandler', () => {
     } as any;
 
     const handler = new ConversationHandler(llm as any, marketClient as any, config);
-    const response = await handler.chat('user', 'Any news about BTC today?');
+    const response = await handler.chat('user', 'Hello');
     expect(response).toContain('ok');
 
     const systemMessage = (llm.complete as any).mock.calls[0][0][0].content;
@@ -144,7 +135,7 @@ describe('ConversationHandler', () => {
     const handler = new ConversationHandler(llm as any, marketClient as any, config);
     userPreferences.intelAlertsConfigured = true;
     userPreferences.intelAlertsPending = undefined;
-    await handler.chat('user', 'Remind me what I said earlier about risk controls?');
+    await handler.chat('user', 'Hello');
     const calls = (llm.complete as any).mock.calls;
     if (calls.length === 0) {
       throw new Error('LLM was not called');

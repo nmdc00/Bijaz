@@ -548,11 +548,6 @@ export const THUFIR_TOOLS: Tool[] = [
         price: { type: 'number', description: 'Limit price (required for limit orders)' },
         leverage: { type: 'number', description: 'Leverage to apply' },
         reduce_only: { type: 'boolean', description: 'Reduce-only order' },
-        reasoning: {
-          type: 'string',
-          description:
-            'Optional trade rationale to store in the local journal (used for learning/audit).',
-        },
       },
       required: ['symbol', 'side', 'size'],
     },
@@ -577,39 +572,6 @@ export const THUFIR_TOOLS: Tool[] = [
     name: 'perp_positions',
     description: 'Get open perp positions for the configured exchange.',
     input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'trade_management_open_envelopes',
-    description: 'List open trade envelopes (perp trade management).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Maximum rows (default: 50)' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'trade_management_recent_closes',
-    description: 'List recent closed trades from the trade-management close records.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Maximum rows (default: 20)' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'trade_management_summary',
-    description: 'Return a trade journal summary (last N closed trades) for learning/context.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Maximum closed trades to summarize (default: 20)' },
-      },
-      required: [],
-    },
   },
   {
     name: 'perp_analyze',
