@@ -27,7 +27,6 @@ import { AutonomousManager } from './autonomous.js';
 import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
-import { executeToolCall } from './tool-executor.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -147,23 +146,14 @@ export class ThufirAgent {
     return this.autonomous;
   }
 
+  /** Expose the shared tool-execution context for background services. */
+  getToolContext(): ToolExecutorContext {
+    return this.toolContext;
+  }
+
   async handleMessage(sender: string, text: string): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);
-    // If the user is asking "can you see X" about their account/trades, bypass the LLM and query tools directly.
-    // This prevents generic boilerplate ("tools not available") and keeps replies grounded in live state.
-    const wantsPerpStatus =
-      /\b(can\s+you\s+see)\b.*\b(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances|orders?)\b/i.test(
-        trimmed
-      ) ||
-      /\b(show|what('s| is))\b.*\b(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances|orders?)\b/i.test(
-        trimmed
-      ) ||
-      /\b(how('s| is))\b.*\b(my\s+)?(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances)\b.*\b(looking|doing)\b/i.test(
-        trimmed
-      ) ||
-      // Short follow-ups after status often omit keywords ("can you see it?").
-      /\b(can\s+you|do\s+you)\s+see\s+(it|this)\b/i.test(trimmed);
 
     // Command: /access_status
     // Access status should be explicit; we do not want natural-language questions like
@@ -200,42 +190,6 @@ export class ThufirAgent {
 
     if (this.isSetupRequest(trimmed)) {
       return this.buildLiveTradingSetupPrompt();
-    }
-
-    // Fast-path: if the user is asking about current positions/orders, query tools directly
-    // (avoids the LLM/tool-planning loop and any tool-name mangling).
-    if (wantsPerpStatus) {
-      try {
-        const positions = await executeToolCall('get_positions', {}, this.toolContext);
-        const orders = await executeToolCall('get_open_orders', {}, this.toolContext);
-        const lines: string[] = [];
-        lines.push('Perp Status:');
-        if (positions.success) {
-          const ps = (positions.data as any)?.positions;
-          const count = Array.isArray(ps) ? ps.length : 0;
-          lines.push(`- Positions: ${count}`);
-          if (count > 0) {
-            const top = ps.slice(0, 5).map((p: any) => JSON.stringify(p));
-            lines.push(...top.map((s: string) => `  ${s}`));
-          }
-        } else {
-          lines.push(`- Positions: error: ${(positions as any).error ?? 'unknown'}`);
-        }
-        if (orders.success) {
-          const os = (orders.data as any)?.orders;
-          const count = Array.isArray(os) ? os.length : 0;
-          lines.push(`- Open orders: ${count}`);
-          if (count > 0) {
-            const top = os.slice(0, 5).map((o: any) => JSON.stringify(o));
-            lines.push(...top.map((s: string) => `  ${s}`));
-          }
-        } else {
-          lines.push(`- Open orders: error: ${(orders as any).error ?? 'unknown'}`);
-        }
-        return lines.join('\n');
-      } catch (error) {
-        return `Failed to load perp status: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      }
     }
 
     // Command: /watch <marketId>

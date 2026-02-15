@@ -57,7 +57,7 @@ export interface ConversationContext {
 const SYSTEM_PROMPT_BASE = `## Operating Rules
 
 - Never claim a trade was placed unless a trading tool returned success
-- Never say you lack wallet access without first using get_wallet_info and/or get_portfolio
+- Never say you lack wallet/trade access without first using get_portfolio/get_positions/get_open_orders
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
 - If tool outputs are JSON, interpret them and respond with a concise narrative summary
@@ -233,6 +233,7 @@ export class ConversationHandler {
   private toolContext: ToolExecutorContext;
   private orchestratorRegistry?: AgentToolRegistry;
   private orchestratorIdentity?: AgentIdentity;
+  private liveAccountSnapshotCache = new Map<string, { ts: number; text: string }>();
 
   constructor(
     llm: LlmClient,
@@ -310,13 +311,14 @@ export class ConversationHandler {
         }
 
         const timeContext = await this.buildCurrentTimeContext();
+        const liveAccountSnapshot = await this.buildLiveAccountSnapshot(userId);
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
           const memorySystem = {
             getRelevantContext: async (query: string) => {
               const base = await this.getMemoryContextForOrchestrator(userId, query);
               if (!timeContext) return base;
-              return [base, timeContext].filter(Boolean).join('\n\n');
+              return [base, timeContext, liveAccountSnapshot].filter(Boolean).join('\n\n');
             },
           };
 
@@ -413,7 +415,6 @@ export class ConversationHandler {
           return response;
         }
 
-        const forcedToolContext = await this.runForcedTooling(message);
         const toolFirstContext = await this.runToolFirstGuard(message);
         const summary = this.sessions.getSummary(userId);
         const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
@@ -440,7 +441,7 @@ export class ConversationHandler {
         const contextBlock = [
           userContext,
           timeContext,
-          forcedToolContext,
+          liveAccountSnapshot,
           toolFirstContext,
           summary ? `## Conversation Summary\n${summary}` : '',
           intelContext,
@@ -534,32 +535,49 @@ export class ConversationHandler {
     }
   }
 
-  private async runForcedTooling(message: string): Promise<string> {
-    const text = message.toLowerCase();
-    const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio)\b/.test(text);
-    const wantsTrade = /\b(trade|order|place|execute)\b/.test(text);
-    if (!wantsWallet && !wantsTrade) {
+  private shouldIncludeLiveAccountSnapshot(): boolean {
+    // Only inject live state when we're actually configured for live Hyperliquid execution.
+    return (
+      this.config.execution?.mode === 'live' && this.config.execution?.provider === 'hyperliquid'
+    );
+  }
+
+  private async buildLiveAccountSnapshot(userId: string): Promise<string> {
+    if (!this.shouldIncludeLiveAccountSnapshot()) {
       return '';
     }
 
-    const lines: string[] = ['## Forced Tool Snapshot'];
-
-    if (wantsWallet || wantsTrade) {
-      const walletInfo = await executeToolCall('get_wallet_info', {}, this.toolContext);
-      lines.push(`Wallet info: ${JSON.stringify(walletInfo)}`);
-      const portfolio = await executeToolCall('get_portfolio', {}, this.toolContext);
-      lines.push(`Portfolio: ${JSON.stringify(portfolio)}`);
+    // Cache a short-lived snapshot so natural back-and-forth stays grounded without hammering APIs.
+    const ttlMs = 15_000;
+    const now = Date.now();
+    const cached = this.liveAccountSnapshotCache.get(userId);
+    if (cached && now - cached.ts < ttlMs) {
+      return cached.text;
     }
 
-    if (wantsTrade) {
-      lines.push(`Execution mode: ${this.config.execution?.mode ?? 'paper'}`);
-      lines.push(
-        `Trading enabled: ${this.toolContext.executor ? 'true' : 'false'}`
-      );
-    }
+    try {
+      const [portfolio, positions, orders] = await Promise.all([
+        executeToolCall('get_portfolio', {}, this.toolContext),
+        executeToolCall('get_positions', {}, this.toolContext),
+        executeToolCall('get_open_orders', {}, this.toolContext),
+      ]);
 
-    lines.push('');
-    return lines.join('\n');
+      const snapshot = {
+        portfolio: portfolio.success ? portfolio.data : { error: (portfolio as any).error ?? 'unknown' },
+        positions: positions.success ? positions.data : { error: (positions as any).error ?? 'unknown' },
+        open_orders: orders.success ? orders.data : { error: (orders as any).error ?? 'unknown' },
+      };
+
+      const text = `## Live Account Snapshot (Hyperliquid)\n${JSON.stringify(snapshot, null, 2)}`;
+      this.liveAccountSnapshotCache.set(userId, { ts: now, text });
+      return text;
+    } catch (error) {
+      const text = `## Live Account Snapshot (Hyperliquid)\n(unavailable: ${
+        error instanceof Error ? error.message : 'unknown error'
+      })`;
+      this.liveAccountSnapshotCache.set(userId, { ts: now, text });
+      return text;
+    }
   }
 
   private shouldResumePlan(message: string): boolean {
