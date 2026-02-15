@@ -1,5 +1,5 @@
 import type { ThufirConfig } from './config.js';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -27,6 +27,7 @@ import { AutonomousManager } from './autonomous.js';
 import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
+import { executeToolCall } from './tool-executor.js';
 import { TradeManagementService } from '../trade-management/service.js';
 import { openDatabase } from '../memory/db.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
@@ -174,6 +175,12 @@ export class ThufirAgent {
   async handleMessage(sender: string, text: string): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);
+    const wantsPerpStatus =
+      /\b(can\s+you\s+see)\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
+      /\b(show|what('s| is))\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
+      /\b(how('s| is))\b.*\b(my\s+)?(trade|position)\b.*\b(looking|doing)\b/i.test(trimmed) ||
+      // Short follow-ups after status often omit keywords ("can you see it?").
+      /\b(can\s+you|do\s+you)\s+see\s+(it|this)\b/i.test(trimmed);
 
     // Natural language "background monitoring" / autonomy affirmation shouldn't rely on the LLM.
     // These messages tend to arrive when rate limits are active; respond deterministically.
@@ -230,6 +237,42 @@ export class ThufirAgent {
 
     if (this.isSetupRequest(trimmed)) {
       return this.buildLiveTradingSetupPrompt();
+    }
+
+    // Fast-path: if the user is asking about current positions/orders, query tools directly.
+    // This prevents the model from "explaining tool access" instead of answering with live state.
+    if (wantsPerpStatus) {
+      try {
+        const positions = await executeToolCall('get_positions', {}, this.toolContext);
+        const orders = await executeToolCall('get_open_orders', {}, this.toolContext);
+        const lines: string[] = [];
+        lines.push('Perp Status:');
+        if ((positions as any)?.success) {
+          const ps = (positions as any).data?.positions;
+          const count = Array.isArray(ps) ? ps.length : 0;
+          lines.push(`- Positions: ${count}`);
+          if (count > 0) {
+            const top = ps.slice(0, 5).map((p: any) => JSON.stringify(p));
+            lines.push(...top.map((s: string) => `  ${s}`));
+          }
+        } else {
+          lines.push(`- Positions: error: ${(positions as any)?.error ?? 'unknown'}`);
+        }
+        if ((orders as any)?.success) {
+          const os = (orders as any).data?.orders;
+          const count = Array.isArray(os) ? os.length : 0;
+          lines.push(`- Open orders: ${count}`);
+          if (count > 0) {
+            const top = os.slice(0, 5).map((o: any) => JSON.stringify(o));
+            lines.push(...top.map((s: string) => `  ${s}`));
+          }
+        } else {
+          lines.push(`- Open orders: error: ${(orders as any)?.error ?? 'unknown'}`);
+        }
+        return lines.join('\n');
+      } catch (error) {
+        return `Failed to load perp status: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      }
     }
 
     // Command: /watch <marketId>
@@ -871,10 +914,6 @@ function bootstrapWorkspaceIdentity(config: ThufirConfig): void {
     return;
   }
 
-  const anchorPath = join(workspacePath, 'IDENTITY.md');
-  if (existsSync(anchorPath)) {
-    return;
-  }
   if (!existsSync(repoWorkspacePath)) {
     return;
   }
@@ -890,7 +929,21 @@ function bootstrapWorkspaceIdentity(config: ThufirConfig): void {
   for (const filename of identityFiles) {
     const src = join(repoWorkspacePath, filename);
     const dest = join(workspacePath, filename);
-    if (existsSync(src) && !existsSync(dest)) {
+    if (!existsSync(src)) continue;
+
+    let shouldCopy = !existsSync(dest);
+    if (!shouldCopy) {
+      try {
+        const srcText = readFileSync(src, 'utf-8');
+        const destText = readFileSync(dest, 'utf-8');
+        shouldCopy = srcText !== destText;
+      } catch {
+        // If we can't read one side, refresh.
+        shouldCopy = true;
+      }
+    }
+
+    if (shouldCopy) {
       try {
         copyFileSync(src, dest);
         copied = true;
