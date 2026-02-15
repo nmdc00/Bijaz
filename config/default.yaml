@@ -201,6 +201,24 @@ autonomy:
   dailyReportTime: "20:00"     # Time to send daily P&L report
   maxTradesPerScan: 3          # Max trades per scan cycle
 
+# Trade management (exchange-native risk controls)
+tradeManagement:
+  enabled: false
+  defaults:
+    stopLossPct: 3.0
+    takeProfitPct: 5.0
+    maxHoldHours: 72
+  bounds:
+    stopLossPct: { min: 1.0, max: 8.0 }
+    takeProfitPct: { min: 2.0, max: 15.0 }
+    maxHoldHours: { min: 1, max: 168 }
+  monitorIntervalSeconds: 900
+  activeMonitorIntervalSeconds: 60
+  useExchangeStops: true
+  liquidationGuardDistanceBps: 800
+  closeRetryMinSeconds: 30
+  dustMaxRemainingNotionalUsd: 0.5
+
 # Memory persistence
 memory:
   dbPath: ~/.thufir/thufir.sqlite
