@@ -101,6 +101,43 @@ export class AgentToolRegistry {
   }
 
   /**
+   * Resolve a potentially mangled tool name to a registered name.
+   *
+   * GPT models frequently mangle tool names in plans:
+   *   "functions.current_time"           → strip prefix
+   *   "get_wallet_info + get_portfolio"  → extract first known name
+   *   "get_wallet_info / get_portfolio"  → extract first known name
+   *   "get_wallet_info (or equivalent)"  → extract known name from substring
+   *   "wallet_setup_or_connect"          → no match, return as-is
+   *
+   * Strategy: if exact match fails, scan registered names and return the
+   * first one that appears as a substring of the input (longest match first
+   * to avoid partial collisions like "get_portfolio" matching inside
+   * "get_portfolio_history").
+   */
+  private resolveToolName(raw: string): string {
+    // 1. Exact match
+    if (this.tools.has(raw)) return raw;
+
+    // 2. Strip "functions." prefix (GPT internal wrapper)
+    if (raw.startsWith('functions.')) {
+      const stripped = raw.slice('functions.'.length);
+      if (this.tools.has(stripped)) return stripped;
+    }
+
+    // 3. Extract known tool names that appear as substrings (longest first)
+    const registered = Array.from(this.tools.keys()).sort(
+      (a, b) => b.length - a.length
+    );
+    for (const name of registered) {
+      if (raw.includes(name)) return name;
+    }
+
+    // 4. No match — return raw so the caller can produce "Unknown tool: ..."
+    return raw;
+  }
+
+  /**
    * Execute a tool with caching and tracking.
    */
   async execute(
@@ -108,53 +145,10 @@ export class AgentToolRegistry {
     input: unknown,
     ctx: ToolContext
   ): Promise<ToolExecution> {
-    const normalizedName = String(name ?? '').trim();
+    const normalizedName = this.resolveToolName(String(name ?? '').trim());
     const tool = this.tools.get(normalizedName);
     if (!tool) {
-      // Some models sometimes "bundle" multiple tool names into one string
-      // (e.g. "get_wallet_info + get_portfolio"). If every segment exists,
-      // execute them sequentially and return a combined result.
-      if (normalizedName.includes('+')) {
-        const parts = normalizedName
-          .split('+')
-          .map((p) => p.trim())
-          .filter(Boolean);
-        if (parts.length > 1 && parts.every((p) => this.tools.has(p))) {
-          const calls: Array<{ tool: string; result: ToolResult }> = [];
-          const start = Date.now();
-          for (const part of parts) {
-            const exec = await this.execute(part, input, ctx);
-            calls.push({ tool: part, result: exec.result });
-            if (!exec.result.success) {
-              const execution: ToolExecution = {
-                toolName: normalizedName,
-                input,
-                result: {
-                  success: false,
-                  error: `Bundled tool failed: ${part}: ${(exec.result as { success: false; error: string }).error}`,
-                  data: { calls },
-                } as any,
-                timestamp: new Date().toISOString(),
-                durationMs: Date.now() - start,
-                cached: false,
-              };
-              this.executionHistory.push(execution);
-              return execution;
-            }
-          }
-          const execution: ToolExecution = {
-            toolName: normalizedName,
-            input,
-            result: { success: true, data: { calls } },
-            timestamp: new Date().toISOString(),
-            durationMs: Date.now() - start,
-            cached: false,
-          };
-          this.executionHistory.push(execution);
-          return execution;
-        }
-      }
-
+      // resolveToolName already tried fuzzy extraction; nothing matched.
       const execution: ToolExecution = {
         toolName: normalizedName,
         input,
