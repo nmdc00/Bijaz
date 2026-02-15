@@ -23,6 +23,7 @@ import { buildAgentPeerSessionKey, resolveThreadSessionKeys } from './session_ke
 import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
 import { installConsoleFileMirror } from '../core/unified-logging.js';
+import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 
 const config = loadConfig();
 try {
@@ -55,6 +56,16 @@ const whatsapp = config.channels.whatsapp.enabled ? new WhatsAppAdapter(config) 
 
 for (const instance of agentRegistry.agents.values()) {
   instance.start();
+}
+
+const positionHeartbeatConfig = config.heartbeat;
+if (positionHeartbeatConfig?.enabled) {
+  try {
+    const service = new PositionHeartbeatService(config, defaultAgent.getToolContext(), logger);
+    service.start();
+  } catch (error) {
+    logger.error('PositionHeartbeat failed to start', error);
+  }
 }
 
 // Market cache is refreshed on schedule (no websocket stream configured).

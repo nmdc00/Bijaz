@@ -201,6 +201,24 @@ autonomy:
   dailyReportTime: "20:00"     # Time to send daily P&L report
   maxTradesPerScan: 3          # Max trades per scan cycle
 
+# v1.2: Position heartbeat (risk management loop)
+heartbeat:
+  enabled: false
+  tickIntervalSeconds: 30
+  rollingBufferSize: 60
+  triggers:
+    pnlShiftPct: 1.5
+    liquidationProximityPct: 5.0
+    volatilitySpikePct: 2.0
+    volatilitySpikeWindowTicks: 10
+    timeCeilingMinutes: 15
+    triggerCooldownSeconds: 180
+  llm:
+    provider: null
+    model: null
+    maxTokens: 1024
+    maxCallsPerHour: 20
+
 # Memory persistence
 memory:
   dbPath: ~/.thufir/thufir.sqlite
