@@ -17,7 +17,7 @@ import {
   updateTradeEnvelopeRuntimeState,
 } from './db.js';
 import type { TradeCloseRecord, TradeEnvelope, TradeExitReason, TradeReflection } from './types.js';
-import { cancelExchangeOrderOids } from './hyperliquid-stops.js';
+import { cancelExchangeOrderOids, placeExchangeSideTpsl } from './hyperliquid-stops.js';
 import { recordAgentIncident } from '../memory/incidents.js';
 import { createHyperliquidCloid } from '../execution/hyperliquid/cloid.js';
 
@@ -73,6 +73,7 @@ export class TradeMonitor {
   private stopped = true;
   private logger: Logger;
   private lastIncidentAt = new Map<string, number>();
+  private lastBracketAttemptAt = new Map<string, number>();
 
   constructor(
     private params: {
@@ -176,6 +177,45 @@ export class TradeMonitor {
         // Orphan position: create a default envelope so it is monitored.
         env = this.buildOrphanEnvelope(cfg, pos, mid);
         recordTradeEnvelope(env);
+      }
+
+      // Ensure any open position is protected by exchange-side TP/SL if enabled,
+      // even if the position was opened manually or by another agent.
+      if (
+        (env.tpOid == null || env.slOid == null) &&
+        !env.closePending &&
+        cfg.tradeManagement?.useExchangeStops === true &&
+        cfg.execution?.mode === 'live' &&
+        cfg.execution?.provider === 'hyperliquid'
+      ) {
+        const now = Date.now();
+        const last = this.lastBracketAttemptAt.get(env.tradeId) ?? 0;
+        // Avoid hammering the exchange if placement fails; retry occasionally.
+        const retryMs = 10 * 60 * 1000;
+        if (now - last >= retryMs) {
+          this.lastBracketAttemptAt.set(env.tradeId, now);
+          try {
+            const stops = await placeExchangeSideTpsl({ config: cfg, envelope: env });
+            if (stops.error) {
+              this.logger.warn('Exchange-side TP/SL placement returned error', {
+                tradeId: env.tradeId,
+                symbol: env.symbol,
+                error: stops.error,
+              });
+            }
+            if (stops.tpOid || stops.slOid) {
+              env.tpOid = stops.tpOid;
+              env.slOid = stops.slOid;
+              recordTradeEnvelope(env);
+            }
+          } catch (err) {
+            this.logger.warn('Exchange-side TP/SL placement failed', {
+              tradeId: env.tradeId,
+              symbol: env.symbol,
+              err,
+            });
+          }
+        }
       }
 
       recordTradePriceSample({ tradeId: env.tradeId, symbol: env.symbol, midPrice: mid });

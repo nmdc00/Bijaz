@@ -14,10 +14,21 @@ import { mapExpressionPlan } from './expressions.js';
 const horizonRank = (h: SignalPrimitive['timeHorizon']): number =>
   h === 'minutes' ? 0 : h === 'hours' ? 1 : 2;
 
+const DEFAULT_SIGNAL_WEIGHTS: Record<SignalPrimitive['kind'], number> = {
+  reflexivity_fragility: 1.0,
+  funding_oi_skew: 0.8,
+  cross_asset_divergence: 0.6,
+  orderflow_imbalance: 0.4,
+  price_vol_regime: 0.3,
+  onchain_flow: 0.3,
+};
+
 function resolveSignalWeight(config: ThufirConfig, kind: SignalPrimitive['kind']): number {
   const weights = (config as any)?.tradeManagement?.signalConvergence?.weights ?? {};
   const raw = Number(weights[kind]);
-  return Number.isFinite(raw) ? raw : 0;
+  // Important: missing config should not disable discovery. If a weight is omitted,
+  // fall back to sane defaults; explicit `0` should still disable the signal.
+  return Number.isFinite(raw) ? raw : (DEFAULT_SIGNAL_WEIGHTS[kind] ?? 1.0);
 }
 
 function clusterSignals(
