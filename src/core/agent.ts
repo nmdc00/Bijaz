@@ -1,5 +1,5 @@
 import type { ThufirConfig } from './config.js';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -155,7 +155,9 @@ export class ThufirAgent {
     const wantsPerpStatus =
       /\b(can\s+you\s+see)\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
       /\b(show|what('s| is))\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
-      /\b(how('s| is))\b.*\b(my\s+)?(trade|position)\b.*\b(looking|doing)\b/i.test(trimmed);
+      /\b(how('s| is))\b.*\b(my\s+)?(trade|position)\b.*\b(looking|doing)\b/i.test(trimmed) ||
+      // Short follow-ups after status often omit keywords ("can you see it?").
+      /\b(can\s+you|do\s+you)\s+see\s+(it|this)\b/i.test(trimmed);
 
     // Natural language "enable full auto" should not go through the LLM/tool loop.
     // This prevents "allowed number of steps" failures on vague confirmations like "Go for it."
@@ -815,10 +817,6 @@ function bootstrapWorkspaceIdentity(config: ThufirConfig): void {
     return;
   }
 
-  const anchorPath = join(workspacePath, 'IDENTITY.md');
-  if (existsSync(anchorPath)) {
-    return;
-  }
   if (!existsSync(repoWorkspacePath)) {
     return;
   }
@@ -834,7 +832,21 @@ function bootstrapWorkspaceIdentity(config: ThufirConfig): void {
   for (const filename of identityFiles) {
     const src = join(repoWorkspacePath, filename);
     const dest = join(workspacePath, filename);
-    if (existsSync(src) && !existsSync(dest)) {
+    if (!existsSync(src)) continue;
+
+    let shouldCopy = !existsSync(dest);
+    if (!shouldCopy) {
+      try {
+        const srcText = readFileSync(src, 'utf-8');
+        const destText = readFileSync(dest, 'utf-8');
+        shouldCopy = srcText !== destText;
+      } catch {
+        // If we can't read one side, refresh.
+        shouldCopy = true;
+      }
+    }
+
+    if (shouldCopy) {
       try {
         copyFileSync(src, dest);
         copied = true;
