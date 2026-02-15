@@ -188,7 +188,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   /**
    * Run a scan and optionally execute trades
    */
-  async runScan(): Promise<string> {
+  async runScan(options?: { forceExecute?: boolean; maxTrades?: number }): Promise<string> {
     if (this.isPaused) {
       return `Autonomous trading is paused: ${this.pauseReason}`;
     }
@@ -198,16 +198,23 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return 'Daily spending limit reached. No trades executed.';
     }
 
-    return this.runDiscoveryScan();
+    const forceExecute = Boolean(options?.forceExecute);
+    const executeTrades = forceExecute || this.config.fullAuto;
+    const maxTrades = options?.maxTrades;
+    return this.runDiscoveryScan({ executeTrades, maxTrades, ignoreThresholds: forceExecute });
   }
 
-  private async runDiscoveryScan(): Promise<string> {
+  private async runDiscoveryScan(input: {
+    executeTrades: boolean;
+    maxTrades?: number;
+    ignoreThresholds?: boolean;
+  }): Promise<string> {
     const result = await runDiscovery(this.thufirConfig);
     if (result.expressions.length === 0) {
       return 'No discovery expressions generated.';
     }
 
-    if (!this.config.fullAuto) {
+    if (!input.executeTrades) {
       const top = result.expressions.slice(0, 5);
       const lines = top.map(
         (expr) =>
@@ -216,7 +223,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return `Discovery scan completed:\n${lines.join('\n')}`;
     }
 
-    const eligible = result.expressions.filter((expr) => {
+    const eligible = (input.ignoreThresholds ? result.expressions : result.expressions).filter((expr) => {
+      if (input.ignoreThresholds) {
+        return true;
+      }
       if (expr.expectedEdge < this.config.minEdge) {
         return false;
       }
@@ -229,16 +239,34 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return 'No expressions met autonomy thresholds (minEdge/confidence).';
     }
 
-    const toExecute = eligible.slice(0, this.config.maxTradesPerScan);
+    // If we're forcing execution, pick the "best" expression first (highest expected edge).
+    const ranked = input.ignoreThresholds
+      ? [...eligible].sort((a, b) => (b.expectedEdge ?? 0) - (a.expectedEdge ?? 0))
+      : eligible;
+
+    const maxTrades = Number.isFinite(input.maxTrades)
+      ? Math.min(Math.max(Number(input.maxTrades), 1), 10)
+      : this.config.maxTradesPerScan;
+    const toExecute = ranked.slice(0, maxTrades);
     const outputs: string[] = [];
 
     for (const expr of toExecute) {
       const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
       const market = await this.marketClient.getMarket(symbol);
       const markPrice = market.markPrice ?? 0;
-      const probeUsd = Math.min(expr.probeSizeUsd, this.limiter.getRemainingDaily());
+      const minOrderUsd =
+        typeof (this.thufirConfig as any)?.hyperliquid?.minOrderNotionalUsd === 'number'
+          ? Number((this.thufirConfig as any).hyperliquid.minOrderNotionalUsd)
+          : 10;
+      const remainingDaily = this.limiter.getRemainingDaily();
+      const desiredUsd = Number.isFinite(expr.probeSizeUsd) ? expr.probeSizeUsd : 0;
+      const probeUsd = Math.min(Math.max(minOrderUsd, desiredUsd), remainingDaily);
       if (probeUsd <= 0) {
         outputs.push(`${symbol}: Skipped (insufficient daily budget)`);
+        continue;
+      }
+      if (probeUsd < minOrderUsd) {
+        outputs.push(`${symbol}: Skipped (remaining daily budget $${remainingDaily.toFixed(2)} below min order $${minOrderUsd.toFixed(2)})`);
         continue;
       }
       const size = markPrice > 0 ? probeUsd / markPrice : probeUsd;

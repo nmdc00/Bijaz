@@ -842,6 +842,38 @@ async function executeToolStep(
   const toolName = step.toolName!;
   const input = step.toolInput ?? {};
 
+  // Guardrail: several perp tools require a symbol, but the planner can omit it.
+  // Default to the first configured symbol (or BTC) instead of calling tools with undefined inputs.
+  const needsSymbol = new Set([
+    'perp_market_get',
+    'perp_analyze',
+    'perp_place_order',
+  ]);
+  const symbolOptionalButUseful = new Set([
+    'perp_open_orders',
+    'perp_positions',
+  ]);
+
+  const toolCtx = ctx.toolContext as { config?: { hyperliquid?: { symbols?: string[] } } } | undefined;
+  const defaultSymbol =
+    toolCtx?.config?.hyperliquid?.symbols?.[0] ??
+    (process.env.HYPERLIQUID_SYMBOLS ? process.env.HYPERLIQUID_SYMBOLS.split(',')[0] : undefined) ??
+    'BTC';
+
+  if (needsSymbol.has(toolName)) {
+    const obj = input as Record<string, unknown>;
+    const sym = typeof obj.symbol === 'string' ? obj.symbol.trim() : '';
+    if (!sym) {
+      (obj as any).symbol = defaultSymbol;
+    }
+  } else if (symbolOptionalButUseful.has(toolName)) {
+    const obj = input as Record<string, unknown>;
+    const sym = typeof obj.symbol === 'string' ? obj.symbol.trim() : '';
+    if (!sym) {
+      (obj as any).symbol = defaultSymbol;
+    }
+  }
+
   // Check if tool requires confirmation
   const toolDef = ctx.toolRegistry.get?.(toolName);
   if (toolDef?.requiresConfirmation && ctx.onConfirmation) {

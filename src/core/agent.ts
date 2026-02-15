@@ -639,18 +639,34 @@ Just type naturally to chat about markets, risks, or positioning.
     sender: string,
     message: string
   ): Promise<string | null> {
-    const autoEnabled =
-      (this.config.autonomy as any)?.enabled === true &&
-      (this.config.autonomy as any)?.fullAuto === true;
+    const autonomyEnabled = (this.config.autonomy as any)?.enabled === true;
+    const autoEnabled = autonomyEnabled && (this.config.autonomy as any)?.fullAuto === true;
     const wantsAutoScan =
       /\b(find|look\s+for|scan|search|identify)\b.*\b(trade|trades|opportunit|edge)\b/i.test(message) ||
       /\b(start|begin|run|kick\s*off)\b.*\b(trading|auto|autonomous)\b/i.test(message);
+
+    const wantsPlaceTradeNow =
+      /\b(look\s+at\s+the\s+market|check\s+the\s+market)\b.*\b(place|execute|open|enter)\b.*\b(trade|order|position)\b/i.test(
+        message
+      ) ||
+      /\b(place|execute|open|enter|make)\b.*\b(a\s+)?(trade|order|position)\b/i.test(message);
 
     if (wantsAutoScan) {
       if (!autoEnabled) {
         return 'Autonomous trading is disabled. Enable with /fullauto on and ensure autonomy.enabled: true.';
       }
       return this.autonomousScan();
+    }
+
+    // Option 1: Natural-language "place a trade" forces a one-shot scan + execution (best expression).
+    if (wantsPlaceTradeNow) {
+      if (!autonomyEnabled) {
+        return 'Autonomous trading is disabled in config. Set `autonomy.enabled: true`.';
+      }
+      if ((this.config.execution?.mode ?? 'paper') !== 'live') {
+        return 'Live execution is not enabled. Set `execution.mode: live`.';
+      }
+      return this.autonomous.runScan({ forceExecute: true, maxTrades: 1 });
     }
 
     void sender;

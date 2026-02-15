@@ -61,15 +61,20 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         return { executed: false, message: 'Invalid decision: size rounds to zero.' };
       }
 
-      const orderPx =
-        orderType === 'limit'
-          ? price
-          : price ?? (await this.estimateMarketPrice(symbol, side));
-      if (!orderPx || orderPx <= 0) {
-        return { executed: false, message: 'Invalid decision: missing or invalid price.' };
+      let priceStr: string;
+      if (orderType === 'limit') {
+        if (!price || price <= 0) {
+          return { executed: false, message: 'Invalid decision: missing or invalid price.' };
+        }
+        // Best effort: format the provided price; HL may reject prices not aligned to tick size.
+        priceStr = formatDecimal(price, 8);
+      } else {
+        // For IOC-style market orders, pick a price from the live order book to ensure tick alignment.
+        priceStr = await this.getIocPriceStr(symbol, side);
       }
-
-      const priceStr = formatDecimal(orderPx, 8);
+      if (!priceStr || !Number.isFinite(Number(priceStr)) || Number(priceStr) <= 0) {
+        return { executed: false, message: `Invalid decision: missing or invalid price (p=${priceStr}).` };
+      }
       const tif: 'Ioc' | 'Gtc' = orderType === 'market' ? 'Ioc' : 'Gtc';
       const payload: Parameters<ReturnType<HyperliquidClient['getExchangeClient']>['order']>[0] = {
         orders: [
@@ -89,7 +94,10 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       const status = (result as any)?.response?.data?.statuses?.[0];
       const statusMessage = summarizeOrderStatus(status);
       if (statusMessage?.error) {
-        return { executed: false, message: `Hyperliquid trade failed: ${statusMessage.error}` };
+        return {
+          executed: false,
+          message: `Hyperliquid trade failed: ${statusMessage.error} (symbol=${symbol} side=${side} size=${sizeStr} p=${priceStr} tif=${tif})`,
+        };
       }
       return {
         executed: true,
@@ -163,6 +171,43 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     await exchange.cancel({
       cancels: [{ a: marketMeta.assetId, o: oid }],
     });
+  }
+
+  private async getIocPriceStr(symbol: string, side: 'buy' | 'sell'): Promise<string> {
+    // Prefer top-of-book prices for tick alignment.
+    try {
+      const book = await this.client.getL2Book(symbol);
+      const levels = (book as { levels?: Array<Array<{ px?: string }>> }).levels ?? [];
+      const bids = levels[0] ?? [];
+      const asks = levels[1] ?? [];
+      const best = side === 'buy' ? asks[0]?.px : bids[0]?.px;
+      if (typeof best === 'string' && best.trim().length > 0) {
+        return best.trim();
+      }
+    } catch {
+      // fall through
+    }
+
+    // Fallback: impact prices from metaAndAssetCtxs (also tick-aligned).
+    try {
+      const [meta, assetCtxs] = await this.client.getMetaAndAssetCtxs();
+      const universe = (meta as { universe?: Array<{ name?: string }> }).universe ?? [];
+      const idx = universe.findIndex((u) => u?.name === symbol);
+      const ctx = Array.isArray(assetCtxs) ? (assetCtxs as any[])[idx] : null;
+      const impactPxs = ctx?.impactPxs;
+      if (Array.isArray(impactPxs)) {
+        const best = side === 'buy' ? impactPxs[1] : impactPxs[0];
+        if (typeof best === 'string' && best.trim().length > 0) {
+          return best.trim();
+        }
+      }
+    } catch {
+      // fall through
+    }
+
+    // Last resort: mid + slippage (may be off-tick; better than nothing).
+    const px = await this.estimateMarketPrice(symbol, side);
+    return formatDecimal(px, 8);
   }
 }
 
