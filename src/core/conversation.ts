@@ -204,14 +204,14 @@ function wantsNewsContext(message: string): boolean {
 
 function wantsMarketContext(message: string): boolean {
   const text = message.toLowerCase();
-  return /\b(price|prices|market|markets|probability|odds|volume|liquidity|bid|ask|btc|eth)\b/.test(
+  return /\b(price|prices|market|markets|probability|odds|volume|liquidity|bid|ask|btc|eth|position|positions|pnl|profit|loss|open orders|orders|fills|trade|trades|closed|close)\b/.test(
     text
   );
 }
 
 function wantsTradeHistoryContext(message: string): boolean {
   const text = message.toLowerCase();
-  return /\b(previous trades|trade history|journal|pnl|win rate|loss streak|streak|last trades)\b/.test(
+  return /\b(previous trades|trade history|journal|pnl|profit|loss|win rate|loss streak|streak|last trades|fills|order history|closed|close)\b/.test(
     text
   );
 }
@@ -643,8 +643,8 @@ export class ConversationHandler {
 
   private async runForcedTooling(message: string): Promise<string> {
     const text = message.toLowerCase();
-    const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio)\b/.test(text);
-    const wantsTrade = /\b(trade|order|place|execute)\b/.test(text);
+    const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio|pnl|profit|loss)\b/.test(text);
+    const wantsTrade = /\b(trade|trades|order|orders|open orders|position|positions|fills|place|execute|close|closed)\b/.test(text);
     const wantsHistory = wantsTradeHistoryContext(message);
     if (!wantsWallet && !wantsTrade && !wantsHistory) {
       return '';
@@ -657,6 +657,10 @@ export class ConversationHandler {
       lines.push(`Wallet info: ${JSON.stringify(walletInfo)}`);
       const portfolio = await executeToolCall('get_portfolio', {}, this.toolContext);
       lines.push(`Portfolio: ${JSON.stringify(portfolio)}`);
+      const positions = await executeToolCall('perp_positions', {}, this.toolContext);
+      lines.push(`Perp positions: ${JSON.stringify(positions)}`);
+      const openOrders = await executeToolCall('perp_open_orders', {}, this.toolContext);
+      lines.push(`Perp open orders: ${JSON.stringify(openOrders)}`);
     }
 
     if (wantsTrade) {
@@ -669,6 +673,10 @@ export class ConversationHandler {
     if (wantsHistory) {
       const trades = await executeToolCall('perp_trade_journal_list', { limit: 20 }, this.toolContext);
       lines.push(`Trade journal: ${JSON.stringify(trades)}`);
+      const closes = await executeToolCall('trade_management_recent_closes', { limit: 20 }, this.toolContext);
+      lines.push(`Recent closes: ${JSON.stringify(closes)}`);
+      const summary = await executeToolCall('trade_management_summary', { limit: 20 }, this.toolContext);
+      lines.push(`Trade summary: ${JSON.stringify(summary)}`);
     }
 
     lines.push('');
