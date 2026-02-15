@@ -366,21 +366,37 @@ export class ConversationHandler {
         const timeContext = await this.buildCurrentTimeContext();
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
+          // Orchestrator path must still be tool-first for wallet/positions/orders questions.
+          // Otherwise the LLM may answer without calling tools and claim tools are unavailable.
+          const [forcedToolContext, marketSnapshot, toolFirstContext] = await Promise.all([
+            this.runForcedTooling(message),
+            this.buildMarketSnapshot(message),
+            this.runToolFirstGuard(message),
+          ]);
+
           const memorySystem = {
             getRelevantContext: async (query: string) => {
-              const base = await this.getMemoryContextForOrchestrator(userId, query);
-              if (!timeContext) return base;
-              return [base, timeContext].filter(Boolean).join('\n\n');
+              const base = (await this.getMemoryContextForOrchestrator(userId, query)) ?? '';
+              const combined = [
+                forcedToolContext,
+                marketSnapshot,
+                toolFirstContext,
+                base,
+              ]
+                .filter(Boolean)
+                .join('\n\n');
+              if (!timeContext) return combined;
+              return [combined, timeContext].filter(Boolean).join('\n\n');
             },
           };
 
-    const tradeToolNames = new Set(['perp_place_order']);
-    const fundingToolNames = new Set([
-      'cctp_bridge_usdc',
-      'hyperliquid_deposit_usdc',
-      'hyperliquid_order_roundtrip',
-      'playbook_upsert',
-    ]);
+          const tradeToolNames = new Set(['perp_place_order']);
+          const fundingToolNames = new Set([
+            'cctp_bridge_usdc',
+            'hyperliquid_deposit_usdc',
+            'hyperliquid_order_roundtrip',
+            'playbook_upsert',
+          ]);
           const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
           const autoApproveFunding = Boolean(
             this.config.autonomy?.fullAuto && this.config.autonomy?.allowFundingActions
