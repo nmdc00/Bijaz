@@ -271,17 +271,18 @@ async function retrieveQmdContext(
 /**
  * System prompt for synthesis.
  */
-const SYNTHESIS_SYSTEM_PROMPT = `You are synthesizing a response for a mentat-style perp market analyst.
+const SYNTHESIS_SYSTEM_PROMPT = `You are synthesizing a response for an autonomous perp trader.
 
 Based on the tool results and analysis provided, generate a clear, actionable response.
 
 ## Rules
 
-1. **Cite Evidence**: Reference specific tool results, not assumptions.
-2. **State Confidence**: Be clear about certainty levels.
-3. **Note Assumptions**: Explicitly state key assumptions.
-4. **Identify Risks**: For trading recommendations, highlight tail risks.
-5. **Be Concise**: Respect the user's time.
+1. **Action first**: If you executed a trade or tool, state what happened immediately.
+2. **Be terse**: 3-10 lines for routine updates. No walls of text.
+3. **Cite evidence**: Reference specific tool results, not assumptions.
+4. **State confidence**: Be clear about certainty levels.
+5. **No permission-seeking**: Never ask the user for their risk tolerance, time horizon, or preferences. You are autonomous — you decide and act.
+6. **No disclaimers about tools**: Never say "I don't have live tools" or "I can't execute" unless a tool call actually returned an error in this session.
 
 Respond directly to the user's goal. Do not explain your reasoning process unless asked.`;
 
@@ -832,15 +833,139 @@ async function runPreTradeFragilityScan(
 }
 
 /**
+ * Detect whether tool input contains placeholder values that need LLM resolution.
+ * GPT often generates plans with placeholder strings like "to_be_set_based_on_step_9".
+ */
+function hasPlaceholderInputs(input: Record<string, unknown>): boolean {
+  const PLACEHOLDER_PATTERNS = [
+    /to_be_/i,
+    /to_be_determined/i,
+    /to_be_set/i,
+    /based_on_step/i,
+    /TBD/i,
+    /placeholder/i,
+    /\{.*step.*\}/i,
+    /FILL_IN/i,
+  ];
+  for (const value of Object.values(input)) {
+    if (typeof value === 'string') {
+      for (const pattern of PLACEHOLDER_PATTERNS) {
+        if (pattern.test(value)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Build context from completed plan steps for dynamic input resolution.
+ */
+function buildCompletedStepContext(state: AgentState): string {
+  if (!state.plan) return '';
+  const completed = state.plan.steps.filter((s) => s.status === 'complete' && s.result);
+  if (completed.length === 0) return '';
+
+  const lines: string[] = ['Previously completed steps and their results:'];
+  for (const step of completed) {
+    lines.push(`\n### Step ${step.id}: ${step.description}`);
+    if (step.toolName) lines.push(`Tool: ${step.toolName}`);
+    const resultData = (step.result as { success?: boolean; data?: unknown })?.data;
+    if (resultData) {
+      const json = JSON.stringify(resultData, null, 2);
+      // Truncate large results
+      lines.push(`Result: ${json.length > 2000 ? json.slice(0, 2000) + '...' : json}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Ask the LLM to resolve concrete tool inputs based on completed step results.
+ */
+async function resolveToolInputs(
+  step: PlanStep,
+  state: AgentState,
+  ctx: OrchestratorContext
+): Promise<Record<string, unknown>> {
+  const completedContext = buildCompletedStepContext(state);
+
+  // Try to get schema info for the LLM prompt (best-effort)
+  let schemaHint = `Tool: ${step.toolName}`;
+  try {
+    const schemas = ctx.toolRegistry.getLlmSchemas?.();
+    const match = schemas?.find((s: { name: string }) => s.name === step.toolName);
+    if (match) {
+      schemaHint = `Tool "${step.toolName}" accepts these parameters (JSON schema): ${JSON.stringify(match.input_schema)}`;
+    }
+  } catch {
+    // Ignore schema lookup failures
+  }
+
+  const prompt = `You are resolving concrete parameters for a tool call in an execution plan.
+
+## Current Step
+ID: ${step.id}
+Description: ${step.description}
+Tool: ${step.toolName}
+Original (placeholder) input: ${JSON.stringify(step.toolInput)}
+
+## ${schemaHint}
+
+## ${completedContext}
+
+## Plan Goal
+${state.plan?.goal ?? state.goal}
+
+Based on the completed step results above, provide the CONCRETE values for this tool call.
+Respond with ONLY a JSON object containing the resolved parameters. No explanation, just JSON.
+For perp_place_order: "side" must be "buy" or "sell", "size" must be > 0, "price" must be a number.
+To close a short position, use side="buy". To close a long, use side="sell".`;
+
+  try {
+    const response = await ctx.llm.complete(
+      [
+        { role: 'system', content: 'You resolve tool call parameters. Respond with ONLY valid JSON.' },
+        { role: 'user', content: prompt },
+      ],
+      { temperature: 0.1 }
+    );
+
+    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      debugLog('resolveToolInputs: no JSON in response');
+      return step.toolInput as Record<string, unknown>;
+    }
+
+    const resolved = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    debugLog('resolveToolInputs: resolved', { original: step.toolInput, resolved });
+    return resolved;
+  } catch (error) {
+    debugLog('resolveToolInputs: failed', {
+      error: error instanceof Error ? error.message : 'Unknown',
+    });
+    return (step.toolInput ?? {}) as Record<string, unknown>;
+  }
+}
+
+/**
  * Execute a tool step with confirmation if needed.
  */
 async function executeToolStep(
   step: PlanStep,
-  _state: AgentState,
+  state: AgentState,
   ctx: OrchestratorContext
 ): Promise<ToolExecution> {
   const toolName = step.toolName!;
-  const input = step.toolInput ?? {};
+  let input = (step.toolInput ?? {}) as Record<string, unknown>;
+
+  // Dynamic input resolution: if toolInput has placeholder values, ask LLM to fill them in
+  // based on completed step results.
+  if (hasPlaceholderInputs(input)) {
+    debugLog('placeholder inputs detected, resolving dynamically', { toolName, input });
+    input = await resolveToolInputs(step, state, ctx);
+    // Update the step's toolInput so the plan record reflects the resolved values
+    (step as any).toolInput = input;
+  }
 
   // Guardrail: several perp tools require a symbol, but the planner can omit it.
   // Default to the first configured symbol (or BTC) instead of calling tools with undefined inputs.
