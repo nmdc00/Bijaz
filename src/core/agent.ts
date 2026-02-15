@@ -147,6 +147,11 @@ export class ThufirAgent {
     return this.autonomous;
   }
 
+  /** Expose the shared tool-execution context for background services. */
+  getToolContext(): ToolExecutorContext {
+    return this.toolContext;
+  }
+
   async handleMessage(sender: string, text: string): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);

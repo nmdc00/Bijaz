@@ -553,6 +553,31 @@ const ConfigSchema = z.object({
       maxTradesPerScan: z.number().default(3),
     })
     .default({}),
+  heartbeat: z
+    .object({
+      enabled: z.boolean().default(false),
+      tickIntervalSeconds: z.number().default(30),
+      rollingBufferSize: z.number().default(60),
+      triggers: z
+        .object({
+          pnlShiftPct: z.number().default(1.5),
+          liquidationProximityPct: z.number().default(5.0),
+          volatilitySpikePct: z.number().default(2.0),
+          volatilitySpikeWindowTicks: z.number().default(10),
+          timeCeilingMinutes: z.number().default(15),
+          triggerCooldownSeconds: z.number().default(180),
+        })
+        .default({}),
+      llm: z
+        .object({
+          provider: z.enum(['anthropic', 'openai', 'local']).nullable().optional(),
+          model: z.string().nullable().optional(),
+          maxTokens: z.number().default(1024),
+          maxCallsPerHour: z.number().default(20),
+        })
+        .default({}),
+    })
+    .default({}),
   notifications: z
     .object({
       briefing: z
