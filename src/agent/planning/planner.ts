@@ -390,7 +390,22 @@ Respond with a JSON object:
       changes?: string[];
     };
 
-    const steps: PlanStep[] = (parsed.steps ?? request.plan.steps).map((step, index) => ({
+    // Normalise + expand tool names (same logic as parseplanResponse)
+    const rawRevSteps = parsed.steps ?? request.plan.steps;
+    const expandedRevSteps: typeof rawRevSteps = [];
+    for (const step of rawRevSteps) {
+      const name = normalizeToolName(step.toolName);
+      if (name && name.includes('+')) {
+        const names = name.split(/\s*\+\s*/).map((n) => n.trim()).filter(Boolean);
+        for (const n of names) {
+          expandedRevSteps.push({ ...step, id: `${step.id ?? expandedRevSteps.length + 1}-${n}`, toolName: n });
+        }
+      } else {
+        expandedRevSteps.push({ ...step, toolName: name ?? step.toolName });
+      }
+    }
+
+    const steps: PlanStep[] = expandedRevSteps.map((step, index) => ({
       id: step.id ?? String(index + 1),
       description: step.description ?? 'Unknown step',
       requiresTool: step.requiresTool ?? false,
