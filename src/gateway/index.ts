@@ -47,6 +47,14 @@ for (const instance of agentRegistry.agents.values()) {
 
 // Market cache is refreshed on schedule (no websocket stream configured).
 
+function stripIdentityIntro(text: string): string {
+  // The model sometimes prepends a redundant identity line. Strip only at the start.
+  // Keep this narrow to avoid accidentally removing real content.
+  return text
+    .replace(/^\s*(I['’]m|I am)\s+Thufir\s+Hawat\.\s*(\r?\n)+/i, '')
+    .replace(/^\s*(I['’]m|I am)\s+Thufir\s+Hawat\.\s*/i, '');
+}
+
 const onIncoming = async (
   message: {
     channel: 'telegram' | 'whatsapp' | 'cli';
@@ -70,7 +78,8 @@ const onIncoming = async (
     baseSessionKey: sessionKey,
     threadId: message.threadId,
   }).sessionKey;
-  const reply = await activeAgent.handleMessage(session, message.text);
+  const replyRaw = await activeAgent.handleMessage(session, message.text);
+  const reply = stripIdentityIntro(replyRaw);
   if (!reply || reply.trim().length === 0) {
     logger.warn(`Empty reply for ${message.channel}:${message.senderId}`);
     return;
