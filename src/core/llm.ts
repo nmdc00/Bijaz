@@ -750,7 +750,7 @@ function resolveLocalBaseUrl(config: ThufirConfig): string {
 
 const LOCAL_HEALTH_TTL_MS = 2 * 60 * 1000;
 const LOCAL_HEALTH_COOLDOWN_MS = 5 * 60 * 1000;
-const LOCAL_HEALTH_TIMEOUT_MS = 1500;
+const LOCAL_HEALTH_TIMEOUT_MS = 3000;
 
 type LocalHealthState = {
   lastChecked: number;
