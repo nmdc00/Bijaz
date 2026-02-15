@@ -77,6 +77,17 @@ CREATE TABLE IF NOT EXISTS user_context (
 );
 
 -- ============================================================================
+-- Trade Management State
+-- ============================================================================
+
+-- Minimal durable state for exchange-native risk controls (TP/SL, expiry, etc.).
+CREATE TABLE IF NOT EXISTS trade_management_state (
+    symbol TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- ============================================================================
 -- Intel Cache
 -- ============================================================================
 

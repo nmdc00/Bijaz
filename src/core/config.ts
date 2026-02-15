@@ -578,6 +578,37 @@ const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  tradeManagement: z
+    .object({
+      enabled: z.boolean().default(false),
+      defaults: z
+        .object({
+          stopLossPct: z.number().default(3.0),
+          takeProfitPct: z.number().default(5.0),
+          maxHoldHours: z.number().default(72),
+        })
+        .default({}),
+      bounds: z
+        .object({
+          stopLossPct: z
+            .object({ min: z.number().default(1.0), max: z.number().default(8.0) })
+            .default({}),
+          takeProfitPct: z
+            .object({ min: z.number().default(2.0), max: z.number().default(15.0) })
+            .default({}),
+          maxHoldHours: z
+            .object({ min: z.number().default(1), max: z.number().default(168) })
+            .default({}),
+        })
+        .default({}),
+      monitorIntervalSeconds: z.number().default(900),
+      activeMonitorIntervalSeconds: z.number().default(60),
+      useExchangeStops: z.boolean().default(true),
+      liquidationGuardDistanceBps: z.number().default(800),
+      closeRetryMinSeconds: z.number().default(30),
+      dustMaxRemainingNotionalUsd: z.number().default(0.5),
+    })
+    .default({}),
   notifications: z
     .object({
       briefing: z
