@@ -22,8 +22,20 @@ import { formatProactiveSummary, runProactiveSearch } from '../core/proactive_se
 import { buildAgentPeerSessionKey, resolveThreadSessionKeys } from './session_keys.js';
 import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
+import { installConsoleFileMirror } from '../core/unified-logging.js';
 
 const config = loadConfig();
+try {
+  const enabled =
+    String(process.env.THUFIR_LOG_MIRROR ?? '').trim() === '1' ||
+    String(process.env.THUFIR_LOG_FILE ?? '').trim().length > 0;
+  if (enabled) {
+    const filePath = String(process.env.THUFIR_LOG_FILE ?? '').trim() || '~/.thufir/logs/thufir.log';
+    installConsoleFileMirror({ filePath });
+  }
+} catch {
+  // Best-effort: never block startup due to logging.
+}
 const rawLevel = (process.env.THUFIR_LOG_LEVEL ?? 'info').toLowerCase();
 const level =
   rawLevel === 'debug' || rawLevel === 'info' || rawLevel === 'warn' || rawLevel === 'error'
