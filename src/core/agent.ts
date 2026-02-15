@@ -150,14 +150,27 @@ export class ThufirAgent {
   async handleMessage(sender: string, text: string): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);
-    const isCapabilityQuestion = this.isCapabilityQuestion(trimmed);
-    const isAccessQuestion = this.isAccessQuestion(trimmed);
+    // If the user is asking "can you see X" about their account/trades, bypass the LLM and query tools directly.
+    // This prevents generic boilerplate ("tools not available") and keeps replies grounded in live state.
     const wantsPerpStatus =
-      /\b(can\s+you\s+see)\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
-      /\b(show|what('s| is))\b.*\b(trade|position|pnl)\b/i.test(trimmed) ||
-      /\b(how('s| is))\b.*\b(my\s+)?(trade|position)\b.*\b(looking|doing)\b/i.test(trimmed) ||
+      /\b(can\s+you\s+see)\b.*\b(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances|orders?)\b/i.test(
+        trimmed
+      ) ||
+      /\b(show|what('s| is))\b.*\b(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances|orders?)\b/i.test(
+        trimmed
+      ) ||
+      /\b(how('s| is))\b.*\b(my\s+)?(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances)\b.*\b(looking|doing)\b/i.test(
+        trimmed
+      ) ||
       // Short follow-ups after status often omit keywords ("can you see it?").
       /\b(can\s+you|do\s+you)\s+see\s+(it|this)\b/i.test(trimmed);
+
+    // Command: /access_status
+    // Access status should be explicit; we do not want natural-language questions like
+    // "How is the tool access?" to hijack the conversation.
+    if (trimmed === '/access_status') {
+      return this.buildAccessReport();
+    }
 
     // Natural language "enable full auto" should not go through the LLM/tool loop.
     // This prevents "allowed number of steps" failures on vague confirmations like "Go for it."
@@ -174,11 +187,11 @@ export class ThufirAgent {
     }
 
     const tradeIntent = /\b(trade|buy|sell|long|short)\b/i.test(trimmed);
-    if (tradeIntent && !trimmed.startsWith('/perp ')) {
+    if (tradeIntent && !trimmed.startsWith('/perp ') && !trimmed.startsWith('/')) {
       const autoEnabled =
         (this.config.autonomy as any)?.enabled === true &&
         (this.config.autonomy as any)?.fullAuto === true;
-      if (!autoEnabled && !isCapabilityQuestion && !isAccessQuestion && !isQuestion) {
+      if (!autoEnabled && !isQuestion) {
         if (this.config.execution?.provider === 'hyperliquid') {
           return 'To place a live perp trade, use `/perp <symbol> <buy|sell> <sizeUsd> [leverage]` (example: `/perp BTC buy 25 3`).';
         }
@@ -187,10 +200,6 @@ export class ThufirAgent {
 
     if (this.isSetupRequest(trimmed)) {
       return this.buildLiveTradingSetupPrompt();
-    }
-
-    if (isCapabilityQuestion || isAccessQuestion) {
-      return this.buildAccessReport();
     }
 
     // Fast-path: if the user is asking about current positions/orders, query tools directly
@@ -638,6 +647,7 @@ Just type naturally to chat about markets, risks, or positioning.
 
 **Info:**
 /briefing - Daily briefing
+/access_status - Show tool + trading access status
 /intel - Fetch latest news
 /profile - Show your profile
 /persona [mode|list|off] - Set personality mode
@@ -784,24 +794,6 @@ Just type naturally to chat about markets, risks, or positioning.
     return (
       /\?\s*$/.test(message) ||
       /^(should|can|could|would|do|does|did|are|is|am|will|may)\b/i.test(message)
-    );
-  }
-
-  private isCapabilityQuestion(message: string): boolean {
-    return (
-      this.isQuestion(message) &&
-      /\b(suited|capable|able)\b/i.test(message) &&
-      /\b(trade|buy|sell|long|short)\b/i.test(message)
-    );
-  }
-
-  private isAccessQuestion(message: string): boolean {
-    return (
-      this.isQuestion(message) &&
-      (/\baccess\b/i.test(message) ||
-        /\bwhere\b.*\baccess\b/i.test(message) ||
-        /\bcan you\b.*\b(trade|buy|sell|long|short)\b/i.test(message) ||
-        /\bdo you\b.*\b(access|trade)\b/i.test(message))
     );
   }
 
