@@ -1432,10 +1432,14 @@ function formatIntelForTool(items: StoredIntel[]): object[] {
 function getWalletInfo(ctx: ToolExecutorContext): ToolResult {
   try {
     if (ctx.config.execution?.provider === 'hyperliquid') {
+      const address =
+        ctx.config.hyperliquid?.accountAddress ??
+        process.env.HYPERLIQUID_ACCOUNT_ADDRESS ??
+        null;
       return {
         success: true,
         data: {
-          address: ctx.config.hyperliquid?.accountAddress ?? null,
+          address,
           chain: 'hyperliquid',
           token: 'USDC',
           rpc_url: ctx.config.hyperliquid?.baseUrl ?? null,
