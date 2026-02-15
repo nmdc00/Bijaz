@@ -478,6 +478,7 @@ hyperliquid:
   enabled: true
   baseUrl: https://api.hyperliquid.xyz
   wsUrl: wss://api.hyperliquid.xyz/ws
+  httpTimeoutMs: 30000
   accountAddress: ""
   privateKey: ""
   maxLeverage: 5

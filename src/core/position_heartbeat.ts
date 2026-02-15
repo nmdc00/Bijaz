@@ -7,6 +7,7 @@ import type { ToolExecutorContext } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { recordPositionHeartbeatDecision } from '../memory/position_heartbeat_journal.js';
+import { retryWithBackoff } from './retry.js';
 import {
   defaultTriggerState,
   evaluateHeartbeatTriggers,
@@ -67,6 +68,21 @@ function clamp(n: number, min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableHyperliquidPollError(err: unknown): boolean {
+  const e = err as any;
+  const msg = String(e?.message ?? '');
+  const name = String(e?.name ?? '');
+  const causeName = String(e?.cause?.name ?? '');
+  // If we got an HTTP response, treat it as non-retryable (bad request/auth/etc).
+  if (e?.response != null) return false;
+  // Transport-level errors are usually transient.
+  if (/timeout/i.test(msg) || /aborted/i.test(msg)) return true;
+  if (/TimeoutError/i.test(name) || /TimeoutError/i.test(causeName)) return true;
+  if (/HttpRequestError/i.test(name)) return true;
+  // Default to retrying for unknown network-ish failures.
+  return true;
 }
 
 function extractFirstJsonObject(text: string): unknown | null {
@@ -197,6 +213,7 @@ export class PositionHeartbeatService {
       toolContext: ToolExecutorContext;
       logger?: Logger;
       llm?: LlmClient;
+      hyperliquidClientFactory?: (config: ThufirConfig) => HyperliquidClient;
     }
   ) {
     this.logger = params.logger ?? new Logger('info');
@@ -258,16 +275,77 @@ export class PositionHeartbeatService {
     if (!hb.enabled) return;
 
     // Layer 1: data poller
-    const client = new HyperliquidClient(config);
-    const state = (await client.getClearinghouseState()) as {
+    const client = this.params.hyperliquidClientFactory?.(config) ?? new HyperliquidClient(config);
+    const pollOpts = {
+      retries: 4,
+      baseDelayMs: 500,
+      maxDelayMs: 8000,
+      jitterMs: 250,
+      isRetryable: isRetryableHyperliquidPollError,
+      onRetry: (info: { attempt: number; retriesLeft: number; delayMs: number; error: unknown }) => {
+        this.logger.warn(
+          `Heartbeat: Hyperliquid poll retry ${info.attempt} (retriesLeft=${info.retriesLeft}) after ${info.delayMs}ms`,
+          info.error
+        );
+      },
+    };
+
+    const stateRes = await retryWithBackoff(async () => client.getClearinghouseState(), pollOpts);
+    if (!stateRes.ok) {
+      this.logger.warn(
+        `Heartbeat degraded: clearinghouseState poll failed after ${stateRes.attempts} attempt(s); skipping tick`,
+        stateRes.error
+      );
+      recordPositionHeartbeatDecision({
+        kind: 'position_heartbeat',
+        symbol: '_system',
+        timestamp: new Date().toISOString(),
+        triggers: ['data_poll_failed'],
+        decision: { action: 'hold', reason: 'Degraded mode: failed to poll Hyperliquid clearinghouse state.' },
+        snapshot: { attempts: stateRes.attempts, error: String((stateRes.error as any)?.message ?? stateRes.error) },
+        outcome: 'skipped',
+      });
+      return;
+    }
+
+    const midsRes = await retryWithBackoff(async () => client.getAllMids(), pollOpts);
+    if (!midsRes.ok) {
+      this.logger.warn(
+        `Heartbeat degraded: allMids poll failed after ${midsRes.attempts} attempt(s); skipping tick`,
+        midsRes.error
+      );
+      recordPositionHeartbeatDecision({
+        kind: 'position_heartbeat',
+        symbol: '_system',
+        timestamp: new Date().toISOString(),
+        triggers: ['data_poll_failed'],
+        decision: { action: 'hold', reason: 'Degraded mode: failed to poll Hyperliquid mids.' },
+        snapshot: { attempts: midsRes.attempts, error: String((midsRes.error as any)?.message ?? midsRes.error) },
+        outcome: 'skipped',
+      });
+      return;
+    }
+
+    const state = stateRes.value as {
       assetPositions?: Array<{ position?: Record<string, unknown> }>;
       marginSummary?: Record<string, unknown>;
     };
-    const mids = await client.getAllMids();
-    const openOrders = await client.getOpenOrders().catch((err) => {
-      this.logger.warn('Heartbeat: failed to load open orders; proceeding without SL/TP parsing', err);
-      return [];
+    const mids = midsRes.value;
+
+    const openOrdersRes = await retryWithBackoff(async () => client.getOpenOrders(), {
+      ...pollOpts,
+      retries: 2,
+      baseDelayMs: 250,
+      maxDelayMs: 2000,
+      jitterMs: 100,
     });
+    const openOrders = openOrdersRes.ok
+      ? openOrdersRes.value
+      : (() => {
+          this.logger.warn('Heartbeat: failed to load open orders; proceeding without SL/TP parsing', openOrdersRes.error);
+          return [];
+        })();
+
     const fundingBySymbol = await this.loadFundingRates(client).catch(() => new Map<string, number>());
 
     const accountEquity =
@@ -451,7 +529,28 @@ export class PositionHeartbeatService {
 
   private async loadFundingRates(client: HyperliquidClient): Promise<Map<string, number>> {
     const out = new Map<string, number>();
-    const resp = (await client.getMetaAndAssetCtxs()) as any;
+    const respRes = await retryWithBackoff(async () => client.getMetaAndAssetCtxs(), {
+      retries: 3,
+      baseDelayMs: 500,
+      maxDelayMs: 8000,
+      jitterMs: 250,
+      isRetryable: isRetryableHyperliquidPollError,
+      onRetry: (info: { attempt: number; retriesLeft: number; delayMs: number; error: unknown }) => {
+        this.logger.warn(
+          `Heartbeat: metaAndAssetCtxs retry ${info.attempt} (retriesLeft=${info.retriesLeft}) after ${info.delayMs}ms`,
+          info.error
+        );
+      },
+    });
+    if (!respRes.ok) {
+      // Non-fatal: funding is advisory for triggers; proceed without it.
+      this.logger.warn(
+        `Heartbeat degraded: metaAndAssetCtxs poll failed after ${respRes.attempts} attempt(s); funding triggers disabled this tick`,
+        respRes.error
+      );
+      return out;
+    }
+    const resp = respRes.value as any;
     const meta = Array.isArray(resp) ? resp[0] : null;
     const ctxs = Array.isArray(resp) ? resp[1] : null;
     const universe = Array.isArray(meta?.universe) ? meta.universe : [];

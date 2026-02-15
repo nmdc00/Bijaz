@@ -35,7 +35,12 @@ export class HyperliquidClient {
 
   constructor(private config: ThufirConfig) {
     const baseUrl = config.hyperliquid?.baseUrl ?? 'https://api.hyperliquid.xyz';
-    this.transport = new HttpTransport({ apiUrl: baseUrl });
+    const timeoutMsRaw = (config.hyperliquid as any)?.httpTimeoutMs;
+    const timeoutMs =
+      typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+        ? Math.floor(timeoutMsRaw)
+        : undefined;
+    this.transport = new HttpTransport({ apiUrl: baseUrl, timeout: timeoutMs });
     this.info = new InfoClient({ transport: this.transport });
   }
 

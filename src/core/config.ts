@@ -231,6 +231,9 @@ const ConfigSchema = z.object({
       enabled: z.boolean().default(true),
       baseUrl: z.string().default('https://api.hyperliquid.xyz'),
       wsUrl: z.string().default('wss://api.hyperliquid.xyz/ws'),
+      // HTTP polling timeout for Hyperliquid Info/Exchange clients (ms).
+      // The upstream client defaults to ~10s which can be too aggressive on small VPS links.
+      httpTimeoutMs: z.number().default(30000),
       accountAddress: z.string().optional(),
       privateKey: z.string().optional(),
       maxLeverage: z.number().default(5),
