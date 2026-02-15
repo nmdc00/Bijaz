@@ -31,6 +31,8 @@ Your job is to create execution plans that achieve the user's goal.
 3. **Be Specific**: Each step should have a clear action and expected outcome.
 4. **Consider Dependencies**: Note when steps depend on each other.
 5. **Track Assumptions**: Identify assumptions that could invalidate the plan.
+6. **One tool per step**: Each step must call exactly ONE tool. Do NOT combine tools in a single step (e.g. "get_wallet_info + get_portfolio" is WRONG). Create separate steps instead.
+7. **Exact tool names**: Use tool names exactly as listed. Do NOT prefix with "functions." or use "multi_tool_use.parallel".
 
 ## Response Format
 
@@ -115,6 +117,23 @@ function buildPlanningPrompt(context: PlanningContext): string {
 }
 
 /**
+ * Normalise a tool name that the LLM may have mangled.
+ *
+ * Common GPT artefacts:
+ * - "functions.current_time" → "current_time"
+ * - "multi_tool_use.parallel" → null (skip entirely)
+ * - "tool_a + tool_b" → left as-is for the caller to split
+ */
+function normalizeToolName(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  // Drop OpenAI internal wrapper – not a real tool
+  if (name === 'multi_tool_use.parallel') return undefined;
+  // Strip "functions." prefix
+  if (name.startsWith('functions.')) return name.slice('functions.'.length);
+  return name;
+}
+
+/**
  * Parse the LLM response into a plan.
  */
 function parseplanResponse(
@@ -146,7 +165,24 @@ function parseplanResponse(
       warnings?: string[];
     };
 
-    const steps: PlanStep[] = (parsed.steps ?? []).map((step, index) => ({
+    // Expand LLM-generated steps: GPT may bundle tools ("a + b + c") or prefix
+    // them ("functions.x", "multi_tool_use.parallel").  Normalise before execution.
+    const rawSteps = parsed.steps ?? [];
+    const expanded: typeof rawSteps = [];
+    for (const step of rawSteps) {
+      const name = normalizeToolName(step.toolName);
+      if (name && name.includes('+')) {
+        // Split "tool_a + tool_b + ..." into individual steps
+        const names = name.split(/\s*\+\s*/).map((n) => n.trim()).filter(Boolean);
+        for (const n of names) {
+          expanded.push({ ...step, id: `${step.id ?? expanded.length + 1}-${n}`, toolName: n });
+        }
+      } else {
+        expanded.push({ ...step, toolName: name ?? step.toolName });
+      }
+    }
+
+    const steps: PlanStep[] = expanded.map((step, index) => ({
       id: step.id ?? String(index + 1),
       description: step.description ?? 'Unknown step',
       requiresTool: step.requiresTool ?? false,

@@ -839,7 +839,19 @@ async function executeToolStep(
   _state: AgentState,
   ctx: OrchestratorContext
 ): Promise<ToolExecution> {
-  const toolName = step.toolName!;
+  // Normalise tool name: strip "functions." prefix, reject internal wrappers
+  let toolName = step.toolName!;
+  if (toolName.startsWith('functions.')) toolName = toolName.slice('functions.'.length);
+  if (toolName === 'multi_tool_use.parallel') {
+    return {
+      toolName,
+      input: {},
+      result: { success: false, error: 'multi_tool_use.parallel is not a real tool; each tool must be a separate plan step' },
+      timestamp: new Date().toISOString(),
+      durationMs: 0,
+      cached: false,
+    };
+  }
   const input = step.toolInput ?? {};
 
   // Check if tool requires confirmation
