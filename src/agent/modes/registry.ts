@@ -74,6 +74,13 @@ const TRADE_PATTERNS = [
   /\bmake\s+(some\s+)?(money|trades?)\b/i,
   /\b(can\s+you|please)\s+(trade|place)\b/i,
   /\bwant\s+(to\s+)?(trade|place)\b/i,
+  // Position management patterns (close, cancel, reduce, exit, flatten)
+  /\b(close|exit|flatten|unwind)\b.*\b(position|short|long|trade|perp)\b/i,
+  /\b(position|short|long|trade|perp)\b.*\b(close|exit|flatten|unwind)\b/i,
+  /\b(cancel|remove)\b.*\b(order|orders|short|long)\b/i,
+  /\b(reduce|trim|cut)\b.*\b(position|exposure|size|short|long)\b/i,
+  /\b(stop.?loss|take.?profit|tp|sl)\b/i,
+  /\b(place|set|add)\s+(a\s+)?(limit|market|stop)\b/i,
 ];
 
 /**
