@@ -142,6 +142,36 @@ export function countTodayExecutedPerpTrades(): number {
   return Number(row?.c ?? 0);
 }
 
+export function evaluateDailyTradeCap(params: {
+  maxTradesPerDayRaw: unknown;
+  todayCount: number;
+  expectedEdge?: number | null;
+  bypassMinEdgeRaw?: unknown;
+}): { blocked: boolean; reason?: string } {
+  const raw = Number(params.maxTradesPerDayRaw);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return { blocked: false };
+  }
+
+  const maxTradesPerDay = Math.max(1, Math.floor(raw));
+  if (params.todayCount < maxTradesPerDay) {
+    return { blocked: false };
+  }
+
+  const bypassMinEdge = Number.isFinite(Number(params.bypassMinEdgeRaw))
+    ? Number(params.bypassMinEdgeRaw)
+    : 0.12;
+  const expectedEdge = Number(params.expectedEdge);
+  if (Number.isFinite(expectedEdge) && expectedEdge >= Math.max(0, bypassMinEdge)) {
+    return { blocked: false };
+  }
+
+  return {
+    blocked: true,
+    reason: `maxTradesPerDay reached (${params.todayCount}/${maxTradesPerDay})`,
+  };
+}
+
 export function shouldForceObservationMode(
   entries: PerpTradeJournalEntry[],
   params?: { window?: number; minFalse?: number }
@@ -158,6 +188,7 @@ export function shouldForceObservationMode(
 export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
   signalClass?: string | null;
   marketRegime?: MarketRegime | null;
+  expectedEdge?: number | null;
 }): { allowed: boolean; reason?: string; policyState: ReturnType<typeof getAutonomyPolicyState> } {
   const autonomyEnabled = Boolean((config.autonomy as any)?.enabled);
   const fullAutoEnabled = Boolean((config.autonomy as any)?.fullAuto);
@@ -185,15 +216,17 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
     };
   }
 
-  const maxTradesPerDay =
-    Number((config.autonomy as any)?.maxTradesPerDay ?? 25) > 0
-      ? Number((config.autonomy as any)?.maxTradesPerDay)
-      : 25;
   const todayCount = countTodayExecutedPerpTrades();
-  if (todayCount >= maxTradesPerDay) {
+  const dailyCap = evaluateDailyTradeCap({
+    maxTradesPerDayRaw: (config.autonomy as any)?.maxTradesPerDay,
+    todayCount,
+    expectedEdge: input?.expectedEdge ?? null,
+    bypassMinEdgeRaw: (config.autonomy as any)?.tradeCapBypassMinEdge,
+  });
+  if (dailyCap.blocked) {
     return {
       allowed: false,
-      reason: `maxTradesPerDay reached (${todayCount}/${maxTradesPerDay})`,
+      reason: dailyCap.reason ?? 'maxTradesPerDay reached',
       policyState,
     };
   }

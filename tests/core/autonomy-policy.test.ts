@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyMarketRegime,
   computeFractionalKellyFraction,
+  evaluateDailyTradeCap,
   evaluateNewsEntryGate,
   isSignalClassAllowedForRegime,
   shouldForceObservationMode,
@@ -128,5 +129,32 @@ describe('autonomy_policy', () => {
     const result = shouldForceObservationMode(entries, { window: 5, minFalse: 3 });
     expect(result.active).toBe(true);
     expect(result.falseCount).toBe(3);
+  });
+
+  it('allows disabling daily trade cap and bypassing cap for strong edge', () => {
+    const disabled = evaluateDailyTradeCap({
+      maxTradesPerDayRaw: 0,
+      todayCount: 100,
+      expectedEdge: 0.01,
+      bypassMinEdgeRaw: 0.12,
+    });
+    expect(disabled.blocked).toBe(false);
+
+    const bypassed = evaluateDailyTradeCap({
+      maxTradesPerDayRaw: 25,
+      todayCount: 30,
+      expectedEdge: 0.2,
+      bypassMinEdgeRaw: 0.12,
+    });
+    expect(bypassed.blocked).toBe(false);
+
+    const blocked = evaluateDailyTradeCap({
+      maxTradesPerDayRaw: 25,
+      todayCount: 30,
+      expectedEdge: 0.05,
+      bypassMinEdgeRaw: 0.12,
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toMatch(/maxTradesPerDay reached/i);
   });
 });

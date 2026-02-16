@@ -309,7 +309,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const cluster = clusterBySymbol.get(expr.symbol);
       const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
       const signalClass = classifySignalClass(expr);
-      const globalGate = evaluateGlobalTradeGate(this.thufirConfig, { signalClass, marketRegime: regime });
+      const globalGate = evaluateGlobalTradeGate(this.thufirConfig, {
+        signalClass,
+        marketRegime: regime,
+        expectedEdge: expr.expectedEdge,
+      });
       if (!globalGate.allowed) {
         return false;
       }
@@ -354,7 +358,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const signalClass = classifySignalClass(expr);
       const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
       const liquidityBucket = cluster ? resolveLiquidityBucket(cluster) : 'normal';
-      const globalGate = evaluateGlobalTradeGate(this.thufirConfig, { signalClass, marketRegime: regime });
+      const globalGate = evaluateGlobalTradeGate(this.thufirConfig, {
+        signalClass,
+        marketRegime: regime,
+        expectedEdge: expr.expectedEdge,
+      });
       if (!globalGate.allowed) {
         outputs.push(`${symbol}: Blocked (${globalGate.reason ?? 'policy gate'})`);
         continue;

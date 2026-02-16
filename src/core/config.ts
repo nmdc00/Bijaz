@@ -505,6 +505,7 @@ const ConfigSchema = z.object({
                   dailyReportTime: z.string().optional(),
                   maxTradesPerScan: z.number().optional(),
                   maxTradesPerDay: z.number().optional(),
+                  tradeCapBypassMinEdge: z.number().optional(),
                   signalPerformance: z
                     .object({
                       minSharpe: z.number().optional(),
@@ -571,6 +572,7 @@ const ConfigSchema = z.object({
       dailyReportTime: z.string().default('20:00'),
       maxTradesPerScan: z.number().default(3),
       maxTradesPerDay: z.number().default(25),
+      tradeCapBypassMinEdge: z.number().default(0.12),
       signalPerformance: z
         .object({
           minSharpe: z.number().default(0.8),

@@ -891,6 +891,7 @@ export async function executeToolCall(
         const policyGate = evaluateGlobalTradeGate(ctx.config, {
           signalClass,
           marketRegime,
+          expectedEdge,
         });
         if (!policyGate.allowed) {
           try {
