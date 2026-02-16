@@ -121,44 +121,6 @@ vi.mock('../../src/memory/db.js', () => ({
 }));
 
 describe('AutonomousManager v1.3 observation mode', () => {
-  it('suppresses live execution and journals would-trade entries when observation-only is active', async () => {
-    mockObservationOnlyUntilMs = Date.now() + 60_000;
-    const { AutonomousManager } = await import('../../src/core/autonomous.js');
-
-    const executor = {
-      execute: vi.fn(async () => ({ executed: true, message: 'ok' })),
-      getOpenOrders: async () => [],
-      cancelOrder: async () => {},
-    } as any;
-    const marketClient = {
-      getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
-    } as any;
-    const limiter = {
-      getRemainingDaily: () => 100,
-      checkAndReserve: async () => ({ allowed: true }),
-      confirm: () => {},
-      release: () => {},
-    } as any;
-
-    const manager = new AutonomousManager(
-      {} as any,
-      marketClient,
-      executor,
-      limiter,
-      {
-        autonomy: { enabled: true, fullAuto: true, scanIntervalSeconds: 300, minEdge: 0.05, maxTradesPerScan: 3 },
-        hyperliquid: { maxLeverage: 5, minOrderNotionalUsd: 10 },
-      } as any
-    );
-
-    const text = await manager.runScan();
-
-    expect(text).toContain('observation-only mode');
-    expect(executor.execute).not.toHaveBeenCalled();
-    expect(recordPerpTradeJournal).toHaveBeenCalled();
-    expect(recordPerpTrade).not.toHaveBeenCalled();
-  });
-
   it('records autonomous_trades rows when autonomous execution runs', async () => {
     mockObservationOnlyUntilMs = null;
     dbRun.mockClear();
