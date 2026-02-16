@@ -13,6 +13,8 @@ export function mapExpressionPlan(
   const side = hypothesis.expectedExpression.includes('down') ? 'sell' : 'buy';
   const confidence = Math.min(1, Math.max(0, cluster.confidence));
   const reflex = cluster.signals.find((s) => s.kind === 'reflexivity_fragility');
+  const priceVol = cluster.signals.find((s) => s.kind === 'price_vol_regime');
+  const orderflow = cluster.signals.find((s) => s.kind === 'orderflow_imbalance');
 
   let expectedEdge =
     cluster.directionalBias === 'neutral' ? 0 : Math.min(1, confidence * 0.1);
@@ -32,11 +34,41 @@ export function mapExpressionPlan(
     }
   }
 
+  const signalClass: ExpressionPlan['signalClass'] = hypothesis.id.includes('_revert')
+    ? 'mean_reversion'
+    : hypothesis.id.includes('_reflex')
+      ? 'news_event'
+      : hypothesis.id.includes('_trend')
+        ? 'momentum_breakout'
+        : 'unknown';
+
+  const trend = Number(priceVol?.metrics?.trend ?? 0);
+  const volZ = Number(priceVol?.metrics?.volZ ?? 0);
+  const marketRegime: ExpressionPlan['marketRegime'] =
+    volZ >= 1 ? 'high_vol_expansion' : volZ <= -0.5 ? 'low_vol_compression' : Math.abs(trend) >= 0.015 ? 'trending' : 'choppy';
+  const volatilityBucket: ExpressionPlan['volatilityBucket'] =
+    Math.abs(volZ) >= 1.2 ? 'high' : Math.abs(volZ) <= 0.4 ? 'low' : 'medium';
+  const tradeCount = Number(orderflow?.metrics?.tradeCount ?? 0);
+  const liquidityBucket: ExpressionPlan['liquidityBucket'] =
+    tradeCount >= 18 ? 'deep' : tradeCount <= 4 ? 'thin' : 'normal';
+
+  const newsTtlMinutes = Number((config.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120);
+  const noveltyScore =
+    typeof reflex?.metrics?.setupScore === 'number' ? clamp01(Number(reflex.metrics.setupScore)) : confidence;
+  const marketConfirmationScore = clamp01(Math.abs(Number(orderflow?.metrics?.imbalance ?? 0)) * 2);
+  const liquidityScore = clamp01(tradeCount / 20);
+  const volatilityScore = clamp01(Math.abs(volZ));
+  const isNewsEvent = signalClass === 'news_event';
+
   return {
     id: `expr_${hypothesis.id}`,
     hypothesisId: hypothesis.id,
     symbol: cluster.symbol,
     side,
+    signalClass,
+    marketRegime,
+    volatilityBucket,
+    liquidityBucket,
     confidence,
     expectedEdge,
     entryZone: 'market',
@@ -45,6 +77,17 @@ export function mapExpressionPlan(
     orderType: 'market',
     leverage,
     probeSizeUsd: probeBudget,
+    newsTrigger: isNewsEvent
+      ? {
+          enabled: true,
+          subtype: 'catalyst_reflexivity',
+          noveltyScore,
+          marketConfirmationScore,
+          liquidityScore,
+          volatilityScore,
+          expiresAtMs: Date.now() + Math.max(10, newsTtlMinutes) * 60_000,
+        }
+      : null,
   };
 }
 

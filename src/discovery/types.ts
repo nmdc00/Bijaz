@@ -41,6 +41,10 @@ export interface ExpressionPlan {
   hypothesisId: string;
   symbol: string;
   side: 'buy' | 'sell';
+  signalClass?: 'momentum_breakout' | 'mean_reversion' | 'news_event' | 'liquidation_cascade' | 'unknown';
+  marketRegime?: 'trending' | 'choppy' | 'high_vol_expansion' | 'low_vol_compression';
+  volatilityBucket?: 'low' | 'medium' | 'high';
+  liquidityBucket?: 'thin' | 'normal' | 'deep';
   confidence: number;
   expectedEdge: number;
   entryZone: string;
@@ -49,4 +53,13 @@ export interface ExpressionPlan {
   orderType: 'market' | 'limit';
   leverage: number;
   probeSizeUsd: number;
+  newsTrigger?: {
+    enabled: boolean;
+    subtype?: string;
+    noveltyScore?: number;
+    marketConfirmationScore?: number;
+    liquidityScore?: number;
+    volatilityScore?: number;
+    expiresAtMs?: number;
+  } | null;
 }

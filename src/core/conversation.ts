@@ -382,7 +382,7 @@ export class ConversationHandler {
           response = await this.maybeAttachMentatReport(response, result.state.mode);
 
           if (!response || response.trim() === '') {
-            throw new Error('Orchestrator returned empty response');
+            response = await this.buildCooldownSafeFallbackResponse();
           }
 
           this.sessions.appendEntry(userId, {
@@ -585,6 +585,38 @@ export class ConversationHandler {
       this.liveAccountSnapshotCache.set(userId, { ts: now, text });
       return text;
     }
+  }
+
+  private async buildCooldownSafeFallbackResponse(): Promise<string> {
+    const [portfolio, positions, orders] = await Promise.all([
+      executeToolCall('get_portfolio', {}, this.toolContext),
+      executeToolCall('get_positions', {}, this.toolContext),
+      executeToolCall('get_open_orders', {}, this.toolContext),
+    ]);
+
+    const perpPositions = (positions as any)?.success
+      ? Array.isArray((positions as any)?.data?.positions)
+        ? (positions as any).data.positions
+        : []
+      : [];
+    const openOrders = (orders as any)?.success
+      ? Array.isArray((orders as any)?.data?.orders)
+        ? (orders as any).data.orders
+        : []
+      : [];
+    const availableBalance = (portfolio as any)?.success
+      ? Number((portfolio as any)?.data?.summary?.available_balance ?? NaN)
+      : NaN;
+
+    const positionCount = perpPositions.length;
+    const orderCount = openOrders.length;
+    const balanceText = Number.isFinite(availableBalance) ? availableBalance.toFixed(4) : 'unknown';
+
+    return [
+      'Monitoring is still active; provider cooldown prevented a full reasoning pass this turn.',
+      `Book snapshot: ${positionCount} perp position(s), ${orderCount} open order(s), available_balance=${balanceText}.`,
+      'I will continue automatic monitoring and de-risk/rebalance on the next cycle when tool/LLM capacity clears.',
+    ].join(' ');
   }
 
   private shouldResumePlan(message: string): boolean {

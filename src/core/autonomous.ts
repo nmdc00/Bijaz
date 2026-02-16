@@ -16,12 +16,29 @@ import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
-import { recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
+import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
 import { getDailyPnLRollup } from './daily_pnl.js';
 import { openDatabase } from '../memory/db.js';
 import { listOpenPositionsFromTrades } from '../memory/trades.js';
 import { Logger } from './logger.js';
+import {
+  applyReflectionMutation,
+  classifyMarketRegime,
+  classifySignalClass,
+  computeFractionalKellyFraction,
+  evaluateGlobalTradeGate,
+  evaluateNewsEntryGate,
+  isSignalClassAllowedForRegime,
+  resolveLiquidityBucket,
+  resolveVolatilityBucket,
+} from './autonomy_policy.js';
+import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
+import { summarizeSignalPerformance } from './signal_performance.js';
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
 
 export interface AutonomousConfig {
   enabled: boolean;
@@ -31,6 +48,7 @@ export interface AutonomousConfig {
   pauseOnLossStreak: number;
   dailyReportTime: string;
   maxTradesPerScan: number;
+  maxTradesPerDay: number;
 }
 
 export interface DailyPnL {
@@ -88,6 +106,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       pauseOnLossStreak: (thufirConfig.autonomy as any)?.pauseOnLossStreak ?? 3,
       dailyReportTime: (thufirConfig.autonomy as any)?.dailyReportTime ?? '20:00',
       maxTradesPerScan: (thufirConfig.autonomy as any)?.maxTradesPerScan ?? 3,
+      maxTradesPerDay: (thufirConfig.autonomy as any)?.maxTradesPerDay ?? 25,
     };
 
     this.ensureTradesTable();
@@ -209,25 +228,96 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     maxTrades?: number;
     ignoreThresholds?: boolean;
   }): Promise<string> {
+    const recentJournal = listPerpTradeJournals({ limit: 50 });
+    const reflectionMutation = applyReflectionMutation(this.thufirConfig, recentJournal);
+    const policyState = getAutonomyPolicyState();
+    const observationActive =
+      policyState.observationOnlyUntilMs != null && policyState.observationOnlyUntilMs > Date.now();
+
     const result = await runDiscovery(this.thufirConfig);
     if (result.expressions.length === 0) {
       return 'No discovery expressions generated.';
     }
+    const clusterBySymbol = new Map(result.clusters.map((cluster) => [cluster.symbol, cluster]));
 
-    if (!input.executeTrades) {
+    if (!input.executeTrades || observationActive) {
       const top = result.expressions.slice(0, 5);
+      if (observationActive) {
+        for (const expr of top) {
+          const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
+          const cluster = clusterBySymbol.get(expr.symbol);
+          const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
+          const signalClass = classifySignalClass(expr);
+          const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
+          const liquidityBucket = cluster ? resolveLiquidityBucket(cluster) : 'normal';
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId: expr.hypothesisId ?? null,
+              symbol,
+              side: expr.side,
+              size: null,
+              leverage: expr.leverage ?? null,
+              orderType: expr.orderType ?? null,
+              reduceOnly: false,
+              markPrice: null,
+              confidence: expr.confidence != null ? String(expr.confidence) : null,
+              reasoning: `Observation-only mode: would execute ${expr.side} ${symbol} (edge=${(expr.expectedEdge * 100).toFixed(2)}%)`,
+              signalClass,
+              marketRegime: regime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge: expr.expectedEdge,
+              thesisCorrect: null,
+              entryTrigger: expr.newsTrigger?.enabled ? 'news' : 'technical',
+              newsSubtype: expr.newsTrigger?.subtype ?? null,
+              noveltyScore: expr.newsTrigger?.noveltyScore ?? null,
+              marketConfirmationScore: expr.newsTrigger?.marketConfirmationScore ?? null,
+              thesisExpiresAtMs: expr.newsTrigger?.expiresAtMs ?? null,
+              outcome: 'blocked',
+              message: 'Observation-only mode active; live execution suppressed.',
+            });
+          } catch {
+            // Best-effort journaling.
+          }
+        }
+      }
       const lines = top.map(
         (expr) =>
           `- ${expr.symbol} ${expr.side} probe=${expr.probeSizeUsd.toFixed(2)} leverage=${expr.leverage} (${expr.expectedMove})`
       );
-      return `Discovery scan completed:\n${lines.join('\n')}`;
+      const header = observationActive
+        ? `Discovery scan completed in observation-only mode (${policyState.reason ?? 'adaptive policy active'}).`
+        : 'Discovery scan completed:';
+      return `${header}\n${lines.join('\n')}`;
     }
 
-    const eligible = (input.ignoreThresholds ? result.expressions : result.expressions).filter((expr) => {
+    const baseMinEdge = this.config.minEdge;
+    const adaptiveMinEdge = policyState.minEdgeOverride ?? baseMinEdge;
+    const adaptiveMaxTrades = policyState.maxTradesPerScanOverride ?? this.config.maxTradesPerScan;
+    const adaptiveLeverageCap =
+      policyState.leverageCapOverride ?? Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
+
+    const eligible = result.expressions.filter((expr) => {
+      const cluster = clusterBySymbol.get(expr.symbol);
+      const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
+      const signalClass = classifySignalClass(expr);
+      const globalGate = evaluateGlobalTradeGate(this.thufirConfig, { signalClass, marketRegime: regime });
+      if (!globalGate.allowed) {
+        return false;
+      }
+      if (!isSignalClassAllowedForRegime(signalClass, regime)) {
+        return false;
+      }
+      const newsGate = evaluateNewsEntryGate(this.thufirConfig, expr);
+      if (!newsGate.allowed) {
+        return false;
+      }
       if (input.ignoreThresholds) {
         return true;
       }
-      if (expr.expectedEdge < this.config.minEdge) {
+      if (expr.expectedEdge < adaptiveMinEdge) {
         return false;
       }
       if (this.config.requireHighConfidence && expr.confidence < 0.7) {
@@ -246,13 +336,28 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     const maxTrades = Number.isFinite(input.maxTrades)
       ? Math.min(Math.max(Number(input.maxTrades), 1), 10)
-      : this.config.maxTradesPerScan;
+      : adaptiveMaxTrades;
     const toExecute = ranked.slice(0, maxTrades);
     const outputs: string[] = [];
 
     for (const expr of toExecute) {
       const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
       const market = await this.marketClient.getMarket(symbol);
+      const cluster = clusterBySymbol.get(expr.symbol);
+      const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
+      const signalClass = classifySignalClass(expr);
+      const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
+      const liquidityBucket = cluster ? resolveLiquidityBucket(cluster) : 'normal';
+      const globalGate = evaluateGlobalTradeGate(this.thufirConfig, { signalClass, marketRegime: regime });
+      if (!globalGate.allowed) {
+        outputs.push(`${symbol}: Blocked (${globalGate.reason ?? 'policy gate'})`);
+        continue;
+      }
+      const newsGate = evaluateNewsEntryGate(this.thufirConfig, expr);
+      if (!newsGate.allowed) {
+        outputs.push(`${symbol}: Blocked (${newsGate.reason ?? 'news gate'})`);
+        continue;
+      }
       const markPrice = market.markPrice ?? 0;
       const minOrderUsd =
         typeof (this.thufirConfig as any)?.hyperliquid?.minOrderNotionalUsd === 'number'
@@ -260,7 +365,21 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           : 10;
       const remainingDaily = this.limiter.getRemainingDaily();
       const desiredUsd = Number.isFinite(expr.probeSizeUsd) ? expr.probeSizeUsd : 0;
-      const probeUsd = Math.min(Math.max(minOrderUsd, desiredUsd), remainingDaily);
+      const perf = summarizeSignalPerformance(listPerpTradeJournals({ limit: 200 }), signalClass);
+      const kellyFraction = computeFractionalKellyFraction({
+        expectedEdge: expr.expectedEdge,
+        signalExpectancy: Math.max(0.01, perf.expectancy + 0.5),
+        signalVariance: Math.max(0.1, perf.variance),
+        sampleCount: perf.sampleCount,
+        maxFraction: Number((this.thufirConfig.autonomy as any)?.newsEntry?.maxKellyFraction ?? 0.25),
+      });
+      const signalAdjustedUsd = desiredUsd * Math.max(0.25, kellyFraction * 4);
+      const newsSizeCapFraction = Number((this.thufirConfig.autonomy as any)?.newsEntry?.sizeCapFraction ?? 0.5);
+      const cappedForNews =
+        expr.newsTrigger?.enabled === true
+          ? Math.min(signalAdjustedUsd, remainingDaily * clamp01(newsSizeCapFraction))
+          : signalAdjustedUsd;
+      const probeUsd = Math.min(Math.max(minOrderUsd, cappedForNews), remainingDaily);
       if (probeUsd <= 0) {
         outputs.push(`${symbol}: Skipped (insufficient daily budget)`);
         continue;
@@ -270,13 +389,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         continue;
       }
       const size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+      const targetLeverage = Math.min(expr.leverage, adaptiveLeverageCap);
 
       const riskCheck = await checkPerpRiskLimits({
         config: this.thufirConfig,
         symbol,
         side: expr.side,
         size,
-        leverage: expr.leverage,
+        leverage: targetLeverage,
         reduceOnly: false,
         markPrice: markPrice || null,
         notionalUsd: Number.isFinite(probeUsd) ? probeUsd : undefined,
@@ -302,10 +422,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         symbol,
         size,
         orderType: expr.orderType,
-        leverage: expr.leverage,
+        leverage: targetLeverage,
         reasoning: `${expr.expectedMove} | edge=${(expr.expectedEdge * 100).toFixed(2)}% confidence=${(
           expr.confidence * 100
-        ).toFixed(1)}%`,
+        ).toFixed(1)}% regime=${regime} signal=${signalClass} kelly=${(kellyFraction * 100).toFixed(1)}%`,
       };
 
       const tradeResult = await this.executor.execute(market, decision);
@@ -332,12 +452,23 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           symbol,
           side: expr.side,
           size,
-          leverage: expr.leverage ?? null,
+          leverage: targetLeverage ?? null,
           orderType: expr.orderType ?? null,
           reduceOnly: false,
           markPrice: markPrice || null,
           confidence: expr.confidence != null ? String(expr.confidence) : null,
           reasoning: decision.reasoning ?? null,
+          signalClass,
+          marketRegime: regime,
+          volatilityBucket,
+          liquidityBucket,
+          expectedEdge: expr.expectedEdge,
+          thesisCorrect: tradeResult.executed ? null : false,
+          entryTrigger: expr.newsTrigger?.enabled ? 'news' : 'technical',
+          newsSubtype: expr.newsTrigger?.subtype ?? null,
+          noveltyScore: expr.newsTrigger?.noveltyScore ?? null,
+          marketConfirmationScore: expr.newsTrigger?.marketConfirmationScore ?? null,
+          thesisExpiresAtMs: expr.newsTrigger?.expiresAtMs ?? null,
           outcome: tradeResult.executed ? 'executed' : 'failed',
           message: tradeResult.message,
         });
@@ -345,6 +476,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         // Best-effort journaling: never block trading due to local DB issues.
       }
       outputs.push(tradeResult.message);
+    }
+
+    if (reflectionMutation.mutated) {
+      outputs.push(`Adaptive policy updated: ${reflectionMutation.reason ?? 'performance mutation applied'}`);
     }
 
     return outputs.join('\n');

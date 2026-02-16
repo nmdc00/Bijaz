@@ -504,6 +504,24 @@ const ConfigSchema = z.object({
                   pauseOnLossStreak: z.number().optional(),
                   dailyReportTime: z.string().optional(),
                   maxTradesPerScan: z.number().optional(),
+                  maxTradesPerDay: z.number().optional(),
+                  signalPerformance: z
+                    .object({
+                      minSharpe: z.number().optional(),
+                      minSamples: z.number().optional(),
+                    })
+                    .optional(),
+                  newsEntry: z
+                    .object({
+                      minNoveltyScore: z.number().optional(),
+                      minMarketConfirmationScore: z.number().optional(),
+                      minLiquidityScore: z.number().optional(),
+                      minVolatilityScore: z.number().optional(),
+                      thesisTtlMinutes: z.number().optional(),
+                      maxKellyFraction: z.number().optional(),
+                      sizeCapFraction: z.number().optional(),
+                    })
+                    .optional(),
                 })
                 .default({}),
             })
@@ -551,6 +569,24 @@ const ConfigSchema = z.object({
       pauseOnLossStreak: z.number().default(3),
       dailyReportTime: z.string().default('20:00'),
       maxTradesPerScan: z.number().default(3),
+      maxTradesPerDay: z.number().default(25),
+      signalPerformance: z
+        .object({
+          minSharpe: z.number().default(0.8),
+          minSamples: z.number().default(8),
+        })
+        .default({}),
+      newsEntry: z
+        .object({
+          minNoveltyScore: z.number().default(0.6),
+          minMarketConfirmationScore: z.number().default(0.55),
+          minLiquidityScore: z.number().default(0.4),
+          minVolatilityScore: z.number().default(0.25),
+          thesisTtlMinutes: z.number().default(120),
+          maxKellyFraction: z.number().default(0.25),
+          sizeCapFraction: z.number().default(0.5),
+        })
+        .default({}),
     })
     .default({}),
   heartbeat: z

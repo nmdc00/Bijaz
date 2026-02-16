@@ -23,6 +23,7 @@ import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbook
 import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains.js';
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
+import { evaluateGlobalTradeGate } from './autonomy_policy.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -684,6 +685,59 @@ export async function executeToolCall(
         const price = toolInput.price !== undefined ? Number(toolInput.price) : undefined;
         const leverage = toolInput.leverage !== undefined ? Number(toolInput.leverage) : undefined;
         const reduceOnly = Boolean(toolInput.reduce_only ?? false);
+        const signalClass =
+          typeof toolInput.signal_class === 'string' && toolInput.signal_class.trim().length > 0
+            ? toolInput.signal_class.trim()
+            : null;
+        const volatilityBucketRaw =
+          typeof toolInput.volatility_bucket === 'string' ? toolInput.volatility_bucket.trim() : '';
+        const volatilityBucket =
+          volatilityBucketRaw === 'low' || volatilityBucketRaw === 'medium' || volatilityBucketRaw === 'high'
+            ? volatilityBucketRaw
+            : null;
+        const liquidityBucketRaw =
+          typeof toolInput.liquidity_bucket === 'string' ? toolInput.liquidity_bucket.trim() : '';
+        const liquidityBucket =
+          liquidityBucketRaw === 'thin' || liquidityBucketRaw === 'normal' || liquidityBucketRaw === 'deep'
+            ? liquidityBucketRaw
+            : null;
+        const expectedEdge =
+          toolInput.expected_edge != null && Number.isFinite(Number(toolInput.expected_edge))
+            ? Number(toolInput.expected_edge)
+            : null;
+        const entryTriggerRaw =
+          typeof toolInput.entry_trigger === 'string' ? toolInput.entry_trigger.trim() : '';
+        const entryTrigger =
+          entryTriggerRaw === 'news' || entryTriggerRaw === 'technical' || entryTriggerRaw === 'hybrid'
+            ? entryTriggerRaw
+            : null;
+        const newsSubtype =
+          typeof toolInput.news_subtype === 'string' && toolInput.news_subtype.trim().length > 0
+            ? toolInput.news_subtype.trim()
+            : null;
+        const noveltyScore =
+          toolInput.novelty_score != null && Number.isFinite(Number(toolInput.novelty_score))
+            ? Number(toolInput.novelty_score)
+            : null;
+        const marketConfirmationScore =
+          toolInput.market_confirmation_score != null &&
+          Number.isFinite(Number(toolInput.market_confirmation_score))
+            ? Number(toolInput.market_confirmation_score)
+            : null;
+        const thesisExpiresAtMs =
+          toolInput.thesis_expires_at_ms != null &&
+          Number.isFinite(Number(toolInput.thesis_expires_at_ms))
+            ? Number(toolInput.thesis_expires_at_ms)
+            : null;
+        const marketRegimeRaw =
+          typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
+        const marketRegime =
+          marketRegimeRaw === 'trending' ||
+          marketRegimeRaw === 'choppy' ||
+          marketRegimeRaw === 'high_vol_expansion' ||
+          marketRegimeRaw === 'low_vol_compression'
+            ? marketRegimeRaw
+            : null;
         if (!symbol || !size || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
@@ -694,6 +748,47 @@ export async function executeToolCall(
           inputPrice: price,
           markPrice: market.markPrice ?? null,
         });
+        const policyGate = evaluateGlobalTradeGate(ctx.config, {
+          signalClass,
+          marketRegime,
+        });
+        if (!policyGate.allowed) {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId: null,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              orderType,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              confidence: null,
+              reasoning: `Policy gate blocked: ${policyGate.reason ?? 'policy constraints active'}`,
+              signalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
+              estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              estimatedFeeRate: feeEstimate.estimated_fee_rate,
+              estimatedFeeType: feeEstimate.estimated_fee_type,
+              estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              outcome: 'blocked',
+              error: policyGate.reason ?? 'policy constraints active',
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
+          return { success: false, error: policyGate.reason ?? 'policy constraints active' };
+        }
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
           symbol,
@@ -726,6 +821,16 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              signalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
             });
@@ -757,6 +862,16 @@ export async function executeToolCall(
                 estimatedFeeRate: feeEstimate.estimated_fee_rate,
                 estimatedFeeType: feeEstimate.estimated_fee_type,
                 estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+                signalClass,
+                marketRegime,
+                volatilityBucket,
+                liquidityBucket,
+                expectedEdge,
+                entryTrigger,
+                newsSubtype,
+                noveltyScore,
+                marketConfirmationScore,
+                thesisExpiresAtMs,
                 outcome: 'blocked',
                 error: limitCheck.reason ?? 'limit exceeded',
               });
@@ -809,6 +924,16 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              signalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
               outcome: 'failed',
               error: result.message,
             });
@@ -853,6 +978,16 @@ export async function executeToolCall(
             estimatedFeeRate: feeEstimate.estimated_fee_rate,
             estimatedFeeType: feeEstimate.estimated_fee_type,
             estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+            signalClass,
+            marketRegime,
+            volatilityBucket,
+            liquidityBucket,
+            expectedEdge,
+            entryTrigger,
+            newsSubtype,
+            noveltyScore,
+            marketConfirmationScore,
+            thesisExpiresAtMs,
             realizedFeeUsd: realizedFee.realized_fee_usd,
             realizedFeeToken: realizedFee.realized_fee_token,
             realizedFillCount: realizedFee.realized_fill_count,

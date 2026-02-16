@@ -62,6 +62,14 @@ function mergeConfig(
     autonomy: {
       ...base.autonomy,
       ...(override?.autonomy ?? {}),
+      signalPerformance: {
+        ...base.autonomy.signalPerformance,
+        ...(override?.autonomy?.signalPerformance ?? {}),
+      },
+      newsEntry: {
+        ...base.autonomy.newsEntry,
+        ...(override?.autonomy?.newsEntry ?? {}),
+      },
     },
   };
 }
