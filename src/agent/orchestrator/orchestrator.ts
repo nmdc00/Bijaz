@@ -830,7 +830,10 @@ export async function runOrchestrator(
       criticResult = await runCritic(ctx.llm, criticContext);
 
       // If critic provided a revised response, use it
-      const finalResponse = criticResult.revisedResponse ?? response;
+      let finalResponse = criticResult.revisedResponse ?? response;
+      if (!criticResult.approved && !criticResult.revisedResponse) {
+        finalResponse = buildCriticFailureFallbackResponse(state, response);
+      }
       state = completeState(state, finalResponse, criticResult);
     } catch (error) {
       state = addWarning(
@@ -1081,21 +1084,48 @@ function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<st
     normalized.size = 0.001;
   }
 
-  if (
-    normalized.order_type === 'limit' &&
-    (normalized.price === undefined ||
-      typeof normalized.price !== 'number' ||
-      !Number.isFinite(normalized.price))
-  ) {
-    normalized.order_type = 'market';
-    delete normalized.price;
-  }
+  // LLM-generated limit prices frequently fail exchange tick-size constraints.
+  // Default to market for autonomous execution reliability unless a higher layer overrides this.
+  normalized.order_type = 'market';
+  delete normalized.price;
 
   if (normalized.side !== 'buy' && normalized.side !== 'sell') {
     normalized.side = 'buy';
   }
 
   return normalized;
+}
+
+function buildCriticFailureFallbackResponse(state: AgentState, originalResponse: string): string {
+  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  if (tradeAttempts.length === 0) {
+    return originalResponse;
+  }
+
+  const successfulTrades = tradeAttempts.filter((t) => t.result.success);
+  const failedTrades = tradeAttempts.filter((t) => !t.result.success);
+
+  if (successfulTrades.length > 0) {
+    const lines: string[] = [];
+    lines.push(`Action: Executed ${successfulTrades.length} perp order(s).`);
+    if (failedTrades.length > 0) {
+      const lastErr = (failedTrades[failedTrades.length - 1]?.result as { error?: string } | undefined)?.error;
+      lines.push(
+        `Partial failures: ${failedTrades.length} additional attempt(s) failed${lastErr ? ` (last error: ${lastErr})` : ''}.`
+      );
+    }
+    return lines.join('\n');
+  }
+
+  const lastError = (failedTrades[failedTrades.length - 1]?.result as { error?: string } | undefined)?.error;
+  const toolList = state.toolExecutions
+    .map((t) => `${t.toolName}[${t.result.success ? 'ok' : 'err'}]`)
+    .join(', ');
+  return [
+    'Action: No trade was executed.',
+    `perp_place_order failed ${failedTrades.length} time(s)${lastError ? `; last error: ${lastError}` : '.'}`,
+    `Tools run: ${toolList}`,
+  ].join('\n');
 }
 
 /**

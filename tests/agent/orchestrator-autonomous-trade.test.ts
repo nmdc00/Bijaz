@@ -246,4 +246,100 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(typeof placeOrderInputs[0]?.size).toBe('number');
     expect((placeOrderInputs[0]?.size as number) > 0).toBe(true);
   });
+
+  it('falls back to deterministic execution summary when critic disapproves without revision', async () => {
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Try placing order',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: { symbol: 'BTC', side: 'buy', size: 0.01 },
+                },
+              ],
+              confidence: 0.7,
+              blockers: [],
+              reasoning: 'trade',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: 'Filled immediately at best price.',
+          };
+        }
+
+        if (system.includes('You are a critical reviewer')) {
+          return {
+            content: JSON.stringify({
+              approved: false,
+              issues: [
+                {
+                  type: 'unsupported_claim',
+                  severity: 'critical',
+                  description: 'Claimed fill despite failure',
+                },
+              ],
+            }),
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) =>
+        mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { order_id: 'ok-1' },
+        }),
+    };
+
+    const result = await runOrchestrator(
+      'Buy BTC now',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', maxIterations: 4 }
+    );
+
+    expect(result.response).toContain('Action: Executed 1 perp order(s).');
+  });
 });
