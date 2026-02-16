@@ -58,6 +58,7 @@ const SYSTEM_PROMPT_BASE = `## Operating Rules
 
 - Never claim a trade was placed unless a trading tool returned success
 - Never say you lack wallet/trade access without first using get_portfolio/get_positions/get_open_orders
+- If you need the perp universe, prices, or liquidity to answer a trading question, use perp_market_list (do not ask the user to paste exports)
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
 - If tool outputs are JSON, interpret them and respond with a concise narrative summary
@@ -592,9 +593,10 @@ export class ConversationHandler {
     const text = message.toLowerCase();
     const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
     const wantsMarket = /\b(price|odds|market|probability|volume|liquidity|bid|ask)\b/.test(text);
+    const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
 
-    if (!wantsNews && !wantsMarket && !wantsTime) {
+    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime) {
       return '';
     }
 
@@ -618,7 +620,7 @@ export class ConversationHandler {
       }
     }
 
-    if (wantsMarket) {
+    if (wantsMarket || wantsTrade) {
       const marketResult = await executeToolCall('perp_market_list', { limit: 20 }, this.toolContext);
       if (marketResult.success) {
         sections.push(`### perp_market_list\n${JSON.stringify(marketResult.data, null, 2)}`);
