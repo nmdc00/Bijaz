@@ -33,6 +33,10 @@ Your job is to create execution plans that achieve the user's goal.
 5. **Track Assumptions**: Identify assumptions that could invalidate the plan.
 6. **Concrete Inputs Only**: toolInput values MUST be concrete, valid values — never placeholders like "to_be_determined" or "based_on_step_X". If you don't know the exact value yet (e.g. price depends on earlier analysis), use your best estimate or leave the field out. The orchestrator will resolve missing values at execution time.
 7. **Autonomous Execution**: You are an autonomous agent. Do NOT create steps that ask the user for input, confirmation, or preferences. Make decisions based on available data.
+8. **Trade Terminal Contract**: If \`perp_place_order\` is in available tools and the goal implies trading, your plan MUST end with either:
+   - a concrete trade action step using \`perp_place_order\` or \`perp_cancel_order\`, or
+   - a final non-tool step whose description starts with \`NO_TRADE_DECISION:\` and cites specific tool evidence.
+   Keep pre-trade analysis to at most 3 tool steps before the terminal step.
 
 ## Response Format
 
@@ -111,6 +115,19 @@ function buildPlanningPrompt(context: PlanningContext): string {
     sections.push(`## Current Hypotheses\n${context.hypotheses.map((h) => `- ${h}`).join('\n')}`);
   }
 
+  const hasTradeExecutor = context.availableTools.includes('perp_place_order');
+  if (hasTradeExecutor) {
+    sections.push(
+      [
+        '## Autonomous Trading Contract',
+        '- This is autonomous execution: do not ask for confirmation.',
+        '- Include a terminal trade step (`perp_place_order` or `perp_cancel_order`) unless evidence clearly supports no trade.',
+        '- If no trade is justified, include final non-tool step starting with `NO_TRADE_DECISION:` and cite concrete tool evidence.',
+        '- Use at most 3 pre-trade analysis tool steps before the terminal decision/action.',
+      ].join('\n')
+    );
+  }
+
   sections.push('\nCreate a plan to achieve this goal.');
 
   return sections.join('\n\n');
@@ -185,7 +202,7 @@ function parseplanResponse(
         goal,
         steps: fallbackSteps,
         complete: false,
-        blockers: ['Failed to parse plan from LLM response'],
+        blockers: [],
         confidence: 0.45,
         createdAt: now,
         updatedAt: now,
@@ -358,15 +375,30 @@ Respond with a JSON object:
       changes?: string[];
     };
 
-    const steps: PlanStep[] = (parsed.steps ?? request.plan.steps).map((step, index) => ({
-      id: step.id ?? String(index + 1),
-      description: step.description ?? 'Unknown step',
-      requiresTool: step.requiresTool ?? false,
-      toolName: step.toolName,
-      toolInput: step.toolInput,
-      status: (step.status as PlanStep['status']) ?? 'pending',
-      dependsOn: step.dependsOn,
-    }));
+    const previousById = new Map(request.plan.steps.map((step) => [step.id, step] as const));
+    const steps: PlanStep[] = (parsed.steps ?? request.plan.steps).map((step, index) => {
+      const id = step.id ?? String(index + 1);
+      const previous = previousById.get(id);
+      const status = (step.status as PlanStep['status']) ?? previous?.status ?? 'pending';
+
+      const revised: PlanStep = {
+        id,
+        description: step.description ?? previous?.description ?? 'Unknown step',
+        requiresTool: step.requiresTool ?? previous?.requiresTool ?? false,
+        toolName: step.toolName ?? previous?.toolName,
+        toolInput: step.toolInput ?? previous?.toolInput,
+        status,
+        dependsOn: step.dependsOn ?? previous?.dependsOn,
+      };
+
+      if (status === 'complete' && previous?.result !== undefined && step.status === undefined) {
+        revised.result = previous.result;
+      }
+      if (status === 'failed' && previous?.error && step.status === undefined) {
+        revised.error = previous.error;
+      }
+      return revised;
+    });
 
     const revisedPlan: AgentPlan = {
       ...request.plan,

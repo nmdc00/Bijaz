@@ -7,9 +7,10 @@
  */
 
 import type { ChatMessage } from '../../core/llm.js';
-import type { PlanStep } from '../planning/types.js';
+import type { AgentPlan, PlanStep } from '../planning/types.js';
 import type { CriticContext, TradeFragilityContext } from '../critic/types.js';
 import type { ToolExecution } from '../tools/types.js';
+import type { Reflection } from '../reflection/types.js';
 import type {
   AgentState,
   OrchestratorContext,
@@ -50,6 +51,141 @@ import {
   shouldContinue,
   toToolExecutionContext,
 } from './state.js';
+
+const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
+const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
+
+function isNoTradeDecisionStep(step: PlanStep): boolean {
+  return !step.requiresTool && step.description.trim().startsWith(NO_TRADE_DECISION_PREFIX);
+}
+
+function isTerminalTradeStep(step: PlanStep): boolean {
+  return (
+    (step.requiresTool && !!step.toolName && TERMINAL_TRADE_TOOLS.has(step.toolName)) ||
+    isNoTradeDecisionStep(step)
+  );
+}
+
+function hasTerminalTradeStep(plan: AgentPlan): boolean {
+  return plan.steps.some((step) => isTerminalTradeStep(step));
+}
+
+function hasPendingTerminalTradeStep(plan: AgentPlan): boolean {
+  return plan.steps.some((step) => step.status === 'pending' && isTerminalTradeStep(step));
+}
+
+function nextInjectedStepId(plan: AgentPlan, base: string): string {
+  let counter = 1;
+  let id = `${base}-${counter}`;
+  const existing = new Set(plan.steps.map((step) => step.id));
+  while (existing.has(id)) {
+    counter += 1;
+    id = `${base}-${counter}`;
+  }
+  return id;
+}
+
+function buildAutonomousTradeFallbackSteps(
+  plan: AgentPlan,
+  toolRegistry: OrchestratorContext['toolRegistry']
+): PlanStep[] {
+  const available = new Set(toolRegistry.listNames());
+  const steps: PlanStep[] = [];
+  const deps: string[] = [];
+
+  if (available.has('get_portfolio')) {
+    const id = nextInjectedStepId(plan, 'autonomous-get-portfolio');
+    steps.push({
+      id,
+      description: 'Autonomous fallback: refresh portfolio before terminal trade action',
+      requiresTool: true,
+      toolName: 'get_portfolio',
+      toolInput: {},
+      status: 'pending',
+    });
+    deps.push(id);
+  }
+
+  if (available.has('get_open_orders')) {
+    const id = nextInjectedStepId(plan, 'autonomous-get-open-orders');
+    steps.push({
+      id,
+      description: 'Autonomous fallback: refresh open orders before terminal trade action',
+      requiresTool: true,
+      toolName: 'get_open_orders',
+      toolInput: {},
+      status: 'pending',
+      dependsOn: deps.length > 0 ? [...deps] : undefined,
+    });
+    deps.push(id);
+  }
+
+  if (available.has('perp_place_order')) {
+    const id = nextInjectedStepId(plan, 'autonomous-perp-place-order');
+    steps.push({
+      id,
+      description: 'Autonomous fallback terminal action: place a perp order',
+      requiresTool: true,
+      toolName: 'perp_place_order',
+      toolInput: {
+        symbol: 'to_be_determined',
+        side: 'to_be_determined',
+        size: 'to_be_determined',
+        order_type: 'to_be_determined',
+        price: 'to_be_determined',
+      },
+      status: 'pending',
+      dependsOn: deps.length > 0 ? [...deps] : undefined,
+    });
+  }
+
+  return steps;
+}
+
+function enforceTradeTerminalContract(
+  state: AgentState,
+  ctx: OrchestratorContext,
+  reason: string
+): AgentState {
+  if (state.mode !== 'trade' || !state.plan) {
+    return state;
+  }
+  if (hasTerminalTradeStep(state.plan)) {
+    return state;
+  }
+
+  const injectedSteps = buildAutonomousTradeFallbackSteps(state.plan, ctx.toolRegistry);
+  if (injectedSteps.length === 0) {
+    return addWarning(
+      state,
+      `Trade terminal contract not enforced (${reason}): no fallback tools available`
+    );
+  }
+
+  let nextState = setPlan(state, {
+    ...state.plan,
+    steps: [...state.plan.steps, ...injectedSteps],
+    updatedAt: new Date().toISOString(),
+  });
+  nextState = addWarning(
+    nextState,
+    `Trade terminal contract enforced (${reason}); injected ${injectedSteps.length} fallback step(s)`
+  );
+  return nextState;
+}
+
+function shouldReviseAfterReflection(reflection: Reflection, execution: ToolExecution): boolean {
+  if (!reflection.suggestRevision) {
+    return false;
+  }
+  if (!execution.result.success) {
+    return true;
+  }
+  const reason = (reflection.revisionReason ?? '').toLowerCase();
+  return /(failed|error|unexpected|mismatch|invalid|missing|insufficient|blocked|no data)/.test(
+    reason
+  );
+}
 
 function formatRecentIncidentsForContext(goal: string, mode: string): string | null {
   // Keep it small and high-signal; this is for planning, not logging.
@@ -400,6 +536,7 @@ export async function runOrchestrator(
       );
 
       state = updatePlan(state, planResult.plan, planResult.reasoning);
+      state = enforceTradeTerminalContract(state, ctx, 'initial_plan');
 
       if (planResult.warnings.length > 0) {
         for (const warning of planResult.warnings) {
@@ -427,6 +564,7 @@ export async function runOrchestrator(
 
   // Track fragility scan results for trades
   let tradeFragilityScan: QuickFragilityScan | null = null;
+  let consecutiveNonTerminalTradeToolSteps = 0;
 
   while (shouldContinue(state).continue && state.iteration < maxIterations) {
     state = incrementIteration(state);
@@ -442,6 +580,45 @@ export async function runOrchestrator(
         state = setPlan(state, { ...state.plan, complete: true });
       }
       break;
+    }
+
+    if (state.mode === 'trade' && state.plan) {
+      if (isTerminalTradeStep(nextStep)) {
+        consecutiveNonTerminalTradeToolSteps = 0;
+      } else if (nextStep.requiresTool) {
+        consecutiveNonTerminalTradeToolSteps += 1;
+        if (
+          consecutiveNonTerminalTradeToolSteps > 3 &&
+          !hasPendingTerminalTradeStep(state.plan)
+        ) {
+          const currentStepId = nextStep.id;
+          const skipped = state.plan.steps.map((step) => {
+            if (step.id === currentStepId) {
+              return step;
+            }
+            if (step.status === 'pending' && !isTerminalTradeStep(step)) {
+              return { ...step, status: 'skipped' as const };
+            }
+            return step;
+          });
+          state = setPlan(state, {
+            ...state.plan,
+            steps: skipped,
+            updatedAt: new Date().toISOString(),
+          });
+          state = enforceTradeTerminalContract(
+            state,
+            ctx,
+            'progress_guard_non_terminal_steps'
+          );
+          state = addWarning(
+            state,
+            'Progress guard skipped pending non-terminal steps and forced terminal trade action'
+          );
+          consecutiveNonTerminalTradeToolSteps = 0;
+          ctx.onUpdate?.(state);
+        }
+      }
     }
 
     // Execute tool if step requires it
@@ -554,7 +731,11 @@ export async function runOrchestrator(
         reflectionState = applyReflection(reflectionState, reflection, toolContext);
 
         // Check if reflection suggests plan revision
-        if (reflection.suggestRevision && state.plan && state.plan.revisionCount < 3) {
+        if (
+          shouldReviseAfterReflection(reflection, execution) &&
+          state.plan &&
+          state.plan.revisionCount < 3
+        ) {
           const revisionResult = await revisePlan(ctx.llm, {
             plan: state.plan,
             reason: 'tool_result_unexpected',
@@ -564,6 +745,7 @@ export async function runOrchestrator(
           });
 
           state = setPlan(state, revisionResult.plan);
+          state = enforceTradeTerminalContract(state, ctx, 'plan_revision');
           for (const change of revisionResult.changes) {
             state = addWarning(state, `Plan revised: ${change}`);
           }
