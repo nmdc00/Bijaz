@@ -39,6 +39,17 @@ export class HyperliquidClient {
     return this.info;
   }
 
+  async getUserDexAbstraction(): Promise<boolean | null> {
+    const user = this.getAccountAddress();
+    if (!user) {
+      throw new Error(
+        'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
+      );
+    }
+    // HIP-3 DEX abstraction (unified account) state. Returns boolean or null.
+    return this.info.userDexAbstraction({ user });
+  }
+
   getAccountAddress(): string | null {
     const configured =
       this.config.hyperliquid?.accountAddress ??

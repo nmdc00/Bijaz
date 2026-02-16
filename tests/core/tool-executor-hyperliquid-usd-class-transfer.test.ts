@@ -40,6 +40,10 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => {
       };
     }
 
+    async getUserDexAbstraction() {
+      return false;
+    }
+
     async getClearinghouseState() {
       return mockState.clearinghouseState;
     }
@@ -96,9 +100,9 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     const data = (res as any).data;
     expect(data.balances.usdc).toBe(123); // on-chain/memory cash
     expect(data.summary.onchain_usdc).toBe(123);
+    expect(data.summary.hyperliquid_dex_abstraction).toBe(false);
     expect(data.summary.hyperliquid_spot_usdc_free).toBeCloseTo(16.86, 6);
     expect(data.summary.hyperliquid_perp_withdrawable_usdc).toBeCloseTo(5, 6);
     expect(data.summary.available_balance).toBeCloseTo(5, 6); // prefer perp withdrawable in HL mode
   });
 });
-

@@ -1540,7 +1540,15 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
     let hyperliquidFeesError: string | null = null;
     let hyperliquidPortfolio: Record<string, unknown> | null = null;
     let hyperliquidPortfolioError: string | null = null;
+    let dexAbstraction: boolean | null = null;
+    let dexAbstractionError: string | null = null;
     if (hasHyperliquid) {
+      try {
+        const client = new HyperliquidClient(ctx.config);
+        dexAbstraction = await client.getUserDexAbstraction();
+      } catch (error) {
+        dexAbstractionError = error instanceof Error ? error.message : 'Unknown error';
+      }
       try {
         perpPositions = await loadPerpPositions(ctx);
       } catch (error) {
@@ -1588,10 +1596,17 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
         ? ((perpPositions.summary as any).account_value as number)
         : null;
 
-    const availableBalance =
-      hasHyperliquid && perpWithdrawable != null ? perpWithdrawable : (balances.usdc ?? 0);
+    const availableBalance = hasHyperliquid
+      ? dexAbstraction === true
+        ? (spotUsdcFree ?? 0)
+        : perpWithdrawable != null
+          ? perpWithdrawable
+          : (balances.usdc ?? 0)
+      : (balances.usdc ?? 0);
     const availableBalanceNote = hasHyperliquid
-      ? 'For Hyperliquid, available_balance reflects perp withdrawable USDC (free collateral), not on-chain wallet USDC.'
+      ? dexAbstraction === true
+        ? 'Hyperliquid DEX abstraction is enabled; available_balance reflects Hyperliquid spot USDC free (unified collateral).'
+        : 'Hyperliquid DEX abstraction is disabled; available_balance reflects Hyperliquid perp withdrawable USDC (free collateral).'
       : 'available_balance reflects on-chain wallet/memory cash balance (not exchange collateral).';
 
     return {
@@ -1607,6 +1622,13 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
           available_balance: availableBalance,
           available_balance_note: availableBalanceNote,
           onchain_usdc: balances.usdc ?? 0,
+          hyperliquid_dex_abstraction: dexAbstraction,
+          hyperliquid_dex_abstraction_note:
+            dexAbstraction === true
+              ? 'DEX abstraction (HIP-3) enabled: spot and perp USDC are unified for collateral.'
+              : dexAbstraction === false
+                ? 'DEX abstraction (HIP-3) disabled: spot and perp USDC are separate; internal transfer may be needed.'
+                : 'DEX abstraction state unknown (null).',
           hyperliquid_spot_usdc_free: spotUsdcFree,
           hyperliquid_spot_usdc_total: spotUsdcTotal,
           hyperliquid_perp_withdrawable_usdc: perpWithdrawable,
@@ -1624,6 +1646,7 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
                 withdrawable: perpWithdrawable,
                 account_value: perpAccountValue,
               },
+              dexAbstraction,
             }
           : null,
         perp_positions: perpPositions?.positions ?? [],
@@ -1637,6 +1660,7 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
         hyperliquid_fees_error: hyperliquidFeesError,
         hyperliquid_portfolio: hyperliquidPortfolio,
         hyperliquid_portfolio_error: hyperliquidPortfolioError,
+        hyperliquid_dex_abstraction_error: dexAbstractionError,
       },
     };
   } catch (error) {

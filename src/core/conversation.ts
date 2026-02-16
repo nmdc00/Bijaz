@@ -58,9 +58,9 @@ const SYSTEM_PROMPT_BASE = `## Operating Rules
 
 - Never claim a trade was placed unless a trading tool returned success
 - Never say you lack wallet/trade access without first using get_portfolio/get_positions/get_open_orders
-- When interpreting get_portfolio: balances/onchain_balances are on-chain wallet or paper/memory cash, NOT Hyperliquid collateral. For Hyperliquid, spot USDC is in spot_balances (coin=USDC) and perp free collateral is perp_summary.withdrawable.
+- When interpreting get_portfolio: balances/onchain_balances are on-chain wallet or paper/memory cash, NOT Hyperliquid collateral. For Hyperliquid, check summary.hyperliquid_dex_abstraction. If true, spot USDC free is unified collateral; if false, perp withdrawable is the usable perp collateral.
 - If you need the perp universe, prices, or liquidity to answer a trading question, use perp_market_list (do not ask the user to paste exports)
-- If USDC is in Hyperliquid Spot but you need it in Perps (or vice versa), use hyperliquid_usd_class_transfer.
+- If Hyperliquid dex abstraction is disabled and USDC is in Spot but you need it in Perps (or vice versa), use hyperliquid_usd_class_transfer.
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
 - If tool outputs are JSON, interpret them and respond with a concise narrative summary
