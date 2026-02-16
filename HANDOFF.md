@@ -2,7 +2,43 @@
 
 This document provides everything needed to continue development on Thufir.
 
-## Latest Session (2026-02-02, Session 15)
+## Latest Session (2026-02-16, Session 16)
+
+### What Was Done
+1. **v1.2 risk-control merge**
+   - Merged position heartbeat and trade-management risk-controls work into `release/v1.2`.
+   - Added emergency-close/trigger coverage and trade monitor wiring for deterministic exits.
+
+2. **Autonomous execution bug fixes**
+   - Fixed three bugs that blocked autonomous trade execution (trade mode detection + dynamic tool inputs).
+   - Fixed GPT tool-name fuzzy matching/mangling.
+   - Reduce-only orders now bypass spending-limiter checks.
+
+3. **Trade-intent and orchestration behavior**
+   - Trade-intent prompt context now includes `perp_market_list` snapshot.
+   - Agent flow now falls through to orchestrator when autonomous scan yields no candidates.
+
+4. **Hyperliquid collateral transfer workflow**
+   - Added `hyperliquid_usd_class_transfer` tool to core tool-executor and agent tool adapters.
+   - Added dex-abstraction-aware collateral handling:
+     - detect unified account mode
+     - treat spot USDC as collateral when unified
+     - fall back to spot USDC when perp withdrawable is `0`
+   - Clarified spot/perp/on-chain USDC semantics in portfolio output.
+
+### Status
+- Branch: `release/v1.2`
+- Working tree: clean after docs-only updates
+- Focus: deploy and validate live-safe collateral + risk-control flows end-to-end
+
+### Immediate Next Steps
+1. Deploy and restart `thufir` service from `release/v1.2`.
+2. Run live checks: `hyperliquid_verify_live`, `hyperliquid_order_roundtrip`, and `hyperliquid_usd_class_transfer` (tiny size).
+3. Confirm heartbeat/trade-monitor actions on a small live position and verify journaled decisions.
+
+---
+
+## Prior Session (2026-02-02, Session 15)
 
 ### What Was Done
 1. **Autonomous NL trigger**

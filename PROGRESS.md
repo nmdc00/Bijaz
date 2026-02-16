@@ -1,8 +1,8 @@
 # Thufir Progress
 
-Last updated: 2026-02-02
+Last updated: 2026-02-16
 
-> Note: this file contains historical planning context. Current implementation status lives in `docs/PROGRESS.md` (updated 2026-02-11).
+> Note: this file contains historical planning context. Current implementation status lives in `docs/PROGRESS.md` (updated 2026-02-16).
 
 ## North Star
 Autonomous trading assistant for prediction markets with strong guardrails:

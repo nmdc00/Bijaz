@@ -1,9 +1,9 @@
 # Thufir Development Progress
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-16
 
 ## Current Status
-Hyperliquid perps + autonomous discovery are integrated. Identity prompts are platform-agnostic (tool-driven). On this branch, `pnpm build` and `pnpm exec vitest run` pass on Node 22.
+`release/v1.2` is now focused on live-safe execution and collateral operability: position heartbeat + trade-management risk controls are merged, autonomous trade mode bugs are fixed, and Hyperliquid collateral movement is now exposed through agent tools with dex-abstraction-aware USDC handling.
 
 ## Completed
 - Hyperliquid market client (list/get symbols, mark price, metadata)
@@ -32,18 +32,41 @@ Hyperliquid perps + autonomous discovery are integrated. Identity prompts are pl
   - Narrative snapshot extraction with decision-artifact caching (optional LLM JSON mode)
   - Reflexivity fragility scoring wired into discovery as `reflexivity_fragility` signal
   - Setup artifacts persisted (`reflexivity_setup_v1`)
+- v1.2 risk-control foundations merged:
+  - Position heartbeat service with trigger evaluation + emergency close coverage
+  - Trade-management monitor with exchange-native bracket lifecycle support
+- Autonomous execution reliability fixes:
+  - Fixed three blocking bugs in trade-mode detection and dynamic tool inputs
+  - Fixed GPT tool-name mangling via substring extraction
+  - Allow reduce-only orders to bypass spending-limiter checks
+- Conversation/orchestration behavior tightened:
+  - Trade-intent flow now includes `perp_market_list` snapshot
+  - Falls through to orchestrator when autonomous scan returns no candidates
+- Hyperliquid collateral and transfer workflow upgraded:
+  - Added `hyperliquid_usd_class_transfer` tool in conversation layer + agent adapter
+  - Added `usdClassTransfer` execution path and clarified spot/perp/on-chain USDC semantics in portfolio output
+  - Detects dex abstraction and treats unified spot USDC as collateral
+  - Falls back to spot USDC when perp withdrawable balance is zero
+- Added/updated test coverage for:
+  - trade-intent tool snapshots
+  - hyperliquid USD class transfer
+  - dex abstraction collateral handling
 
 ## In Progress
 - Real-account verification rollout:
   - deploy updated code to the running server process
   - restart gateway to pick up `.env` changes
   - ensure Arbitrum ETH is available for gas (required for CCTP receive + deposit transfer)
+- v1.2 release hardening:
+  - run full live smoke checks for transfer + collateral flows under both unified and split-account setups
+  - verify heartbeat/trade-management behavior against tiny live positions
 - Optional expansion of on-chain providers (e.g. Coinglass/Whale APIs)
 - Reflexivity follow-ups:
   - wire thesis invalidation evaluation into the autonomy loop (exit-on-thesis-break)
   - improve carry-cost modeling and catalyst binding requirements before auto-exec
 
 ## Next Steps
-1. Deploy updated build to the server and restart gateway to pick up EVM RPC env vars
-2. Run `hyperliquid_verify_live`, then `hyperliquid_order_roundtrip` with a tiny size (requires confirmation)
-3. If collateral missing: run `evm_usdc_balances` -> `cctp_bridge_usdc` -> `hyperliquid_deposit_usdc` (requires Arbitrum ETH gas)
+1. Deploy `release/v1.2` build and restart gateway service with latest env/config
+2. Run `hyperliquid_verify_live`, `hyperliquid_order_roundtrip`, and `hyperliquid_usd_class_transfer` with minimal safe sizing
+3. Validate portfolio semantics across spot/perp/on-chain balances for both dex abstraction modes
+4. If collateral missing: run `evm_usdc_balances` -> `cctp_bridge_usdc` -> `hyperliquid_deposit_usdc` (requires Arbitrum ETH gas)
