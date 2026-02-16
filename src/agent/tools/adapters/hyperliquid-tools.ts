@@ -52,8 +52,29 @@ export const hyperliquidOrderRoundtripTool: ToolDefinition = {
   cacheTtlMs: 0,
 };
 
+export const hyperliquidUsdClassTransferTool: ToolDefinition = {
+  name: 'hyperliquid_usd_class_transfer',
+  description:
+    'Transfer USDC between Hyperliquid Spot and Perp accounts (Spot<->Perp collateral). Side-effect tool.',
+  category: 'trading',
+  schema: z.object({
+    amount_usdc: z.number().describe('USDC amount to transfer (e.g., 10.5).'),
+    to: z.enum(['perp', 'spot']).describe('Destination account: perp (spot->perp) or spot (perp->spot).'),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall(
+      'hyperliquid_usd_class_transfer',
+      input as Record<string, unknown>,
+      toExecutorContext(ctx)
+    );
+  },
+  sideEffects: true,
+  requiresConfirmation: true,
+  cacheTtlMs: 0,
+};
+
 export const hyperliquidTools: ToolDefinition[] = [
   hyperliquidVerifyLiveTool,
   hyperliquidOrderRoundtripTool,
+  hyperliquidUsdClassTransferTool,
 ];
-
