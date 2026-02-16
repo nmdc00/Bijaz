@@ -325,6 +325,46 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           orderType: expr.orderType,
           status: tradeResult.executed ? 'executed' : 'failed',
         });
+        const db = openDatabase();
+        db.prepare(`
+          INSERT INTO autonomous_trades (
+            id,
+            market_id,
+            market_title,
+            direction,
+            amount,
+            entry_price,
+            confidence,
+            reasoning,
+            timestamp,
+            outcome,
+            pnl
+          ) VALUES (
+            @id,
+            @marketId,
+            @marketTitle,
+            @direction,
+            @amount,
+            @entryPrice,
+            @confidence,
+            @reasoning,
+            @timestamp,
+            @outcome,
+            @pnl
+          )
+        `).run({
+          id: String(tradeId),
+          marketId: symbol,
+          marketTitle: `${symbol} perp`,
+          direction: expr.side,
+          amount: probeUsd,
+          entryPrice: markPrice || 0,
+          confidence: expr.confidence != null ? String(expr.confidence) : null,
+          reasoning: decision.reasoning ?? null,
+          timestamp: new Date().toISOString(),
+          outcome: tradeResult.executed ? 'pending' : 'failed',
+          pnl: null,
+        });
         recordPerpTradeJournal({
           kind: 'perp_trade_journal',
           tradeId,
