@@ -427,4 +427,88 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).toContain('Next Action:');
     expect(result.response).not.toContain('If you want');
   });
+
+  it('does not force trade response contract for recap-only goals without trade action', async () => {
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Fetch portfolio snapshot',
+                  requiresTool: true,
+                  toolName: 'get_portfolio',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'review state only',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: 'PnL is flat today; last action was a full position flatten and no new orders this cycle.',
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['get_portfolio'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) =>
+        mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { available_balance: 16.67 },
+        }),
+    };
+
+    const result = await runOrchestrator(
+      'Walk me through your pnl and last action taken',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(result.response).toContain('PnL is flat today');
+    expect(result.response).not.toContain('Action:');
+    expect(result.response).not.toContain('Book State:');
+    expect(result.response).not.toContain('Next Action:');
+  });
 });

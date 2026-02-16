@@ -61,26 +61,31 @@ export function listModes(): ModeConfig[] {
  * Patterns that indicate trade intent.
  */
 const TRADE_PATTERNS = [
-  /\b(buy|sell|trade|order)\b/i,
+  /\b(place|execute|open|enter|submit|send|make)\b.*\b(trade|order|position)\b/i,
+  /\b(buy|sell)\s+(btc|eth|sol|xrp|doge|avax|bnb|perp|futures)\b/i,
   /\b(go|going)\s+(long|short)\b/i,
   /\btake\s+(a\s+)?position\b/i,
-  /\b(perp|perps|perpetual|futures)\b/i,
-  /\b(leverage)\b/i,
   // Additional patterns for trade intent
   /\b(start|begin|enable|activate)\s+trading\b/i,
   /\b(autonomous|auto)\s*(trading|execution)\b/i,
   /\b(find|look\s+for|identify)\s+(a\s+)?(trade|opportunity)\b/i,
   /\btrading\s+(mode|enabled?)\b/i,
   /\bmake\s+(some\s+)?(money|trades?)\b/i,
-  /\b(can\s+you|please)\s+(trade|place)\b/i,
-  /\bwant\s+(to\s+)?(trade|place)\b/i,
+  /\b(can\s+you|please)\s+(trade|place|execute|open|close|reduce)\b/i,
+  /\bwant\s+(to\s+)?(trade|place|execute|open|close|reduce)\b/i,
   // Position management patterns (close, cancel, reduce, exit, flatten)
   /\b(close|exit|flatten|unwind)\b.*\b(position|short|long|trade|perp)\b/i,
   /\b(position|short|long|trade|perp)\b.*\b(close|exit|flatten|unwind)\b/i,
   /\b(cancel|remove)\b.*\b(order|orders|short|long)\b/i,
   /\b(reduce|trim|cut)\b.*\b(position|exposure|size|short|long)\b/i,
-  /\b(stop.?loss|take.?profit|tp|sl)\b/i,
+  /\b(set|move|adjust|place|add)\b.*\b(stop.?loss|take.?profit|tp|sl)\b/i,
   /\b(place|set|add)\s+(a\s+)?(limit|market|stop)\b/i,
+];
+
+const TRADE_REVIEW_PATTERNS = [
+  /\b(walk\s+me\s+through|recap|review|postmortem|break\s+down)\b/i,
+  /\b(last\s+(trade|action)|what\s+did\s+you\s+(do|trade)|recent\s+activity)\b/i,
+  /\b(pnl|p&l|profit|loss|performance|fees?)\b/i,
 ];
 
 /**
@@ -104,14 +109,28 @@ export function detectMode(message: string): ModeDetectionResult {
   const signals: string[] = [];
   let mode: AgentMode = 'chat';
   let confidence = 0.5;
+  let matchedTradePattern = false;
 
   // Check for trade patterns
   for (const pattern of TRADE_PATTERNS) {
     if (pattern.test(message)) {
       signals.push(`trade pattern: ${pattern.source}`);
+      matchedTradePattern = true;
       mode = 'trade';
       confidence = 0.8;
       break;
+    }
+  }
+
+  // Treat post-trade review requests as analysis unless there is explicit execution intent.
+  if (!matchedTradePattern) {
+    for (const pattern of TRADE_REVIEW_PATTERNS) {
+      if (pattern.test(message)) {
+        signals.push(`trade review pattern: ${pattern.source}`);
+        mode = 'mentat';
+        confidence = 0.75;
+        break;
+      }
     }
   }
 

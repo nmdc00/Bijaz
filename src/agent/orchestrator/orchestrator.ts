@@ -499,8 +499,41 @@ function buildTradeNextActionSummary(state: AgentState): string {
   return 'I will continue autonomous monitoring and execute the next valid trade action when constraints allow.';
 }
 
-function enforceTradeResponseContract(response: string, state: AgentState): string {
+function hasExplicitTradeExecutionIntent(goal: string): boolean {
+  const text = goal.toLowerCase();
+  if (
+    /\b(walk\s+me\s+through|recap|review|postmortem|break\s+down)\b/.test(text) ||
+    /\b(last\s+(trade|action)|recent\s+activity)\b/.test(text) ||
+    /\b(pnl|p&l|profit|loss|performance|fees?)\b/.test(text)
+  ) {
+    return false;
+  }
+  return (
+    /\b(place|execute|open|enter|submit|send|make)\b.*\b(trade|order|position)\b/.test(text) ||
+    /\b(buy|sell)\s+(btc|eth|sol|xrp|doge|avax|bnb|perp|futures)\b/.test(text) ||
+    /\b(go|going)\s+(long|short)\b/.test(text) ||
+    /\b(close|exit|flatten|unwind|reduce|trim|cut)\b.*\b(position|exposure|size|short|long|perp|trade)\b/.test(
+      text
+    ) ||
+    /\b(start|begin|enable|activate)\s+trading\b/.test(text) ||
+    /\b(autonomous|auto)\s*(trading|execution)\b/.test(text) ||
+    /\btrading\s+(mode|enabled?)\b/.test(text) ||
+    /\b(manage|rebalance|de-?risk)\b.*\b(perp|position|book)\b/.test(text)
+  );
+}
+
+function shouldApplyTradeResponseContract(goal: string, state: AgentState): boolean {
   if (state.mode !== 'trade') {
+    return false;
+  }
+  const hasTradeActionThisCycle = state.toolExecutions.some(
+    (t) => t.toolName === 'perp_place_order' || t.toolName === 'perp_cancel_order'
+  );
+  return hasTradeActionThisCycle || hasExplicitTradeExecutionIntent(goal);
+}
+
+function enforceTradeResponseContract(response: string, state: AgentState, goal: string): string {
+  if (!shouldApplyTradeResponseContract(goal, state)) {
     return response;
   }
 
@@ -932,17 +965,17 @@ export async function runOrchestrator(
       if (!criticResult.approved && !criticResult.revisedResponse) {
         finalResponse = buildCriticFailureFallbackResponse(state, response);
       }
-      finalResponse = enforceTradeResponseContract(finalResponse, state);
+      finalResponse = enforceTradeResponseContract(finalResponse, state, goal);
       state = completeState(state, finalResponse, criticResult);
     } catch (error) {
       state = addWarning(
         state,
         `Critic failed: ${error instanceof Error ? error.message : 'Unknown'}`
       );
-      state = completeState(state, enforceTradeResponseContract(response, state));
+      state = completeState(state, enforceTradeResponseContract(response, state, goal));
     }
   } else {
-    state = completeState(state, enforceTradeResponseContract(response, state));
+    state = completeState(state, enforceTradeResponseContract(response, state, goal));
   }
 
   ctx.onUpdate?.(state);
@@ -1289,7 +1322,9 @@ ${state.plan?.goal ?? state.goal}
 Based on the completed step results above, provide the CONCRETE values for this tool call.
 Respond with ONLY a JSON object containing the resolved parameters. No explanation, just JSON.
 For perp_place_order: "side" must be "buy" or "sell", "size" must be > 0, "price" must be a number.
-To close a short position, use side="buy". To close a long, use side="sell".`;
+To close a short position, use side="buy". To close a long, use side="sell".
+For reduce-only exits, include deterministic evaluation fields when known: "thesis_invalidation_hit" and "exit_mode".
+For news-triggered entries, include "news_sources" (urls/ids) so provenance is logged.`;
 
   try {
     const response = await ctx.llm.complete(
