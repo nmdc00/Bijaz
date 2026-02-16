@@ -668,6 +668,26 @@ export const THUFIR_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'hyperliquid_usd_class_transfer',
+    description:
+      'Transfer USDC between Hyperliquid Spot and Perp accounts (Spot<->Perp). Side-effect tool.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        amount_usdc: {
+          type: 'number',
+          description: 'USDC amount to transfer (e.g., 1.5)',
+        },
+        to: {
+          type: 'string',
+          enum: ['perp', 'spot'],
+          description: 'Destination account: perp (spot->perp) or spot (perp->spot)',
+        },
+      },
+      required: ['amount_usdc', 'to'],
+    },
+  },
+  {
     name: 'evm_erc20_balance',
     description: 'Get ERC20 token balance on an EVM chain (polygon|arbitrum). Read-only.',
     input_schema: {

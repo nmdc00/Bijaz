@@ -374,7 +374,7 @@ export async function executeToolCall(
 
         const formatDecimal = (value: number, decimals: number): string => {
           const fixed = value.toFixed(decimals);
-          return fixed.replace(/\\.?0+$/, '');
+          return fixed.replace(/\.?0+$/, '');
         };
 
         const sizeStr = formatDecimal(size, marketMeta.szDecimals ?? 6);
@@ -431,6 +431,39 @@ export async function executeToolCall(
             oid: String(oid),
             cancelled: true,
             stillOpen,
+          },
+        };
+      }
+
+      case 'hyperliquid_usd_class_transfer': {
+        const amountUsdc = Number(toolInput.amount_usdc ?? 0);
+        const to = String(toolInput.to ?? '').trim().toLowerCase();
+        if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
+          return { success: false, error: 'Invalid amount_usdc' };
+        }
+        if (to !== 'perp' && to !== 'spot') {
+          return { success: false, error: 'Invalid to (use perp|spot)' };
+        }
+
+        const formatDecimal = (value: number, decimals: number): string => {
+          const fixed = value.toFixed(decimals);
+          return fixed.replace(/\.?0+$/, '');
+        };
+
+        const client = new HyperliquidClient(ctx.config);
+        const exchange = client.getExchangeClient();
+        const amountStr = formatDecimal(amountUsdc, 6);
+        const toPerp = to === 'perp';
+
+        // Hyperliquid Exchange: usdClassTransfer({ amount: "1", toPerp: true })
+        const result = await (exchange as any).usdClassTransfer({ amount: amountStr, toPerp });
+
+        return {
+          success: true,
+          data: {
+            amount_usdc: Number(amountStr),
+            to,
+            result,
           },
         };
       }
@@ -1530,17 +1563,69 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
       }
     }
 
+    const spotUsdcRow = (spotBalances?.balances ?? []).find((b) => String(b.coin).toUpperCase() === 'USDC');
+    const spotUsdcTotal =
+      spotUsdcRow && typeof spotUsdcRow.total === 'number' && Number.isFinite(spotUsdcRow.total)
+        ? spotUsdcRow.total
+        : null;
+    const spotUsdcHold =
+      spotUsdcRow && typeof spotUsdcRow.hold === 'number' && Number.isFinite(spotUsdcRow.hold)
+        ? spotUsdcRow.hold
+        : null;
+    const spotUsdcFree =
+      spotUsdcRow && typeof spotUsdcRow.free === 'number' && Number.isFinite(spotUsdcRow.free)
+        ? spotUsdcRow.free
+        : spotUsdcTotal != null && spotUsdcHold != null
+          ? Math.max(0, spotUsdcTotal - spotUsdcHold)
+          : null;
+
+    const perpWithdrawable =
+      perpPositions?.summary && typeof (perpPositions.summary as any).withdrawable === 'number'
+        ? ((perpPositions.summary as any).withdrawable as number)
+        : null;
+    const perpAccountValue =
+      perpPositions?.summary && typeof (perpPositions.summary as any).account_value === 'number'
+        ? ((perpPositions.summary as any).account_value as number)
+        : null;
+
+    const availableBalance =
+      hasHyperliquid && perpWithdrawable != null ? perpWithdrawable : (balances.usdc ?? 0);
+    const availableBalanceNote = hasHyperliquid
+      ? 'For Hyperliquid, available_balance reflects perp withdrawable USDC (free collateral), not on-chain wallet USDC.'
+      : 'available_balance reflects on-chain wallet/memory cash balance (not exchange collateral).';
+
     return {
       success: true,
       data: {
+        // Legacy field: this is on-chain wallet (or memory/paper) balances, not Hyperliquid Spot/Perp balances.
         balances,
+        onchain_balances: balances,
+        onchain_balances_note:
+          'On-chain wallet (or memory/paper) balances. Do not confuse with Hyperliquid Spot/Perp USDC collateral.',
         positions: [],
         summary: {
-          available_balance: balances.usdc ?? 0,
+          available_balance: availableBalance,
+          available_balance_note: availableBalanceNote,
+          onchain_usdc: balances.usdc ?? 0,
+          hyperliquid_spot_usdc_free: spotUsdcFree,
+          hyperliquid_spot_usdc_total: spotUsdcTotal,
+          hyperliquid_perp_withdrawable_usdc: perpWithdrawable,
+          hyperliquid_perp_account_value: perpAccountValue,
           remaining_daily_limit: remainingDaily,
           positions_source: 'none',
           perp_enabled: hasHyperliquid,
         },
+        hyperliquid_balances: hasHyperliquid
+          ? {
+              spot: {
+                usdc: { total: spotUsdcTotal, hold: spotUsdcHold, free: spotUsdcFree },
+              },
+              perp: {
+                withdrawable: perpWithdrawable,
+                account_value: perpAccountValue,
+              },
+            }
+          : null,
         perp_positions: perpPositions?.positions ?? [],
         perp_summary: perpPositions?.summary ?? null,
         perp_error: perpError,
