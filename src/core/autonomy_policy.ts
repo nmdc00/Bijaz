@@ -86,6 +86,8 @@ export function evaluateNewsEntryGate(
     : 0.55;
   const minLiquidity = Number.isFinite(gate.minLiquidityScore) ? Number(gate.minLiquidityScore) : 0.4;
   const minVolatility = Number.isFinite(gate.minVolatilityScore) ? Number(gate.minVolatilityScore) : 0.25;
+  const minSourceCount = Number.isFinite(gate.minSourceCount) ? Number(gate.minSourceCount) : 1;
+  const sourceCount = Array.isArray(trigger.sources) ? trigger.sources.filter(Boolean).length : 0;
 
   if (trigger.expiresAtMs != null && trigger.expiresAtMs <= nowMs) {
     return { allowed: false, reason: 'news trigger expired' };
@@ -101,6 +103,9 @@ export function evaluateNewsEntryGate(
   }
   if ((trigger.volatilityScore ?? 0) < minVolatility) {
     return { allowed: false, reason: 'news volatility guard failed' };
+  }
+  if (sourceCount < Math.max(0, minSourceCount)) {
+    return { allowed: false, reason: 'news source provenance below threshold' };
   }
 
   return { allowed: true };

@@ -81,6 +81,13 @@ export function mapExpressionPlan(
       ? {
           enabled: true,
           subtype: 'catalyst_reflexivity',
+          sources: [
+            {
+              source: 'discovery_reflexivity',
+              ref: hypothesis.id,
+              confidence: confidence,
+            },
+          ],
           noveltyScore,
           marketConfirmationScore,
           liquidityScore,

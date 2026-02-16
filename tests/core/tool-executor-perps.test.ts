@@ -113,6 +113,62 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('accepts deterministic thesis evaluation fields for reduce-only exits', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const symbol = 'XBTTEST';
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        hypothesis_id: 'hyp_test_close',
+        thesis_invalidation_hit: false,
+        exit_mode: 'manual',
+      },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it('accepts news provenance metadata on news-triggered entries', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const symbol = 'ETHTEST';
+    const sources = ['https://example.com/news/a', 'intel:news:1234'];
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'buy',
+        size: 0.001,
+        entry_trigger: 'news',
+        news_subtype: 'macro',
+        news_sources: sources,
+      },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+  });
+
   it('perp_open_orders returns executor orders', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),

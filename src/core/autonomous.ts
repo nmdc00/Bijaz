@@ -272,6 +272,12 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               thesisCorrect: null,
               entryTrigger: expr.newsTrigger?.enabled ? 'news' : 'technical',
               newsSubtype: expr.newsTrigger?.subtype ?? null,
+              newsSources: Array.isArray(expr.newsTrigger?.sources)
+                ? expr.newsTrigger?.sources
+                    .map((source) => String(source.ref ?? source.source ?? '').trim())
+                    .filter((source) => source.length > 0)
+                : null,
+              newsSourceCount: Array.isArray(expr.newsTrigger?.sources) ? expr.newsTrigger.sources.length : null,
               noveltyScore: expr.newsTrigger?.noveltyScore ?? null,
               marketConfirmationScore: expr.newsTrigger?.marketConfirmationScore ?? null,
               thesisExpiresAtMs: expr.newsTrigger?.expiresAtMs ?? null,
@@ -466,6 +472,12 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           thesisCorrect: tradeResult.executed ? null : false,
           entryTrigger: expr.newsTrigger?.enabled ? 'news' : 'technical',
           newsSubtype: expr.newsTrigger?.subtype ?? null,
+          newsSources: Array.isArray(expr.newsTrigger?.sources)
+            ? expr.newsTrigger?.sources
+                .map((source) => String(source.ref ?? source.source ?? '').trim())
+                .filter((source) => source.length > 0)
+            : null,
+          newsSourceCount: Array.isArray(expr.newsTrigger?.sources) ? expr.newsTrigger.sources.length : null,
           noveltyScore: expr.newsTrigger?.noveltyScore ?? null,
           marketConfirmationScore: expr.newsTrigger?.marketConfirmationScore ?? null,
           thesisExpiresAtMs: expr.newsTrigger?.expiresAtMs ?? null,

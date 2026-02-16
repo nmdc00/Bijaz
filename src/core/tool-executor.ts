@@ -86,6 +86,130 @@ type PerpOrderRealizedFee = {
   error?: string | null;
 };
 
+type PerpExitMode =
+  | 'thesis_invalidation'
+  | 'take_profit'
+  | 'time_exit'
+  | 'risk_reduction'
+  | 'manual'
+  | 'unknown';
+
+function parseNewsSources(input: unknown): string[] | null {
+  if (Array.isArray(input)) {
+    const values = input
+      .map((entry) => String(entry ?? '').trim())
+      .filter((entry) => entry.length > 0);
+    return values.length > 0 ? values : null;
+  }
+  if (typeof input === 'string') {
+    const values = input
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return values.length > 0 ? values : null;
+  }
+  return null;
+}
+
+export function normalizeExitMode(input: unknown): PerpExitMode | null {
+  if (typeof input !== 'string') return null;
+  const value = input.trim();
+  if (
+    value === 'thesis_invalidation' ||
+    value === 'take_profit' ||
+    value === 'time_exit' ||
+    value === 'risk_reduction' ||
+    value === 'manual' ||
+    value === 'unknown'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+export function evaluateReduceOnlyExitAssessment(params: {
+  reduceOnly: boolean;
+  thesisInvalidationHit: boolean | null;
+  exitMode: PerpExitMode | null;
+}): {
+  thesisCorrect: boolean | null;
+  thesisInvalidationHit: boolean | null;
+  exitMode: PerpExitMode | null;
+  emotionalExitFlag: boolean | null;
+  thesisEvaluationReason: string | null;
+} {
+  if (!params.reduceOnly) {
+    return {
+      thesisCorrect: null,
+      thesisInvalidationHit: null,
+      exitMode: null,
+      emotionalExitFlag: null,
+      thesisEvaluationReason: null,
+    };
+  }
+
+  const normalizedExitMode =
+    params.exitMode ?? (params.thesisInvalidationHit === true ? 'thesis_invalidation' : null);
+  const invalidationHit =
+    params.thesisInvalidationHit ??
+    (normalizedExitMode === 'thesis_invalidation' ? true : null);
+
+  if (invalidationHit === true) {
+    return {
+      thesisCorrect: false,
+      thesisInvalidationHit: true,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: false,
+      thesisEvaluationReason: 'Exit aligned with explicit thesis invalidation condition.',
+    };
+  }
+
+  if (invalidationHit === false) {
+    const emotional = normalizedExitMode === 'manual' || normalizedExitMode === 'unknown';
+    return {
+      thesisCorrect: emotional ? false : true,
+      thesisInvalidationHit: false,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: emotional,
+      thesisEvaluationReason: emotional
+        ? 'Exited before invalidation via discretionary/manual action.'
+        : 'Exited without invalidation via planned management rule.',
+    };
+  }
+
+  if (normalizedExitMode === 'manual' || normalizedExitMode === 'unknown') {
+    return {
+      thesisCorrect: false,
+      thesisInvalidationHit: null,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: true,
+      thesisEvaluationReason: 'Reduce-only exit lacked invalidation proof and appears discretionary.',
+    };
+  }
+
+  if (
+    normalizedExitMode === 'take_profit' ||
+    normalizedExitMode === 'time_exit' ||
+    normalizedExitMode === 'risk_reduction'
+  ) {
+    return {
+      thesisCorrect: true,
+      thesisInvalidationHit: false,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: false,
+      thesisEvaluationReason: 'Reduce-only exit matched a deterministic management rule.',
+    };
+  }
+
+  return {
+    thesisCorrect: null,
+    thesisInvalidationHit: null,
+    exitMode: normalizedExitMode,
+    emotionalExitFlag: null,
+    thesisEvaluationReason: null,
+  };
+}
+
 function getSystemToolPolicy(config: ThufirConfig): SystemToolPolicy {
   const settings = config.agent?.systemTools;
   const allowedCommands = Array.isArray(settings?.allowedCommands)
@@ -685,6 +809,10 @@ export async function executeToolCall(
         const price = toolInput.price !== undefined ? Number(toolInput.price) : undefined;
         const leverage = toolInput.leverage !== undefined ? Number(toolInput.leverage) : undefined;
         const reduceOnly = Boolean(toolInput.reduce_only ?? false);
+        const hypothesisId =
+          typeof toolInput.hypothesis_id === 'string' && toolInput.hypothesis_id.trim().length > 0
+            ? toolInput.hypothesis_id.trim()
+            : null;
         const signalClass =
           typeof toolInput.signal_class === 'string' && toolInput.signal_class.trim().length > 0
             ? toolInput.signal_class.trim()
@@ -729,6 +857,18 @@ export async function executeToolCall(
           Number.isFinite(Number(toolInput.thesis_expires_at_ms))
             ? Number(toolInput.thesis_expires_at_ms)
             : null;
+        const thesisInvalidationHit =
+          typeof toolInput.thesis_invalidation_hit === 'boolean'
+            ? toolInput.thesis_invalidation_hit
+            : null;
+        const exitMode = normalizeExitMode(toolInput.exit_mode);
+        const newsSources = parseNewsSources(toolInput.news_sources);
+        const newsSourceCount = newsSources?.length ?? null;
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =
@@ -757,7 +897,7 @@ export async function executeToolCall(
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               tradeId: null,
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -774,9 +914,15 @@ export async function executeToolCall(
               expectedEdge,
               entryTrigger,
               newsSubtype,
+              newsSources,
+              newsSourceCount,
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              emotionalExitFlag: exitAssessment.emotionalExitFlag,
+              thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
               estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
@@ -807,7 +953,7 @@ export async function executeToolCall(
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               tradeId: null,
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -828,9 +974,15 @@ export async function executeToolCall(
               expectedEdge,
               entryTrigger,
               newsSubtype,
+              newsSources,
+              newsSourceCount,
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              emotionalExitFlag: exitAssessment.emotionalExitFlag,
+              thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
             });
@@ -848,7 +1000,7 @@ export async function executeToolCall(
               recordPerpTradeJournal({
                 kind: 'perp_trade_journal',
                 tradeId: null,
-                hypothesisId: null,
+                hypothesisId,
                 symbol,
                 side: side as 'buy' | 'sell',
                 size,
@@ -869,9 +1021,15 @@ export async function executeToolCall(
                 expectedEdge,
                 entryTrigger,
                 newsSubtype,
+                newsSources,
+                newsSourceCount,
                 noveltyScore,
                 marketConfirmationScore,
                 thesisExpiresAtMs,
+                thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+                exitMode: exitAssessment.exitMode,
+                emotionalExitFlag: exitAssessment.emotionalExitFlag,
+                thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
                 outcome: 'blocked',
                 error: limitCheck.reason ?? 'limit exceeded',
               });
@@ -898,7 +1056,7 @@ export async function executeToolCall(
           ctx.limiter.release(size);
           try {
             const tradeId = recordPerpTrade({
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -910,7 +1068,7 @@ export async function executeToolCall(
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               tradeId,
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -931,9 +1089,16 @@ export async function executeToolCall(
               expectedEdge,
               entryTrigger,
               newsSubtype,
+              newsSources,
+              newsSourceCount,
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              emotionalExitFlag: exitAssessment.emotionalExitFlag,
+              thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
               outcome: 'failed',
               error: result.message,
             });
@@ -952,7 +1117,7 @@ export async function executeToolCall(
         });
         try {
           const tradeId = recordPerpTrade({
-            hypothesisId: null,
+            hypothesisId,
             symbol,
             side: side as 'buy' | 'sell',
             size,
@@ -964,7 +1129,7 @@ export async function executeToolCall(
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
             tradeId,
-            hypothesisId: null,
+            hypothesisId,
             symbol,
             side: side as 'buy' | 'sell',
             size,
@@ -985,9 +1150,16 @@ export async function executeToolCall(
             expectedEdge,
             entryTrigger,
             newsSubtype,
+            newsSources,
+            newsSourceCount,
             noveltyScore,
             marketConfirmationScore,
             thesisExpiresAtMs,
+            thesisCorrect: exitAssessment.thesisCorrect,
+            thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+            exitMode: exitAssessment.exitMode,
+            emotionalExitFlag: exitAssessment.emotionalExitFlag,
+            thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
             realizedFeeUsd: realizedFee.realized_fee_usd,
             realizedFeeToken: realizedFee.realized_fee_token,
             realizedFillCount: realizedFee.realized_fill_count,

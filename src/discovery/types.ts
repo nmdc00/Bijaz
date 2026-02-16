@@ -56,6 +56,12 @@ export interface ExpressionPlan {
   newsTrigger?: {
     enabled: boolean;
     subtype?: string;
+    sources?: Array<{
+      source: string;
+      ref?: string;
+      publishedAtMs?: number;
+      confidence?: number;
+    }>;
     noveltyScore?: number;
     marketConfirmationScore?: number;
     liquidityScore?: number;

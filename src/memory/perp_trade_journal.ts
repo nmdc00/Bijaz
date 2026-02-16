@@ -34,9 +34,15 @@ export type PerpTradeJournalEntry = {
   thesisCorrect?: boolean | null;
   entryTrigger?: 'news' | 'technical' | 'hybrid' | null;
   newsSubtype?: string | null;
+  newsSources?: string[] | null;
+  newsSourceCount?: number | null;
   noveltyScore?: number | null;
   marketConfirmationScore?: number | null;
   thesisExpiresAtMs?: number | null;
+  thesisInvalidationHit?: boolean | null;
+  exitMode?: 'thesis_invalidation' | 'take_profit' | 'time_exit' | 'risk_reduction' | 'manual' | 'unknown' | null;
+  emotionalExitFlag?: boolean | null;
+  thesisEvaluationReason?: string | null;
   maeProxy?: number | null;
   mfeProxy?: number | null;
   outcome: PerpTradeJournalOutcome;

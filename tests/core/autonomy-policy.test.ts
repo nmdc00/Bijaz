@@ -58,6 +58,7 @@ describe('autonomy_policy', () => {
           minMarketConfirmationScore: 0.55,
           minLiquidityScore: 0.4,
           minVolatilityScore: 0.25,
+          minSourceCount: 1,
         },
       },
     } as any;
@@ -69,6 +70,7 @@ describe('autonomy_policy', () => {
         marketConfirmationScore: 0.7,
         liquidityScore: 0.8,
         volatilityScore: 0.9,
+        sources: [{ source: 'newsapi', ref: 'intel:1' }],
         expiresAtMs: Date.now() + 60_000,
       },
     } as any;
@@ -78,6 +80,12 @@ describe('autonomy_policy', () => {
       evaluateNewsEntryGate(config, {
         ...expr,
         newsTrigger: { ...expr.newsTrigger, noveltyScore: 0.2 },
+      }).allowed
+    ).toBe(false);
+    expect(
+      evaluateNewsEntryGate(config, {
+        ...expr,
+        newsTrigger: { ...expr.newsTrigger, sources: [] },
       }).allowed
     ).toBe(false);
     expect(
