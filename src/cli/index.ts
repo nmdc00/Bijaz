@@ -450,7 +450,7 @@ async function runDelphiCli(args: string[]): Promise<void> {
       console.log(formatDelphiHelp('thufir delphi'));
       return;
     }
-    const predictions = await generateDelphiPredictions(marketClient, command.options);
+    const predictions = await generateDelphiPredictions(marketClient, config, command.options);
     console.log(formatDelphiPreview(command.options, predictions));
   } catch (error) {
     console.error(`Invalid delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`);

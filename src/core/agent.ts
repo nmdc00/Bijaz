@@ -648,7 +648,7 @@ Just type naturally to chat about markets, risks, or positioning.
       if (command.kind === 'help') {
         return formatDelphiHelp('/delphi');
       }
-      const predictions = await generateDelphiPredictions(this.marketClient, command.options);
+      const predictions = await generateDelphiPredictions(this.marketClient, this.config, command.options);
       return formatDelphiPreview(command.options, predictions);
     } catch (error) {
       return `Invalid /delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`;
