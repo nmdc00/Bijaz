@@ -15,6 +15,7 @@ export function recordOutcome(params: {
   id: string;
   outcome: 'YES' | 'NO';
   outcomeTimestamp?: string;
+  resolutionMetadata?: Record<string, unknown> | null;
 }): void {
   const db = openDatabase();
   const prediction = db
@@ -48,6 +49,15 @@ export function recordOutcome(params: {
   if (prediction?.outcome) {
     return;
   }
+
+  const normalizedPredictedOutcome =
+    typeof prediction?.predictedOutcome === 'string'
+      ? prediction.predictedOutcome.toUpperCase()
+      : null;
+  const resolutionStatus =
+    normalizedPredictedOutcome === params.outcome
+      ? 'resolved_true'
+      : 'resolved_false';
 
   const predictedProbability = prediction?.predictedProbability ?? null;
   const outcomeValue = params.outcome === 'YES' ? 1 : 0;
@@ -92,6 +102,10 @@ export function recordOutcome(params: {
       UPDATE predictions
       SET outcome = @outcome,
           outcome_timestamp = @outcomeTimestamp,
+          resolution_status = @resolutionStatus,
+          resolution_error = NULL,
+          resolution_metadata = @resolutionMetadata,
+          resolution_timestamp = @resolutionTimestamp,
           brier_contribution = @brier,
           pnl = @pnl
       WHERE id = @id
@@ -100,6 +114,11 @@ export function recordOutcome(params: {
     id: params.id,
     outcome: params.outcome,
     outcomeTimestamp: params.outcomeTimestamp ?? new Date().toISOString(),
+    resolutionStatus,
+    resolutionMetadata: params.resolutionMetadata
+      ? JSON.stringify(params.resolutionMetadata)
+      : null,
+    resolutionTimestamp: params.outcomeTimestamp ?? new Date().toISOString(),
     brier,
     pnl,
   });

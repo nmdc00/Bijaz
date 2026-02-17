@@ -30,8 +30,15 @@ CREATE TABLE IF NOT EXISTS predictions (
     -- Metadata
     domain TEXT,
     created_at TEXT DEFAULT (datetime('now')),
+    horizon_minutes INTEGER CHECK(horizon_minutes IS NULL OR horizon_minutes > 0),
+    expires_at TEXT,
+    context_tags TEXT, -- JSON array
 
     -- Outcome (filled when market resolves)
+    resolution_status TEXT NOT NULL DEFAULT 'open' CHECK(resolution_status IN ('open', 'resolved_true', 'resolved_false', 'unresolved_error')),
+    resolution_metadata TEXT, -- JSON object
+    resolution_error TEXT,
+    resolution_timestamp TEXT,
     outcome TEXT CHECK(outcome IS NULL OR outcome IN ('YES', 'NO')),
     outcome_timestamp TEXT,
     pnl REAL,
