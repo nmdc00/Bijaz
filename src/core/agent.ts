@@ -596,6 +596,7 @@ Just type naturally to chat about markets, risks, or positioning.
 **Autonomous Mode:**
 /top10 - Get today's top 10 discovery expressions
 /status - Show autonomous mode status and P&L
+/state - Show trade book state summary
 /report - Full daily report
 /fullauto [on|off] - Toggle autonomous execution
 /pause - Pause autonomous trading
