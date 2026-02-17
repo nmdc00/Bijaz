@@ -97,6 +97,23 @@ const onIncoming = async (
     threadId?: string;
   }
 ) => {
+  let lastProgressMessage = '';
+  let lastProgressAt = 0;
+  const sendProgress = async (text: string): Promise<void> => {
+    if (!text || text.trim().length === 0) return;
+    if (message.channel !== 'telegram' || !telegram) return;
+    const now = Date.now();
+    if (text === lastProgressMessage) return;
+    if (now - lastProgressAt < 3_000) return;
+    lastProgressMessage = text;
+    lastProgressAt = now;
+    try {
+      await telegram.sendMessage(message.senderId, text);
+      logger.info(`Telegram progress sent to ${message.senderId}: ${text}`);
+    } catch (error) {
+      logger.warn(`Telegram progress failed for ${message.senderId}`, error);
+    }
+  };
   const { agentId, agent: activeAgent } = agentRegistry.resolveAgent(message);
   const sessionKey = buildAgentPeerSessionKey({
     agentId,
@@ -111,7 +128,7 @@ const onIncoming = async (
     baseSessionKey: sessionKey,
     threadId: message.threadId,
   }).sessionKey;
-  const replyRaw = await activeAgent.handleMessage(session, message.text);
+  const replyRaw = await activeAgent.handleMessage(session, message.text, sendProgress);
   const reply = stripIdentityIntro(replyRaw);
   if (!reply || reply.trim().length === 0) {
     logger.warn(`Empty reply for ${message.channel}:${message.senderId}`);
