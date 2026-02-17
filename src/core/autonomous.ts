@@ -43,6 +43,13 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+interface ScanCycleSnapshot {
+  id: string;
+  capturedAtMs: number;
+  capturedAtIso: string;
+  clusterBySymbol: Map<string, (Awaited<ReturnType<typeof runDiscovery>>['clusters'])[number]>;
+}
+
 function formatContextPackTrace(input: {
   marketRegime: string;
   volatilityBucket: string;
@@ -54,6 +61,16 @@ function formatContextPackTrace(input: {
 }): string {
   const missing = input.missing.length > 0 ? input.missing.join(',') : 'none';
   return `context_pack{regime=${input.marketRegime};vol=${input.volatilityBucket};liq=${input.liquidityBucket};exec=${input.executionStatus};event=${input.eventKind};portfolio=${input.portfolioPosture};missing=${missing}}`;
+}
+
+function createScanCycleSnapshot(discovery: Awaited<ReturnType<typeof runDiscovery>>): ScanCycleSnapshot {
+  const capturedAtMs = Date.now();
+  return {
+    id: `scan_${capturedAtMs}`,
+    capturedAtMs,
+    capturedAtIso: new Date(capturedAtMs).toISOString(),
+    clusterBySymbol: new Map(discovery.clusters.map((cluster) => [cluster.symbol, cluster])),
+  };
 }
 
 export interface AutonomousConfig {
@@ -127,6 +144,7 @@ export interface AutonomousEvents {
 
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
+  private llm: LlmClient;
   private marketClient: MarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
@@ -141,7 +159,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private scheduler: SchedulerControlPlane | null = null;
 
   constructor(
-    _llm: LlmClient,
+    llm: LlmClient,
     marketClient: MarketClient,
     executor: ExecutionAdapter,
     limiter: DbSpendingLimitEnforcer,
@@ -149,6 +167,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     logger?: Logger
   ) {
     super();
+    this.llm = llm;
     this.marketClient = marketClient;
     this.executor = executor;
     this.limiter = limiter;
@@ -317,6 +336,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     const result = await runDiscovery(this.thufirConfig);
     telemetry.markDiscoveryDone();
+    const cycleSnapshot = createScanCycleSnapshot(result);
     if (result.expressions.length === 0) {
       telemetry.markFilterDone();
       telemetry.markFinished();
@@ -327,14 +347,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       }));
       return 'No discovery expressions generated.';
     }
-    const clusterBySymbol = new Map(result.clusters.map((cluster) => [cluster.symbol, cluster]));
 
     if (!input.executeTrades || observationActive) {
       const top = result.expressions.slice(0, 5);
       if (observationActive) {
         for (const expr of top) {
           const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
-          const cluster = clusterBySymbol.get(expr.symbol);
+          const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
           const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
           const signalClass = classifySignalClass(expr);
           const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
@@ -421,7 +440,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       policyState.leverageCapOverride ?? Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
 
     const eligible = result.expressions.filter((expr) => {
-      const cluster = clusterBySymbol.get(expr.symbol);
+      const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
       const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
       const signalClass = classifySignalClass(expr);
       const globalGate = evaluateGlobalTradeGate(this.thufirConfig, {
@@ -463,10 +482,19 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return 'No expressions met autonomy thresholds (minEdge/confidence).';
     }
 
-    // If we're forcing execution, pick the "best" expression first (highest expected edge).
-    const ranked = input.ignoreThresholds
-      ? [...eligible].sort((a, b) => (b.expectedEdge ?? 0) - (a.expectedEdge ?? 0))
-      : eligible;
+    // Deterministic mechanical ranking for execution selection.
+    // This keeps selection off the LLM path and stable across equivalent runs.
+    const ranked = [...eligible].sort((a, b) => {
+      const edgeDelta = (b.expectedEdge ?? 0) - (a.expectedEdge ?? 0);
+      if (Math.abs(edgeDelta) > 1e-12) {
+        return edgeDelta;
+      }
+      const confidenceDelta = (b.confidence ?? 0) - (a.confidence ?? 0);
+      if (Math.abs(confidenceDelta) > 1e-12) {
+        return confidenceDelta;
+      }
+      return String(a.symbol ?? '').localeCompare(String(b.symbol ?? ''));
+    });
 
     const maxTrades = Number.isFinite(input.maxTrades)
       ? Math.min(Math.max(Number(input.maxTrades), 1), 10)
@@ -482,7 +510,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const confidenceWeighted = clamp01(confidenceRaw * sessionContext.sessionWeight);
       const sizingModifier = sessionContext.sessionWeight;
       const market = await this.marketClient.getMarket(symbol);
-      const cluster = clusterBySymbol.get(expr.symbol);
+      const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
+      const snapshotAgeMs = Math.max(0, Date.now() - cycleSnapshot.capturedAtMs);
       const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
       const signalClass = classifySignalClass(expr);
       const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
@@ -580,7 +609,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           confidenceWeighted * 100
         ).toFixed(1)}% regime=${regime} signal=${signalClass} kelly=${(kellyFraction * 100).toFixed(
           1
-        )}% session=${sessionContext.session} sessionWeight=${sessionContext.sessionWeight.toFixed(
+        )}% snapshotId=${cycleSnapshot.id} snapshotTs=${cycleSnapshot.capturedAtIso} snapshotAgeMs=${snapshotAgeMs} session=${sessionContext.session} sessionWeight=${sessionContext.sessionWeight.toFixed(
           2
         )} confidenceRaw=${confidenceRaw.toFixed(3)} confidenceWeighted=${confidenceWeighted.toFixed(
           3
@@ -602,6 +631,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       } else {
         this.limiter.release(probeUsd);
       }
+      this.scheduleAsyncExecutionEnrichment({
+        symbol,
+        side: expr.side,
+        executed: tradeResult.executed,
+        message: tradeResult.message,
+        reasoning: decision.reasoning ?? null,
+      });
       try {
         const tradeId = recordPerpTrade({
           hypothesisId: expr.hypothesisId,
@@ -860,6 +896,89 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       this.logger.error('Failed to generate daily report', error);
       throw error;
     }
+  }
+
+  private isAsyncEnrichmentEnabled(): boolean {
+    return Boolean((this.thufirConfig.autonomy as any)?.asyncEnrichment?.enabled ?? false);
+  }
+
+  private getAsyncEnrichmentTimeoutMs(): number {
+    const raw = Number((this.thufirConfig.autonomy as any)?.asyncEnrichment?.timeoutMs ?? 4000);
+    return Number.isFinite(raw) ? Math.max(250, Math.min(raw, 20_000)) : 4000;
+  }
+
+  private getAsyncEnrichmentMaxChars(): number {
+    const raw = Number((this.thufirConfig.autonomy as any)?.asyncEnrichment?.maxChars ?? 280);
+    return Number.isFinite(raw) ? Math.max(80, Math.min(raw, 2000)) : 280;
+  }
+
+  private scheduleAsyncExecutionEnrichment(input: {
+    symbol: string;
+    side: 'buy' | 'sell';
+    executed: boolean;
+    message: string;
+    reasoning: string | null;
+  }): void {
+    if (!this.isAsyncEnrichmentEnabled()) {
+      return;
+    }
+    const timeoutMs = this.getAsyncEnrichmentTimeoutMs();
+    const maxChars = this.getAsyncEnrichmentMaxChars();
+    const startedAt = Date.now();
+
+    void (async () => {
+      try {
+        const response = await Promise.race([
+          this.llm.complete(
+            [
+              {
+                role: 'system',
+                content:
+                  'You are a concise trading execution annotator. Return one short line with thesis, invalidation posture, and next check.',
+              },
+              {
+                role: 'user',
+                content: [
+                  `symbol=${input.symbol}`,
+                  `side=${input.side}`,
+                  `executed=${input.executed}`,
+                  `message=${input.message}`,
+                  `reasoning=${input.reasoning ?? 'n/a'}`,
+                ].join('\n'),
+              },
+            ],
+            {
+              maxTokens: 120,
+              executionContext: {
+                mode: 'LIGHT_REASONING',
+                critical: false,
+                reason: 'autonomous_async_execution_enrichment',
+                source: 'autonomous',
+              },
+            }
+          ),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error(`async enrichment timed out after ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]);
+        const textRaw =
+          typeof (response as any)?.content === 'string'
+            ? (response as any).content
+            : JSON.stringify((response as any)?.content ?? '');
+        const text = textRaw.trim().slice(0, maxChars);
+        this.logger.info('Async execution enrichment completed', {
+          symbol: input.symbol,
+          side: input.side,
+          executed: input.executed,
+          latencyMs: Date.now() - startedAt,
+          enrichment: text,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Async execution enrichment failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    })();
   }
 
   private calculateUnrealizedPnl(): number {

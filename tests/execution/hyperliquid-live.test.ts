@@ -135,4 +135,27 @@ describe('HyperliquidLiveExecutor', () => {
       grouping: 'na',
     });
   });
+
+  it('rejects stale IOC quotes before order submission', async () => {
+    const config: ThufirConfig = {
+      hyperliquid: { defaultSlippageBps: 10, maxQuoteAgeMs: 100 },
+    } as ThufirConfig;
+    const executor = new HyperliquidLiveExecutor({ config });
+    const quoteSpy = vi
+      .spyOn(executor as any, 'getIocQuote')
+      .mockResolvedValue({ priceStr: '100', quoteTsMs: 1_000, source: 'l2' });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_500);
+
+    const result = await executor.execute(market, {
+      action: 'buy',
+      size: 1,
+      orderType: 'market',
+    });
+
+    expect(result.executed).toBe(false);
+    expect(result.message).toContain('Stale IOC quote rejected');
+    expect(orderMock).not.toHaveBeenCalled();
+    quoteSpy.mockRestore();
+    nowSpy.mockRestore();
+  });
 });

@@ -244,6 +244,7 @@ const ConfigSchema = z.object({
       privateKey: z.string().optional(),
       maxLeverage: z.number().default(5),
       defaultSlippageBps: z.number().default(10),
+      maxQuoteAgeMs: z.number().default(2000),
       symbols: z.array(z.string()).default(['BTC', 'ETH']),
       bridge: z
         .object({
@@ -582,6 +583,7 @@ const ConfigSchema = z.object({
                   watchlistOnly: z.boolean().optional(),
                   eventDriven: z.boolean().optional(),
                   eventDrivenMinItems: z.number().optional(),
+                  eventDrivenCooldownSeconds: z.number().optional(),
                   fullAuto: z.boolean().optional(),
                   minEdge: z.number().optional(),
                   requireHighConfidence: z.boolean().optional(),
@@ -604,6 +606,11 @@ const ConfigSchema = z.object({
                       blockBelowScore: z.number().optional(),
                       downweightBelowScore: z.number().optional(),
                       downweightMultiplier: z.number().optional(),
+                  asyncEnrichment: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      timeoutMs: z.number().optional(),
+                      maxChars: z.number().optional(),
                     })
                     .optional(),
                   signalPerformance: z
@@ -671,6 +678,7 @@ const ConfigSchema = z.object({
       watchlistOnly: z.boolean().default(true),
       eventDriven: z.boolean().default(false),
       eventDrivenMinItems: z.number().default(1),
+      eventDrivenCooldownSeconds: z.number().default(120),
       strategy: z.enum(['opportunity', 'discovery']).default('discovery'),
       probeRiskFraction: z.number().default(0.005),
       // Full autonomous mode options
@@ -697,6 +705,11 @@ const ConfigSchema = z.object({
           blockBelowScore: z.number().default(0.45),
           downweightBelowScore: z.number().default(0.6),
           downweightMultiplier: z.number().default(0.6),
+      asyncEnrichment: z
+        .object({
+          enabled: z.boolean().default(false),
+          timeoutMs: z.number().default(4000),
+          maxChars: z.number().default(280),
         })
         .default({}),
       discoverySelection: z
