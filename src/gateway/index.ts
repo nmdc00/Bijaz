@@ -26,6 +26,7 @@ import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
+import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
 const config = loadConfig();
 try {
@@ -56,6 +57,32 @@ if (!defaultAgent) {
 const telegram = config.channels.telegram.enabled ? new TelegramAdapter(config) : null;
 const whatsapp = config.channels.whatsapp.enabled ? new WhatsAppAdapter(config) : null;
 const escalationPolicy = new EscalationPolicyEngine(config.notifications?.escalation);
+const eventScanTrigger = new EventScanTriggerCoordinator({
+  enabled: config.autonomy?.eventDriven ?? false,
+  cooldownMs: Math.max(0, Number(config.autonomy?.eventDrivenCooldownSeconds ?? 120)) * 1000,
+});
+
+async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount: number): Promise<void> {
+  const minItems = Math.max(1, Number(config.autonomy?.eventDrivenMinItems ?? 1));
+  const decision = eventScanTrigger.tryAcquire({
+    eventKey: source,
+    itemCount,
+    minItems,
+  });
+  if (!decision.allowed) {
+    logger.info(
+      `Event-driven scan skipped (${source}): ${decision.reason}${
+        decision.waitMs != null ? ` waitMs=${decision.waitMs}` : ''
+      }`
+    );
+    return;
+  }
+  const startedAt = Date.now();
+  const scanResult = await defaultAgent.getAutonomous().runScan();
+  logger.info(
+    `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
+  );
+}
 
 for (const instance of agentRegistry.agents.values()) {
   instance.start();
@@ -192,13 +219,7 @@ if (intelFetchConfig?.enabled) {
         const result = await runIntelPipelineDetailed(config);
         logger.info(`Intel fetch stored ${result.storedCount} item(s).`);
 
-        if (config.autonomy?.eventDriven) {
-          const minItems = config.autonomy?.eventDrivenMinItems ?? 1;
-          if (result.storedCount >= minItems) {
-            const scanResult = await defaultAgent.getAutonomous().runScan();
-            logger.info(`Event-driven scan: ${scanResult}`);
-          }
-        }
+        await maybeRunEventDrivenScan('intel', result.storedCount);
 
         const alertsConfig = config.notifications?.intelAlerts;
         if (alertsConfig?.enabled && result.storedItems.length > 0) {
@@ -283,6 +304,7 @@ if (proactiveConfig?.enabled && proactiveConfig.mode !== 'heartbeat') {
         fetchMaxChars: proactiveConfig.fetchMaxChars,
       });
       logger.info(`Proactive search stored ${result.storedCount} item(s).`);
+      await maybeRunEventDrivenScan('proactive', result.storedCount);
 
       const alertsConfig = config.notifications?.intelAlerts;
       if (alertsConfig?.enabled && result.storedItems.length > 0) {
@@ -381,6 +403,7 @@ if (heartbeatConfig?.enabled) {
         ]
           .filter(Boolean)
           .join('\n');
+        await maybeRunEventDrivenScan('proactive', result.storedCount);
       } catch (error) {
         logger.error('Heartbeat proactive search failed', error);
       }
