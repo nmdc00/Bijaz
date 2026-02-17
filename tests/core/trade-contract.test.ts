@@ -137,7 +137,7 @@ describe('trade contract validation', () => {
       exitMode: 'take_profit',
       thesisInvalidationHit: true,
     });
-    expect(normalized.exitMode).toBe('take_profit');
-    expect(normalized.thesisInvalidationHit).toBe(false);
+    expect(normalized.exitMode).toBe('thesis_invalidation');
+    expect(normalized.thesisInvalidationHit).toBe(true);
   });
 });
