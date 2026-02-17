@@ -24,6 +24,7 @@ import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
+import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
@@ -1748,36 +1749,14 @@ export async function executeToolCall(
           return { success: false, error: 'Missing query' };
         }
 
-        const serpResult = await searchWebViaSerpApi(query, limit);
-        if (serpResult.success) {
-          // Auto-index to QMD if enabled (fire-and-forget)
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, serpResult.data, ctx).catch(() => {});
-          }
-          return serpResult;
+        const searchResult = await resilientWebSearch(query, limit, ctx.config);
+        if (!searchResult.success) {
+          return searchResult;
         }
-
-        const braveResult = await searchWebViaBrave(query, limit);
-        if (braveResult.success) {
-          // Auto-index to QMD if enabled (fire-and-forget)
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, braveResult.data, ctx).catch(() => {});
-          }
-          return braveResult;
+        if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
+          autoIndexWebSearchResults(query, searchResult.data, ctx).catch(() => {});
         }
-
-        const ddgResult = await searchWebViaDuckDuckGo(query, limit);
-        if (ddgResult.success) {
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, ddgResult.data, ctx).catch(() => {});
-          }
-          return ddgResult;
-        }
-
-        return {
-          success: false,
-          error: `Web search failed: SerpAPI: ${serpResult.error}. Brave: ${braveResult.error}. DuckDuckGo: ${ddgResult.error}`,
-        };
+        return searchResult;
       }
 
       case 'get_portfolio': {
@@ -2948,199 +2927,6 @@ async function searchTwitterViaSerpApi(
     }));
 
     return { success: true, data: tweets };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-async function searchWebViaSerpApi(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  const apiKey = process.env.SERPAPI_KEY;
-  if (!apiKey) {
-    return { success: false, error: 'SerpAPI key not configured' };
-  }
-
-  try {
-    const url = new URL('https://serpapi.com/search.json');
-    url.searchParams.set('engine', 'google');
-    url.searchParams.set('q', query);
-    url.searchParams.set('num', String(limit));
-    url.searchParams.set('api_key', apiKey);
-
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-      return { success: false, error: `SerpAPI: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      organic_results?: Array<{
-        title?: string;
-        link?: string;
-        snippet?: string;
-        date?: string;
-        source?: string;
-      }>;
-    };
-
-    const results = (data.organic_results ?? []).slice(0, limit).map((item) => ({
-      title: item.title ?? '',
-      url: item.link ?? '',
-      snippet: item.snippet ?? '',
-      date: item.date ?? null,
-      source: item.source ?? null,
-    }));
-
-    return { success: true, data: { query, provider: 'serpapi', results } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-async function searchWebViaBrave(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  const apiKey = process.env.BRAVE_API_KEY;
-  if (!apiKey) {
-    return { success: false, error: 'Brave API key not configured' };
-  }
-
-  try {
-    const url = new URL('https://api.search.brave.com/res/v1/web/search');
-    url.searchParams.set('q', query);
-    url.searchParams.set('count', String(limit));
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-        'X-Subscription-Token': apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      return { success: false, error: `Brave: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      web?: {
-        results?: Array<{
-          title?: string;
-          url?: string;
-          description?: string;
-          age?: string;
-        }>;
-      };
-    };
-
-    const results = (data.web?.results ?? []).slice(0, limit).map((item) => ({
-      title: item.title ?? '',
-      url: item.url ?? '',
-      snippet: item.description ?? '',
-      date: item.age ?? null,
-    }));
-
-    return { success: true, data: { query, provider: 'brave', results } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-type DuckDuckGoTopic = {
-  Text?: string;
-  FirstURL?: string;
-  Result?: string;
-  Name?: string;
-  Topics?: DuckDuckGoTopic[];
-};
-
-function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[]): DuckDuckGoTopic[] {
-  const result: DuckDuckGoTopic[] = [];
-  for (const topic of topics) {
-    if (Array.isArray(topic.Topics) && topic.Topics.length > 0) {
-      result.push(...flattenDuckDuckGoTopics(topic.Topics));
-      continue;
-    }
-    result.push(topic);
-  }
-  return result;
-}
-
-async function searchWebViaDuckDuckGo(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  try {
-    const url = new URL('https://api.duckduckgo.com/');
-    url.searchParams.set('q', query);
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('no_redirect', '1');
-    url.searchParams.set('no_html', '1');
-    url.searchParams.set('skip_disambig', '1');
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-      },
-    });
-    if (!response.ok) {
-      return { success: false, error: `DuckDuckGo: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      AbstractText?: string;
-      AbstractURL?: string;
-      Heading?: string;
-      RelatedTopics?: DuckDuckGoTopic[];
-    };
-
-    const results: Array<{
-      title: string;
-      url: string;
-      snippet: string;
-      date: null;
-      source: string;
-    }> = [];
-
-    if (data.AbstractURL && data.AbstractText) {
-      results.push({
-        title: data.Heading?.trim() || query,
-        url: data.AbstractURL,
-        snippet: data.AbstractText,
-        date: null,
-        source: 'duckduckgo',
-      });
-    }
-
-    const flat = flattenDuckDuckGoTopics(data.RelatedTopics ?? []);
-    for (const topic of flat) {
-      if (results.length >= limit) {
-        break;
-      }
-      const text = (topic.Text ?? '').trim();
-      const link = (topic.FirstURL ?? '').trim();
-      if (!text || !link) {
-        continue;
-      }
-      const title = text.split(' - ')[0]?.trim() || text.slice(0, 80);
-      results.push({
-        title,
-        url: link,
-        snippet: text,
-        date: null,
-        source: 'duckduckgo',
-      });
-    }
-
-    const trimmed = results.slice(0, limit);
-    if (trimmed.length === 0) {
-      return { success: false, error: 'DuckDuckGo returned no results' };
-    }
-    return { success: true, data: { query, provider: 'duckduckgo', results: trimmed } };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: message };
