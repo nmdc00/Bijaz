@@ -26,13 +26,6 @@ import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
-import {
-  createAlert,
-  markAlertSent,
-  recordAlertDelivery,
-  suppressAlert,
-} from '../memory/alerts.js';
-import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
 const config = loadConfig();
@@ -85,7 +78,7 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
     return;
   }
   const startedAt = Date.now();
-  const scanResult = await defaultAgent!.getAutonomous().runScan();
+  const scanResult = await defaultAgent.getAutonomous().runScan();
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );
@@ -115,6 +108,16 @@ function stripIdentityIntro(text: string): string {
     .replace(/^\s*(I['’]m|I am)\s+Thufir\s+Hawat\.\s*/i, '');
 }
 
+let lastInteractiveMessageAtMs = 0;
+
+function isWithinActiveChatWindow(seconds: number | undefined): boolean {
+  const windowSeconds = Math.max(0, Number(seconds ?? 0));
+  if (!Number.isFinite(windowSeconds) || windowSeconds <= 0) {
+    return false;
+  }
+  return Date.now() - lastInteractiveMessageAtMs < windowSeconds * 1000;
+}
+
 const onIncoming = async (
   message: {
     channel: 'telegram' | 'whatsapp' | 'cli';
@@ -124,6 +127,9 @@ const onIncoming = async (
     threadId?: string;
   }
 ) => {
+  if (message.senderId !== '__heartbeat__') {
+    lastInteractiveMessageAtMs = Date.now();
+  }
   let lastProgressMessage = '';
   let lastProgressAt = 0;
   const sendProgress = async (text: string): Promise<void> => {
@@ -314,11 +320,14 @@ if (proactiveConfig?.enabled && proactiveConfig.mode !== 'heartbeat') {
     }
 
     try {
+      const suppressLlm =
+        proactiveConfig.suppressLlmDuringActiveChatSeconds != null &&
+        isWithinActiveChatWindow(proactiveConfig.suppressLlmDuringActiveChatSeconds);
       const result = await runProactiveSearch(config, {
         maxQueries: proactiveConfig.maxQueries,
         iterations: proactiveConfig.iterations,
         watchlistLimit: proactiveConfig.watchlistLimit,
-        useLlm: proactiveConfig.useLlm,
+        useLlm: suppressLlm ? false : proactiveConfig.useLlm,
         recentIntelLimit: proactiveConfig.recentIntelLimit,
         extraQueries: proactiveConfig.extraQueries,
         includeLearnedQueries: proactiveConfig.includeLearnedQueries,
@@ -328,6 +337,9 @@ if (proactiveConfig?.enabled && proactiveConfig.mode !== 'heartbeat') {
         fetchMaxChars: proactiveConfig.fetchMaxChars,
       });
       logger.info(`Proactive search stored ${result.storedCount} item(s).`);
+      if (suppressLlm) {
+        logger.info('Proactive LLM refinement suppressed due to active chat window');
+      }
       await maybeRunEventDrivenScan('proactive', result.storedCount);
 
       const alertsConfig = config.notifications?.intelAlerts;
@@ -396,14 +408,20 @@ if (heartbeatConfig?.enabled) {
   };
 
   const runHeartbeat = async () => {
+    const suppressHeartbeatLlm =
+      heartbeatConfig.suppressLlmDuringActiveChatSeconds != null &&
+      isWithinActiveChatWindow(heartbeatConfig.suppressLlmDuringActiveChatSeconds);
     let proactiveSummary = '';
     if (proactiveConfig?.enabled && proactiveConfig.mode === 'heartbeat') {
       try {
+        const suppressProactiveLlm =
+          proactiveConfig.suppressLlmDuringActiveChatSeconds != null &&
+          isWithinActiveChatWindow(proactiveConfig.suppressLlmDuringActiveChatSeconds);
         const result = await runProactiveSearch(config, {
           maxQueries: proactiveConfig.maxQueries,
           iterations: proactiveConfig.iterations,
           watchlistLimit: proactiveConfig.watchlistLimit,
-          useLlm: proactiveConfig.useLlm,
+          useLlm: suppressProactiveLlm ? false : proactiveConfig.useLlm,
           recentIntelLimit: proactiveConfig.recentIntelLimit,
           extraQueries: proactiveConfig.extraQueries,
           includeLearnedQueries: proactiveConfig.includeLearnedQueries,
@@ -427,6 +445,9 @@ if (heartbeatConfig?.enabled) {
         ]
           .filter(Boolean)
           .join('\n');
+        if (suppressProactiveLlm) {
+          logger.info('Heartbeat proactive LLM refinement suppressed due to active chat window');
+        }
         await maybeRunEventDrivenScan('proactive', result.storedCount);
       } catch (error) {
         logger.error('Heartbeat proactive search failed', error);
@@ -440,6 +461,10 @@ if (heartbeatConfig?.enabled) {
     const prompt = proactiveSummary
       ? `${heartbeatPrompt}\n\n${proactiveSummary}`
       : heartbeatPrompt;
+    if (suppressHeartbeatLlm) {
+      logger.info('Heartbeat LLM message generation suppressed due to active chat window');
+      return;
+    }
     const response = await defaultAgent.handleMessage(heartbeatUserId, prompt);
     if (!response || response.trim().length === 0) {
       return;
@@ -642,7 +667,7 @@ if (mentatConfig?.enabled) {
             `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
             `and max delta ${(maxDelta * 100).toFixed(1)}%`,
           config: escalationConfig?.llmEnrichment,
-          onFallback: (error: unknown) => {
+          onFallback: (error) => {
             logger.warn('Alert LLM enrichment failed; sending mechanical fallback', {
               source: `mentat:${scheduleId}`,
               error: error instanceof Error ? error.message : String(error),
