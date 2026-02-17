@@ -1,72 +1,43 @@
 # Thufir Development Progress
 
-**Last Updated:** 2026-02-16
+**Last Updated:** 2026-02-17
 
 ## Current Status
-`release/v1.2` is now focused on live-safe execution and collateral operability: position heartbeat + trade-management risk controls are merged, autonomous trade mode bugs are fixed, and Hyperliquid collateral movement is now exposed through agent tools with dex-abstraction-aware USDC handling.
+`develop` now includes closed v1.6 scope plus v1.6.1 stabilization.
+Baseline commit: `d71dee0` (`origin/develop`).
+
+Validation on current baseline:
+1. `pnpm run build` passed
+2. `pnpm vitest run` passed (`107` files / `335` tests)
 
 ## Completed
-- Hyperliquid market client (list/get symbols, mark price, metadata)
-- Live executor for Hyperliquid perps
-- Perp risk checks (max notional, leverage caps, liquidation distance, correlation caps)
-- Discovery engine (signals -> hypotheses -> expressions)
-- Autonomous execution thresholds now enforced (`minEdge`, `requireHighConfidence`, `pauseOnLossStreak`)
-- Technical on-chain snapshot now computes live score from Hyperliquid funding/orderflow/book data
-- Perp tools (`perp_market_list`, `perp_market_get`, `perp_place_order`, `perp_open_orders`, `perp_cancel_order`, `perp_positions`)
-- Portfolio now surfaces perp positions
-- User-facing prompts updated away from legacy market flows
-- CLI and docs updated to remove legacy market commands
-- Full test suite passing in this branch (`32` files / `99` tests)
-- TypeScript build passing in this branch
-- Coverage configuration hardened (vendor-remap exclusions + minimum thresholds)
-- Live verification tools added:
-  - `hyperliquid_verify_live` (read-only smoke check + authenticated readiness checks)
-  - `hyperliquid_order_roundtrip` (authenticated place+cancel roundtrip)
-- Funding remediation tools added for Hyperliquid collateral blockers:
-  - `evm_usdc_balances` (Polygon/Arbitrum probe)
-  - `cctp_bridge_usdc` (Polygon <-> Arbitrum USDC via CCTP v1)
-  - `hyperliquid_deposit_usdc` (transfer Arbitrum USDC to HL bridge deposit address)
-- Lint gate fixed (`pnpm lint` now runs against TypeScript sources with project ESLint config)
-- Reflexivity detector (crowding + fragility + catalyst):
-  - Catalyst registry support (`config/catalysts.yaml`)
-  - Narrative snapshot extraction with decision-artifact caching (optional LLM JSON mode)
-  - Reflexivity fragility scoring wired into discovery as `reflexivity_fragility` signal
-  - Setup artifacts persisted (`reflexivity_setup_v1`)
-- v1.2 risk-control foundations merged:
-  - Position heartbeat service with trigger evaluation + emergency close coverage
-  - Trade-management monitor with exchange-native bracket lifecycle support
-- Autonomous execution reliability fixes:
-  - Fixed three blocking bugs in trade-mode detection and dynamic tool inputs
-  - Fixed GPT tool-name mangling via substring extraction
-  - Allow reduce-only orders to bypass spending-limiter checks
-- Conversation/orchestration behavior tightened:
-  - Trade-intent flow now includes `perp_market_list` snapshot
-  - Falls through to orchestrator when autonomous scan returns no candidates
-- Hyperliquid collateral and transfer workflow upgraded:
-  - Added `hyperliquid_usd_class_transfer` tool in conversation layer + agent adapter
-  - Added `usdClassTransfer` execution path and clarified spot/perp/on-chain USDC semantics in portfolio output
-  - Detects dex abstraction and treats unified spot USDC as collateral
-  - Falls back to spot USDC when perp withdrawable balance is zero
-- Added/updated test coverage for:
-  - trade-intent tool snapshots
-  - hyperliquid USD class transfer
-  - dex abstraction collateral handling
+v1.6 and v1.6.1 closure highlights:
+
+1. Mechanical expression selection (LLM removed from execution hot-path selection).
+2. Market metadata/mids caching + scan snapshot reuse.
+3. Event-driven scan triggers.
+4. Deterministic execution input validation and retry classification hardening.
+5. IOC quote freshness enforcement.
+6. Async non-blocking LLM enrichment.
+7. Performance telemetry + performance acceptance evaluator.
+8. Non-critical LLM fallback suppression by reason + cooldown windows.
+9. Active-chat LLM suppression for heartbeat/proactive scheduler paths.
+10. v1.6.1 stabilization fixes:
+- duplicate reduce-only exit assessment declaration removed,
+- async enrichment context wiring fixed,
+- gateway nullability hardening,
+- orchestrator exit-mode alias normalization,
+- reduce-only/FSM contract-validation order fixes.
 
 ## In Progress
-- Real-account verification rollout:
-  - deploy updated code to the running server process
-  - restart gateway to pick up `.env` changes
-  - ensure Arbitrum ETH is available for gas (required for CCTP receive + deposit transfer)
-- v1.2 release hardening:
-  - run full live smoke checks for transfer + collateral flows under both unified and split-account setups
-  - verify heartbeat/trade-management behavior against tiny live positions
-- Optional expansion of on-chain providers (e.g. Coinglass/Whale APIs)
-- Reflexivity follow-ups:
-  - wire thesis invalidation evaluation into the autonomy loop (exit-on-thesis-break)
-  - improve carry-cost modeling and catalyst binding requirements before auto-exec
+1. `feat/v1.6.1-scheduled-report-jobs` (pivoted to generic tasks):
+- explicit scheduled task commands (`/schedule`, `/scheduled_tasks`, `/unschedule_task`),
+- persisted scheduler-backed task jobs with startup rehydration,
+- scheduled entries execute arbitrary instructions through normal agent flow,
+- natural-language time-intent guard to prevent accidental trade execution.
+2. Deployment/runtime soak on server for latest `develop` baseline.
 
 ## Next Steps
-1. Deploy `release/v1.2` build and restart gateway service with latest env/config
-2. Run `hyperliquid_verify_live`, `hyperliquid_order_roundtrip`, and `hyperliquid_usd_class_transfer` with minimal safe sizing
-3. Validate portfolio semantics across spot/perp/on-chain balances for both dex abstraction modes
-4. If collateral missing: run `evm_usdc_balances` -> `cctp_bridge_usdc` -> `hyperliquid_deposit_usdc` (requires Arbitrum ETH gas)
+1. Deploy/restart from `develop` (`6c0a949`) and validate live gateway flows.
+2. Confirm proactive + heartbeat behavior under active-chat suppression in production logs.
+3. Continue remaining v1.5 operational/autonomy polish items.
