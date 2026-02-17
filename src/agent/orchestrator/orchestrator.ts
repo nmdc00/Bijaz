@@ -499,8 +499,12 @@ function buildTradeNextActionSummary(state: AgentState): string {
   return 'I will continue autonomous monitoring and execute the next valid trade action when constraints allow.';
 }
 
-function enforceTradeResponseContract(response: string, state: AgentState): string {
-  if (state.mode !== 'trade') {
+function enforceTradeResponseContract(
+  response: string,
+  state: AgentState,
+  enabled: boolean
+): string {
+  if (!enabled || state.mode !== 'trade') {
     return response;
   }
 
@@ -932,17 +936,27 @@ export async function runOrchestrator(
       if (!criticResult.approved && !criticResult.revisedResponse) {
         finalResponse = buildCriticFailureFallbackResponse(state, response);
       }
-      finalResponse = enforceTradeResponseContract(finalResponse, state);
+      finalResponse = enforceTradeResponseContract(
+        finalResponse,
+        state,
+        options?.enforceTradeResponseContract === true
+      );
       state = completeState(state, finalResponse, criticResult);
     } catch (error) {
       state = addWarning(
         state,
         `Critic failed: ${error instanceof Error ? error.message : 'Unknown'}`
       );
-      state = completeState(state, enforceTradeResponseContract(response, state));
+      state = completeState(
+        state,
+        enforceTradeResponseContract(response, state, options?.enforceTradeResponseContract === true)
+      );
     }
   } else {
-    state = completeState(state, enforceTradeResponseContract(response, state));
+    state = completeState(
+      state,
+      enforceTradeResponseContract(response, state, options?.enforceTradeResponseContract === true)
+    );
   }
 
   ctx.onUpdate?.(state);

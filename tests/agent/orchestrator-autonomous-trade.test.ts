@@ -340,10 +340,10 @@ describe('runOrchestrator autonomous trade contract', () => {
       { forceMode: 'trade', maxIterations: 4 }
     );
 
-    expect(result.response).toContain('Action: I executed 1 perp order(s).');
+    expect(result.response).toContain('Action: Executed 1 perp order(s).');
   });
 
-  it('enforces agency contract response shape in trade mode', async () => {
+  it('does not enforce agency contract response shape unless explicitly enabled', async () => {
     const llm = {
       complete: async (messages: Array<{ role: string; content: string }>) => {
         const system = messages[0]?.content ?? '';
@@ -419,6 +419,96 @@ describe('runOrchestrator autonomous trade contract', () => {
         toolContext: {} as any,
       },
       { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(result.response).toContain('If you want');
+    expect(result.response).not.toContain('Action:');
+    expect(result.response).not.toContain('Book State:');
+    expect(result.response).not.toContain('Risk:');
+    expect(result.response).not.toContain('Next Action:');
+  });
+
+  it('enforces agency contract response shape when explicitly enabled', async () => {
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Fetch portfolio',
+                  requiresTool: true,
+                  toolName: 'get_portfolio',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'check state',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: "You're all-in right now. If you want, we can reduce.",
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['get_portfolio'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) =>
+        mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { available_balance: 12.6 },
+        }),
+    };
+
+    const result = await runOrchestrator(
+      'Manage BTC perp',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      {
+        forceMode: 'trade',
+        skipCritic: true,
+        maxIterations: 4,
+        enforceTradeResponseContract: true,
+      }
     );
 
     expect(result.response).toContain('Action:');

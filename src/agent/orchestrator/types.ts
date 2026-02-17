@@ -193,6 +193,9 @@ export interface OrchestratorOptions {
 
   /** Prior plan to resume (if any) */
   initialPlan?: AgentPlan;
+
+  /** Force structured trade state response contract (Action/Book State/Risk/Next Action). */
+  enforceTradeResponseContract?: boolean;
 }
 
 /**

@@ -317,6 +317,7 @@ export class ConversationHandler {
         const liveAccountSnapshot = await this.buildLiveAccountSnapshot(userId);
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
+          const isStateCommand = message.trim() === '/state';
           const memorySystem = {
             getRelevantContext: async (query: string) => {
               const base = await this.getMemoryContextForOrchestrator(userId, query);
@@ -362,6 +363,8 @@ export class ConversationHandler {
               return false;
             },
           }, {
+            forceMode: isStateCommand ? 'trade' : undefined,
+            enforceTradeResponseContract: isStateCommand,
             initialPlan: priorPlan ?? undefined,
             resumePlan,
           });
