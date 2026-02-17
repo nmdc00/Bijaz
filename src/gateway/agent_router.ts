@@ -48,6 +48,10 @@ function mergeConfig(
       ...base.agent.llmBudget,
       ...(agentOverride?.llmBudget ?? {}),
     },
+    proactiveRefresh: {
+      ...base.agent.proactiveRefresh,
+      ...(agentOverride?.proactiveRefresh ?? {}),
+    },
   };
   return {
     ...base,
