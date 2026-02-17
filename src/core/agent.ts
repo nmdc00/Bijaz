@@ -26,6 +26,7 @@ import { ConversationHandler } from './conversation.js';
 import { AutonomousManager } from './autonomous.js';
 import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
+import { executeToolCall } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
 import { TradeManagementService } from '../trade-management/service.js';
 import { formatDelphiHelp, parseDelphiSlashCommand } from '../delphi/command.js';
@@ -144,6 +145,80 @@ export class ThufirAgent {
   /** Expose the shared tool-execution context for background services. */
   getToolContext(): ToolExecutorContext {
     return this.toolContext;
+  }
+
+  private async getLiveStatusSnapshot() {
+    const base = this.autonomous.getOperatorSnapshot();
+    try {
+      const [portfolioRes, positionsRes] = await Promise.all([
+        executeToolCall('get_portfolio', {}, this.toolContext),
+        executeToolCall('get_positions', {}, this.toolContext),
+      ]);
+
+      const portfolioData = portfolioRes.success
+        ? (portfolioRes.data as Record<string, any>)
+        : null;
+      const positionsData = positionsRes.success
+        ? (positionsRes.data as Record<string, any>)
+        : null;
+
+      const perpSummary =
+        (portfolioData?.perp_summary as Record<string, unknown> | null) ??
+        (portfolioData?.summary as Record<string, unknown> | null) ??
+        null;
+      const equityCandidates = [
+        Number(perpSummary?.cross_account_value ?? NaN),
+        Number(perpSummary?.account_value ?? NaN),
+        Number(portfolioData?.hyperliquid_balances?.perp?.account_value ?? NaN),
+      ];
+      const liveEquity = equityCandidates.find((v) => Number.isFinite(v)) ?? null;
+
+      const remainingDaily = Number(
+        portfolioData?.summary?.remaining_daily_limit ?? NaN
+      );
+
+      const portfolioPerpPositions = Array.isArray(portfolioData?.perp_positions)
+        ? (portfolioData?.perp_positions as Array<Record<string, unknown>>)
+        : [];
+      const directPositions = Array.isArray(positionsData?.positions)
+        ? (positionsData?.positions as Array<Record<string, unknown>>)
+        : [];
+      const livePositionsSource =
+        portfolioPerpPositions.length > 0 ? portfolioPerpPositions : directPositions;
+      const livePositions = livePositionsSource.map((position) => {
+        const symbol = String(
+          position.symbol ?? position.coin ?? position.marketId ?? 'UNKNOWN'
+        );
+        const side = String(position.side ?? '').toLowerCase();
+        const exposure = Number(
+          position.position_value ?? position.notional ?? position.notionalUsd ?? 0
+        );
+        const unrealized = Number(
+          position.unrealized_pnl ?? position.unrealizedPnl ?? position.pnl ?? NaN
+        );
+        return {
+          marketId: symbol,
+          outcome: side === 'short' ? ('NO' as const) : ('YES' as const),
+          exposureUsd: Number.isFinite(exposure) ? exposure : 0,
+          unrealizedPnlUsd: Number.isFinite(unrealized) ? unrealized : null,
+        };
+      });
+
+      return {
+        ...base,
+        asOf: new Date().toISOString(),
+        equityUsd: liveEquity ?? base.equityUsd,
+        openPositions: livePositions.length > 0 ? livePositions : base.openPositions,
+        runtime: {
+          ...base.runtime,
+          remainingDaily: Number.isFinite(remainingDaily)
+            ? remainingDaily
+            : base.runtime.remainingDaily,
+        },
+      };
+    } catch {
+      return base;
+    }
   }
 
   async handleMessage(
@@ -546,7 +621,7 @@ export class ThufirAgent {
 
     // Command: /status - Get autonomous mode status
     if (trimmed === '/status') {
-      const snapshot = this.autonomous.getOperatorSnapshot();
+      const snapshot = await this.getLiveStatusSnapshot();
       return formatOperatorStatusSnapshot(snapshot);
     }
 
