@@ -16,8 +16,11 @@
     "gateway:watch": "tsx watch src/gateway/index.ts",
     "test": "vitest",
     "test:v1.4:acceptance": "vitest run tests/integration/v1_4_acceptance.test.ts",
+    "test:v1.5:acceptance": "vitest run tests/integration/v1_5_acceptance.test.ts",
+    "test:v1.5:regression": "vitest run tests/integration/v1_4_acceptance.test.ts tests/integration/v1_5_acceptance.test.ts",
     "test:coverage": "vitest run --coverage",
     "smoke:v1.4": "./scripts/v1.4-smoke.sh",
+    "smoke:v1.5": "./scripts/v1.5-smoke.sh",
     "install:vendor-deps": "PNPM_STORE_DIR=/home/nmdc/.local/share/pnpm/store/v10 pnpm install --store-dir $PNPM_STORE_DIR && PNPM_STORE_DIR=/home/nmdc/.local/share/pnpm/store/v10 pnpm add -D tslog json5 chalk @aws-sdk/client-bedrock @sinclair/typebox --store-dir $PNPM_STORE_DIR",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit"

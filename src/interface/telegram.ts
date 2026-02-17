@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 
 import type { ThufirConfig } from '../core/config.js';
 import type { IncomingMessage, ChannelAdapter } from './channels.js';
+import { sendWithRetry } from './delivery-retry.js';
 
 const TELEGRAM_MAX_MESSAGE_CHARS = 4000; // Telegram hard limit is 4096; keep headroom.
 
@@ -79,17 +80,15 @@ export class TelegramAdapter implements ChannelAdapter {
   async sendMessage(target: string, text: string): Promise<void> {
     const chunks = splitTelegramMessage(text);
     for (const chunk of chunks) {
-      const response = await fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: target, text: chunk }),
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(
-          `Telegram send failed (${response.status}): ${body || 'no response body'}`
-        );
-      }
+      await sendWithRetry(
+        () =>
+          fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: target, text: chunk }),
+          }),
+        'Telegram'
+      );
     }
   }
 

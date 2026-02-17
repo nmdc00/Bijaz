@@ -590,6 +590,7 @@ const ConfigSchema = z.object({
                   maxTradesPerScan: z.number().optional(),
                   maxTradesPerDay: z.number().optional(),
                   tradeCapBypassMinEdge: z.number().optional(),
+                  dailyDrawdownCapUsd: z.number().optional(),
                   signalPerformance: z
                     .object({
                       minSharpe: z.number().optional(),
@@ -667,6 +668,7 @@ const ConfigSchema = z.object({
       maxTradesPerScan: z.number().default(3),
       maxTradesPerDay: z.number().default(25),
       tradeCapBypassMinEdge: z.number().default(0.12),
+      dailyDrawdownCapUsd: z.number().default(0),
       discoverySelection: z
         .object({
           enabled: z.boolean().default(true),
@@ -907,6 +909,15 @@ const ConfigSchema = z.object({
               warning: z.array(z.string()).default([]),
               high: z.array(z.string()).default([]),
               critical: z.array(z.string()).default([]),
+            })
+            .default({}),
+          llmEnrichment: z
+            .object({
+              enabled: z.boolean().default(false),
+              timeoutMs: z.number().default(2500),
+              maxTokens: z.number().default(140),
+              temperature: z.number().default(0.1),
+              maxChars: z.number().default(420),
             })
             .default({}),
         })

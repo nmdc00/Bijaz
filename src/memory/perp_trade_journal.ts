@@ -45,6 +45,14 @@ export type PerpTradeJournalEntry = {
   thesisEvaluationReason?: string | null;
   maeProxy?: number | null;
   mfeProxy?: number | null;
+  directionScore?: number | null;
+  timingScore?: number | null;
+  sizingScore?: number | null;
+  exitScore?: number | null;
+  direction_score?: number | null;
+  timing_score?: number | null;
+  sizing_score?: number | null;
+  exit_score?: number | null;
   outcome: PerpTradeJournalOutcome;
   message?: string | null;
   error?: string | null;

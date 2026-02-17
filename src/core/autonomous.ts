@@ -20,7 +20,7 @@ import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_tr
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
 import { getDailyPnLRollup } from './daily_pnl.js';
 import { openDatabase } from '../memory/db.js';
-import { listOpenPositionsFromTrades } from '../memory/trades.js';
+import { listOpenPositionsFromTrades, type OpenTradePosition } from '../memory/trades.js';
 import { Logger } from './logger.js';
 import {
   applyReflectionMutation,
@@ -36,47 +36,10 @@ import {
 import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
 import { summarizeSignalPerformance } from './signal_performance.js';
 import { SchedulerControlPlane } from './scheduler_control_plane.js';
+import { resolveSessionWeightContext } from './session-weight.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
-}
-
-type SessionBucket = 'asia' | 'europe_open' | 'us_open' | 'us_midday' | 'us_close' | 'weekend';
-
-interface SessionWeightContext {
-  session: SessionBucket;
-  sessionWeight: number;
-}
-
-const SESSION_WEIGHTS: Record<SessionBucket, number> = {
-  asia: 0.9,
-  europe_open: 1.0,
-  us_open: 1.15,
-  us_midday: 0.95,
-  us_close: 1.05,
-  weekend: 0.65,
-};
-
-function resolveSessionWeightContext(now: Date): SessionWeightContext {
-  const day = now.getUTCDay();
-  if (day === 0 || day === 6) {
-    return { session: 'weekend', sessionWeight: SESSION_WEIGHTS.weekend };
-  }
-
-  const hour = now.getUTCHours();
-  if (hour >= 23 || hour < 7) {
-    return { session: 'asia', sessionWeight: SESSION_WEIGHTS.asia };
-  }
-  if (hour < 13) {
-    return { session: 'europe_open', sessionWeight: SESSION_WEIGHTS.europe_open };
-  }
-  if (hour < 17) {
-    return { session: 'us_open', sessionWeight: SESSION_WEIGHTS.us_open };
-  }
-  if (hour < 20) {
-    return { session: 'us_midday', sessionWeight: SESSION_WEIGHTS.us_midday };
-  }
-  return { session: 'us_close', sessionWeight: SESSION_WEIGHTS.us_close };
 }
 
 function formatContextPackTrace(input: {
@@ -113,6 +76,45 @@ export interface DailyPnL {
   unrealizedPnl: number;
 }
 
+export interface OperatorPositionSnapshot {
+  marketId: string;
+  outcome: 'YES' | 'NO';
+  exposureUsd: number;
+  unrealizedPnlUsd: number | null;
+}
+
+export interface OperatorTradeSnapshot {
+  marketId: string;
+  outcome: string;
+  pnlUsd: number | null;
+  timestamp: string;
+}
+
+export interface OperatorStatusSnapshot {
+  asOf: string;
+  equityUsd: number | null;
+  openPositions: OperatorPositionSnapshot[];
+  policyState: {
+    observationOnly: boolean;
+    reason: string | null;
+    minEdgeOverride: number | null;
+    maxTradesPerScanOverride: number | null;
+    leverageCapOverride: number | null;
+  };
+  lastTrade: OperatorTradeSnapshot | null;
+  nextScanAt: string | null;
+  uptimeMs: number;
+  runtime: {
+    enabled: boolean;
+    fullAuto: boolean;
+    isPaused: boolean;
+    pauseReason: string;
+    consecutiveLosses: number;
+    remainingDaily: number;
+  };
+  dailyPnl: DailyPnL & { totalPnl: number };
+}
+
 export interface AutonomousEvents {
   'daily-report': (report: string) => void;
   'paused': (reason: string) => void;
@@ -128,6 +130,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private logger: Logger;
   private thufirConfig: ThufirConfig;
   private readonly schedulerNamespace: string;
+  private readonly startedAtMs: number;
 
   private isPaused = false;
   private pauseReason = '';
@@ -149,6 +152,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.thufirConfig = thufirConfig;
     this.logger = logger ?? new Logger('info');
     this.schedulerNamespace = this.buildSchedulerNamespace();
+    this.startedAtMs = Date.now();
 
     // Load autonomous config with defaults
     this.config = {
@@ -725,6 +729,42 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     };
   }
 
+  getOperatorSnapshot(): OperatorStatusSnapshot {
+    const dailyPnl = this.getDailyPnL();
+    const runtime = this.getStatus();
+    const policyState = getAutonomyPolicyState();
+    const observationOnly =
+      policyState.observationOnlyUntilMs != null && policyState.observationOnlyUntilMs > Date.now();
+    const openPositions = listOpenPositionsFromTrades(20).map((position) => ({
+      marketId: position.marketId,
+      outcome: position.predictedOutcome ?? 'YES',
+      exposureUsd: Number(position.positionSize ?? 0),
+      unrealizedPnlUsd: this.computePositionUnrealizedPnl(position),
+    }));
+    const totalPnl = dailyPnl.realizedPnl + dailyPnl.unrealizedPnl;
+
+    return {
+      asOf: new Date().toISOString(),
+      equityUsd: null,
+      openPositions,
+      policyState: {
+        observationOnly,
+        reason: policyState.reason,
+        minEdgeOverride: policyState.minEdgeOverride,
+        maxTradesPerScanOverride: policyState.maxTradesPerScanOverride,
+        leverageCapOverride: policyState.leverageCapOverride,
+      },
+      lastTrade: this.getLastTradeSnapshot(),
+      nextScanAt: this.getNextScanAt(),
+      uptimeMs: Math.max(0, Date.now() - this.startedAtMs),
+      runtime,
+      dailyPnl: {
+        ...dailyPnl,
+        totalPnl,
+      },
+    };
+  }
+
   /**
    * Generate daily P&L report
    */
@@ -790,33 +830,94 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     let total = 0;
 
     for (const position of positions) {
-      const outcome = position.predictedOutcome ?? 'YES';
-      const prices = position.currentPrices ?? null;
-      let currentPrice: number | null = null;
-      if (Array.isArray(prices)) {
-        currentPrice = outcome === 'YES' ? prices[0] ?? null : prices[1] ?? null;
-      } else if (prices) {
-        currentPrice =
-          prices[outcome] ??
-          prices[outcome.toUpperCase()] ??
-          prices[outcome.toLowerCase()] ??
-          prices[outcome === 'YES' ? 'Yes' : 'No'] ??
-          prices[outcome === 'YES' ? 'yes' : 'no'] ??
-          null;
-      }
-
-      const averagePrice = position.executionPrice ?? currentPrice ?? 0;
-      const positionSize = position.positionSize ?? 0;
-      if (averagePrice <= 0 || positionSize <= 0) {
-        continue;
-      }
-      const shares = positionSize / averagePrice;
-      const price = currentPrice ?? averagePrice;
-      const value = shares * price;
-      total += value - positionSize;
+      const pnl = this.computePositionUnrealizedPnl(position);
+      if (pnl == null) continue;
+      total += pnl;
     }
 
     return total;
+  }
+
+  private computePositionUnrealizedPnl(position: OpenTradePosition): number | null {
+    const outcome = position.predictedOutcome ?? 'YES';
+    const prices = position.currentPrices ?? null;
+    let currentPrice: number | null = null;
+    if (Array.isArray(prices)) {
+      currentPrice = outcome === 'YES' ? prices[0] ?? null : prices[1] ?? null;
+    } else if (prices) {
+      currentPrice =
+        prices[outcome] ??
+        prices[outcome.toUpperCase()] ??
+        prices[outcome.toLowerCase()] ??
+        prices[outcome === 'YES' ? 'Yes' : 'No'] ??
+        prices[outcome === 'YES' ? 'yes' : 'no'] ??
+        null;
+    }
+
+    const averagePrice = position.executionPrice ?? currentPrice ?? 0;
+    const positionSize = position.positionSize ?? 0;
+    if (averagePrice <= 0 || positionSize <= 0) {
+      return null;
+    }
+    const shares = positionSize / averagePrice;
+    const price = currentPrice ?? averagePrice;
+    const value = shares * price;
+    return value - positionSize;
+  }
+
+  private getLastTradeSnapshot(): OperatorTradeSnapshot | null {
+    try {
+      const db = openDatabase();
+      const row = db
+        .prepare(
+          `
+          SELECT
+            market_id as marketId,
+            outcome,
+            pnl as pnlUsd,
+            timestamp
+          FROM autonomous_trades
+          ORDER BY datetime(timestamp) DESC
+          LIMIT 1
+        `
+        )
+        .get() as
+        | { marketId?: string; outcome?: string; pnlUsd?: number | null; timestamp?: string }
+        | undefined;
+      if (!row?.marketId || !row?.timestamp) {
+        return null;
+      }
+      return {
+        marketId: String(row.marketId),
+        outcome: String(row.outcome ?? 'unknown'),
+        pnlUsd: typeof row.pnlUsd === 'number' ? row.pnlUsd : null,
+        timestamp: String(row.timestamp),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private getNextScanAt(): string | null {
+    try {
+      const db = openDatabase();
+      const row = db
+        .prepare(
+          `
+          SELECT next_run_at as nextRunAt
+          FROM scheduler_jobs
+          WHERE name = @name
+          LIMIT 1
+        `
+        )
+        .get({ name: `${this.schedulerNamespace}:scan` }) as { nextRunAt?: string } | undefined;
+      if (!row?.nextRunAt) {
+        return null;
+      }
+      return String(row.nextRunAt);
+    } catch {
+      return null;
+    }
   }
 
   /**

@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 
 import type { ThufirConfig } from '../core/config.js';
 import type { IncomingMessage, ChannelAdapter } from './channels.js';
+import { sendWithRetry } from './delivery-retry.js';
 
 export class WhatsAppAdapter implements ChannelAdapter {
   name = 'whatsapp';
@@ -27,19 +28,23 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
   async sendMessage(target: string, text: string): Promise<void> {
     const url = `https://graph.facebook.com/v19.0/${this.phoneNumberId}/messages`;
-    await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: target,
-        type: 'text',
-        text: { body: text },
-      }),
-    });
+    await sendWithRetry(
+      () =>
+        fetch(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: target,
+            type: 'text',
+            text: { body: text },
+          }),
+        }),
+      'WhatsApp'
+    );
   }
 
   async handleWebhook(body: any, onMessage: (msg: IncomingMessage) => Promise<void>): Promise<void> {
