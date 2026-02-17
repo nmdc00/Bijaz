@@ -13,6 +13,7 @@ export interface TradeDecision {
   orderType?: 'market' | 'limit';
   confidence?: 'low' | 'medium' | 'high';
   reasoning?: string;
+  marketSlippageBps?: number;
 }
 
 export interface TradeResult {
