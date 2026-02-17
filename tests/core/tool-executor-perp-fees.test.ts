@@ -72,7 +72,7 @@ describe('tool-executor perp fee visibility', () => {
 
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 0.01, order_type: 'market' },
+      { symbol: 'BTC', side: 'buy', size: 0.01, order_type: 'market', trade_archetype: 'intraday' },
       {
         config: { execution: { provider: 'hyperliquid' } } as any,
         marketClient,
@@ -122,7 +122,7 @@ describe('tool-executor perp fee visibility', () => {
 
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 0.01, order_type: 'market' },
+      { symbol: 'BTC', side: 'buy', size: 0.01, order_type: 'market', trade_archetype: 'intraday' },
       {
         config: { execution: { provider: 'hyperliquid' } } as any,
         marketClient,
