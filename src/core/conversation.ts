@@ -313,7 +313,11 @@ export class ConversationHandler {
   /**
    * Handle a conversational message from the user
    */
-  async chat(userId: string, message: string): Promise<string> {
+  async chat(
+    userId: string,
+    message: string,
+    onProgress?: (message: string) => Promise<void> | void
+  ): Promise<string> {
     return withExecutionContext(
       { mode: 'FULL_AGENT', critical: false, reason: 'chat', source: 'conversation' },
       async () => {
@@ -357,6 +361,20 @@ export class ConversationHandler {
           const resumePlan = this.shouldResumePlan(message);
           const priorPlan = resumePlan ? this.sessions.getPlan(userId) : null;
 
+          let lastProgressKey = '';
+          const emitProgress = async (key: string, text: string): Promise<void> => {
+            if (!onProgress || !text || key === lastProgressKey) {
+              return;
+            }
+            lastProgressKey = key;
+            try {
+              await onProgress(text);
+            } catch {
+              // Best-effort progress updates must not affect the main flow.
+            }
+          };
+
+          let lastToolCount = 0;
           const result = await runOrchestrator(message, {
             llm: this.llm,
             toolRegistry: this.orchestratorRegistry,
@@ -374,6 +392,28 @@ export class ConversationHandler {
                 return autoApproveFunding;
               }
               return false;
+            },
+            onUpdate: (state) => {
+              if (!state.plan) {
+                void emitProgress('planning:start', 'Working: analyzing request...');
+                return;
+              }
+              if (!state.plan.complete) {
+                void emitProgress('planning:ready', 'Working: building execution plan...');
+              }
+              if (state.toolExecutions.length > lastToolCount) {
+                const latest = state.toolExecutions[state.toolExecutions.length - 1];
+                lastToolCount = state.toolExecutions.length;
+                if (latest?.toolName) {
+                  void emitProgress(
+                    `tool:${lastToolCount}:${latest.toolName}`,
+                    `Working: running ${latest.toolName}...`
+                  );
+                }
+              }
+              if (state.plan.complete) {
+                void emitProgress('synthesis', 'Working: finalizing response...');
+              }
             },
           }, {
             initialPlan: priorPlan ?? undefined,
