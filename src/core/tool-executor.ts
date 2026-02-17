@@ -177,6 +177,40 @@ function toFiniteNumberOrNull(input: unknown): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+type ReduceOnlyPositionSnapshot = {
+  side: 'long' | 'short';
+  size: number;
+};
+
+async function getReduceOnlyPositionSnapshot(
+  config: ThufirConfig,
+  symbol: string
+): Promise<ReduceOnlyPositionSnapshot | null> {
+  const client = new HyperliquidClient(config);
+  const state = (await client.getClearinghouseState()) as {
+    assetPositions?: Array<{ position?: Record<string, unknown> }>;
+  };
+  const target = symbol.trim().toUpperCase();
+  for (const entry of state.assetPositions ?? []) {
+    const position = entry?.position ?? {};
+    const coin = String((position as { coin?: unknown }).coin ?? '')
+      .trim()
+      .toUpperCase();
+    if (!coin || coin !== target) {
+      continue;
+    }
+    const rawSize = Number((position as { szi?: unknown }).szi ?? NaN);
+    if (!Number.isFinite(rawSize) || rawSize === 0) {
+      return null;
+    }
+    return {
+      side: rawSize > 0 ? 'long' : 'short',
+      size: Math.abs(rawSize),
+    };
+  }
+  return null;
+}
+
 function resolveClosedTradeReference(params: {
   entries: ReturnType<typeof listPerpTradeJournals>;
   symbol: string;
@@ -1103,13 +1137,17 @@ export async function executeToolCall(
           }
           return { success: false, error: policyGate.reason ?? 'policy constraints active' };
         }
-        let size = requestedSize;
         let policyReasoning: string | null = null;
         if (!reduceOnly && policyGate.sizeMultiplier < 1) {
           size = Math.max(0.00000001, requestedSize * policyGate.sizeMultiplier);
           policyReasoning =
             `Policy applied (${policyGate.reasonCode ?? 'policy.size_adjust'}): ` +
             `${policyGate.reason ?? 'size multiplier enforced'}; requested_size=${requestedSize}, effective_size=${size}`;
+        }
+        if (reduceOnlyPreflightNote) {
+          policyReasoning = policyReasoning
+            ? `${policyReasoning} | ${reduceOnlyPreflightNote}`
+            : reduceOnlyPreflightNote;
         }
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
