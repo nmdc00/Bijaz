@@ -182,6 +182,101 @@ describe('runOrchestrator autonomous trade contract', () => {
     ).toBe(true);
   });
 
+  it('does not inject terminal trade steps for retrospective trade questions', async () => {
+    const calls: string[] = [];
+
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Review current portfolio and context',
+                  requiresTool: true,
+                  toolName: 'get_portfolio',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'retrospective analysis',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'Reviewed previous decisions.' };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['get_portfolio', 'perp_place_order'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        if (name === 'get_portfolio') {
+          return mkExecution(name, input as Record<string, unknown>, {
+            success: true,
+            data: { available_balance: 100 },
+          });
+        }
+        if (name === 'perp_place_order') {
+          return mkExecution(name, input as Record<string, unknown>, {
+            success: true,
+            data: { order_id: 'unexpected' },
+          });
+        }
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: false,
+          error: `unexpected tool: ${name}`,
+        });
+      },
+    };
+
+    await runOrchestrator(
+      'Why did you close the previous BTC long?',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 6 }
+    );
+
+    expect(calls).not.toContain('perp_place_order');
+  });
+
   it('normalizes invalid perp_place_order size before tool execution', async () => {
     const placeOrderInputs: Array<Record<string, unknown>> = [];
 
@@ -432,7 +527,7 @@ describe('runOrchestrator autonomous trade contract', () => {
     };
 
     const result = await runOrchestrator(
-      'Manage BTC perp',
+      'Buy BTC perp now',
       {
         llm: llm as any,
         toolRegistry: toolRegistry as any,
@@ -454,6 +549,53 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).toContain('Risk:');
     expect(result.response).toContain('Next Action:');
     expect(result.response).not.toContain('If you want');
+  });
+
+  it('prefetches trade_review and journal tools for retrospective/loss trade diagnostics', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'I reviewed the loss context.' };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['trade_review', 'perp_trade_journal_list'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { ok: true },
+        });
+      },
+    };
+
+    await runOrchestrator(
+      "You're losing money now dude",
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipPlanning: true, skipCritic: true, maxIterations: 2 }
+    );
+
+    expect(calls).toContain('trade_review');
+    expect(calls).toContain('perp_trade_journal_list');
   });
 
   it('overrides claimed Action line with deterministic failure summary when trade fails', async () => {

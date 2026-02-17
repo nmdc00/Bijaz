@@ -92,6 +92,8 @@ const MENTAT_PATTERNS = [
   /\bfull\s+(analysis|breakdown|report)\b/i,
   /\b(comprehensive|thorough|detailed)\s+(analysis|look|review)\b/i,
   /\bwhat.*(risks?|dangers?|could\s+go\s+wrong)\b/i,
+  /\b(why|reason|explain|what happened)\b.*\b(close|opened?|long|short|trade|position|order)\b/i,
+  /\b(losing money|drawdown|underperforming|bleeding)\b/i,
   /\bmentat\s+mode\b/i,
   /\b(stress\s+test|scenario\s+analysis)\b/i,
   /\bblack\s*swan\b/i,
@@ -120,7 +122,12 @@ export function detectMode(message: string): ModeDetectionResult {
     if (pattern.test(message)) {
       signals.push(`mentat pattern: ${pattern.source}`);
       // Only override if not explicitly trading
-      if (mode !== 'trade' || message.toLowerCase().includes('analyze')) {
+      if (
+        mode !== 'trade' ||
+        /\b(analyze|analysis|why|reason|explain|what happened|losing money|drawdown)\b/i.test(
+          message
+        )
+      ) {
         mode = 'mentat';
         confidence = 0.8;
       }
