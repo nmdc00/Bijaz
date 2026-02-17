@@ -243,3 +243,46 @@ export function validateReduceOnlyExitFsm(params: {
   }
   return { valid: true };
 }
+
+export function normalizeReduceOnlyExitFsmInput(params: {
+  enabled: boolean;
+  reduceOnly: boolean;
+  exitMode: ExitReasonCode | null;
+  thesisInvalidationHit: boolean | null;
+}): { exitMode: ExitReasonCode | null; thesisInvalidationHit: boolean | null } {
+  if (!params.enabled || !params.reduceOnly) {
+    return {
+      exitMode: params.exitMode,
+      thesisInvalidationHit: params.thesisInvalidationHit,
+    };
+  }
+
+  let exitMode = params.exitMode;
+  let thesisInvalidationHit = params.thesisInvalidationHit;
+
+  if (thesisInvalidationHit === true) {
+    exitMode = 'thesis_invalidation';
+  }
+
+  if (exitMode === 'thesis_invalidation' && thesisInvalidationHit !== true) {
+    thesisInvalidationHit = true;
+  }
+
+  if (
+    (exitMode === 'take_profit' || exitMode === 'time_exit' || exitMode === 'risk_reduction') &&
+    thesisInvalidationHit === true
+  ) {
+    thesisInvalidationHit = false;
+  }
+
+  if (exitMode == null && thesisInvalidationHit == null) {
+    exitMode = 'risk_reduction';
+    thesisInvalidationHit = false;
+  } else if (exitMode == null) {
+    exitMode = thesisInvalidationHit === true ? 'thesis_invalidation' : 'risk_reduction';
+  } else if (thesisInvalidationHit == null) {
+    thesisInvalidationHit = exitMode === 'thesis_invalidation';
+  }
+
+  return { exitMode, thesisInvalidationHit };
+}
