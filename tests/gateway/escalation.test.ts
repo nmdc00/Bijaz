@@ -181,6 +181,7 @@ describe('EscalationPolicyEngine', () => {
       source: 'worker:daily',
       reason: 'abnormal_slippage',
       severity: 'critical',
+      dedupeKey: 'worker:daily:critical',
       summary: 'Critical slippage event',
     });
     expect(criticalDecision.shouldSend).toBe(true);
