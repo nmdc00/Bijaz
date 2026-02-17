@@ -20,7 +20,13 @@ import type {
 } from './types.js';
 
 import { detectMode, getModeConfig, getAllowedTools } from '../modes/registry.js';
-import { createPlan, revisePlan, getNextStep, completeStep, failStep } from '../planning/planner.js';
+import {
+  createPlan,
+  revisePlan,
+  getReadySteps,
+  completeStep,
+  failStep,
+} from '../planning/planner.js';
 import { reflect, createReflectionState, applyReflection } from '../reflection/reflector.js';
 import { runCritic, shouldRunCritic } from '../critic/critic.js';
 import { buildIdentityPrompt, buildMinimalIdentityPrompt } from '../identity/identity.js';
@@ -53,6 +59,8 @@ import {
 } from './state.js';
 
 const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
+const MAX_PARALLEL_READ_STEPS = 3;
+const MUTATING_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
 const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
 
 function isNoTradeDecisionStep(step: PlanStep): boolean {
@@ -334,6 +342,52 @@ function shouldSkipRedundantToolsList(state: AgentState, step: PlanStep): boolea
   if (goalRequestsToolsList(state.goal)) return false;
   if (hasUnknownToolFailure(state)) return false;
   return true;
+}
+
+function goalRequestsTradeMutation(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  if (normalized.includes('perp_place_order') || normalized.includes('perp_cancel_order')) return true;
+  if (/\b(buy|sell|long|short)\b/.test(normalized)) return true;
+  if (/\b(go\s+long|go\s+short)\b/.test(normalized)) return true;
+  return (
+    /\b(place|execute|open|close|cancel|reduce|increase|enter|exit|flatten|hedge|de-?risk)\b/.test(normalized) &&
+    /\b(order|position|trade)\b/.test(normalized)
+  );
+}
+
+function goalIsAnalysisStyle(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  return /\b(thoughts?|review|analy[sz]e|analysis|explain|diagnose|why|how|what should)\b/.test(
+    normalized
+  );
+}
+
+function shouldSkipMutatingTradeToolForAnalysis(state: AgentState, step: PlanStep): boolean {
+  if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return false;
+  if (!goalIsAnalysisStyle(state.goal)) return false;
+  return !goalRequestsTradeMutation(state.goal);
+}
+
+function isReadOnlyStep(step: PlanStep, ctx: OrchestratorContext): boolean {
+  if (!step.requiresTool || !step.toolName) return false;
+  const toolDef = ctx.toolRegistry.get?.(step.toolName);
+  return !toolDef?.sideEffects && !toolDef?.requiresConfirmation;
+}
+
+function buildParallelReadBatch(
+  readySteps: PlanStep[],
+  state: AgentState,
+  ctx: OrchestratorContext
+): PlanStep[] {
+  const batch: PlanStep[] = [];
+  for (const step of readySteps) {
+    if (batch.length >= MAX_PARALLEL_READ_STEPS) break;
+    if (!isReadOnlyStep(step, ctx)) break;
+    if (shouldSkipRedundantToolsList(state, step)) continue;
+    if (shouldSkipMutatingTradeToolForAnalysis(state, step)) continue;
+    batch.push(step);
+  }
+  return batch;
 }
 
 function enforceIdentityMarker(identity: { marker: string }, prompt: string): void {
@@ -698,12 +752,136 @@ export async function runOrchestrator(
   let tradeFragilityScan: QuickFragilityScan | null = null;
   let consecutiveNonTerminalTradeToolSteps = 0;
 
+  const processToolExecution = async (
+    step: PlanStep,
+    execution: ToolExecution,
+    options?: { allowRevision?: boolean }
+  ): Promise<void> => {
+    state = addToolExecution(state, execution);
+
+    const stepBlockers = execution.result.success ? [] : detectBlockers(execution);
+
+    if (!execution.result.success) {
+      const failed = execution.result as { success: false; error: string };
+      const primaryKind: AgentBlockerKind =
+        (stepBlockers[0]?.kind as AgentBlockerKind | undefined) ?? 'unknown';
+      recordAgentIncident({
+        goal,
+        mode: state.mode,
+        toolName: execution.toolName,
+        error: failed.error,
+        blockerKind: primaryKind,
+        details: {
+          stepId: step.id,
+          planId: state.plan?.id ?? null,
+          detectedBlockers: stepBlockers.map((b) => ({
+            kind: b.kind,
+            summary: b.summary,
+            evidence: b.evidence,
+            suggestedNextSteps: b.suggestedNextSteps,
+            playbookKey: b.playbookKey ?? null,
+          })),
+        },
+      });
+
+      for (const b of stepBlockers) {
+        state = addWarning(state, `Detected blocker: ${b.kind} (${b.summary})`);
+        if (state.plan && !state.plan.blockers.includes(b.summary)) {
+          state = setPlan(state, {
+            ...state.plan,
+            blockers: [...state.plan.blockers, b.summary],
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
+        if (b.playbookKey) {
+          const existing = getPlaybook(b.playbookKey);
+          if (!existing) {
+            const seed = seedPlaybookForBlocker(b.kind);
+            if (seed) {
+              upsertPlaybook(seed);
+            }
+          }
+        }
+      }
+    }
+
+    if (execution.result.success) {
+      state = setPlan(state, completeStep(state.plan!, step.id, execution.result));
+    } else {
+      const failedResult = execution.result as { success: false; error: string };
+      if (state.plan && stepBlockers.length > 0) {
+        const injected = injectRemediationAndRetry({
+          plan: state.plan,
+          failedStep: step,
+          blockers: stepBlockers,
+          toolRegistry: ctx.toolRegistry,
+        });
+        if (injected.injected) {
+          state = setPlan(state, injected.updated);
+          state = addWarning(
+            state,
+            `Injected ${injected.injectedCount} remediation step(s) after tool failure`
+          );
+        } else {
+          state = setPlan(state, failStep(state.plan!, step.id, failedResult.error));
+        }
+      } else {
+        state = setPlan(state, failStep(state.plan!, step.id, failedResult.error));
+      }
+    }
+
+    const toolContext = toToolExecutionContext(execution);
+    reflectionState = {
+      ...reflectionState,
+      hypotheses: state.hypotheses,
+      assumptions: state.assumptions,
+      confidence: state.confidence,
+      toolExecutions: [...reflectionState.toolExecutions, toolContext],
+    };
+
+    try {
+      const reflection = await reflect(ctx.llm, reflectionState, toolContext);
+      state = applyReflectionToState(state, reflection);
+      reflectionState = applyReflection(reflectionState, reflection, toolContext);
+
+      if (
+        options?.allowRevision !== false &&
+        shouldReviseAfterReflection(reflection, execution) &&
+        state.plan &&
+        state.plan.revisionCount < 3
+      ) {
+        const revisionResult = await revisePlan(ctx.llm, {
+          plan: state.plan,
+          reason: 'tool_result_unexpected',
+          context: reflection.revisionReason,
+          toolResult: execution.result,
+          triggerStepId: step.id,
+        });
+
+        state = setPlan(state, revisionResult.plan);
+        state = enforceTradeTerminalContract(state, ctx, 'plan_revision');
+        for (const change of revisionResult.changes) {
+          state = addWarning(state, `Plan revised: ${change}`);
+        }
+      }
+    } catch (error) {
+      state = addWarning(
+        state,
+        `Reflection failed: ${error instanceof Error ? error.message : 'Unknown'}`
+      );
+    }
+
+    ctx.onUpdate?.(state);
+  };
+
   while (shouldContinue(state).continue && state.iteration < maxIterations) {
     state = incrementIteration(state);
     ctx.onUpdate?.(state);
 
     // Get next step from plan
-    const nextStep = state.plan ? getNextStep(state.plan) : null;
+    const readySteps = state.plan ? getReadySteps(state.plan) : [];
+    const nextStep = readySteps[0] ?? null;
 
     if (!nextStep) {
       // No more steps - plan is complete or no plan
@@ -775,6 +953,41 @@ export async function runOrchestrator(
         ctx.onUpdate?.(state);
         continue;
       }
+      if (shouldSkipMutatingTradeToolForAnalysis(state, nextStep)) {
+        const skippedExecution: ToolExecution = {
+          toolName: nextStep.toolName,
+          input: nextStep.toolInput ?? {},
+          result: {
+            success: true,
+            data: {
+              skipped: true,
+              reason:
+                'Mutating trade action skipped: request appears analytical and did not explicitly request execution.',
+            },
+          },
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          cached: true,
+        };
+        state = addToolExecution(state, skippedExecution);
+        state = setPlan(state, completeStep(state.plan!, nextStep.id, skippedExecution.result));
+        ctx.onUpdate?.(state);
+        continue;
+      }
+
+      const readBatch = buildParallelReadBatch(readySteps, state, ctx);
+      if (readBatch.length > 1) {
+        const executions = await Promise.all(
+          readBatch.map((step) => executeToolStep(step, state, ctx))
+        );
+        for (let index = 0; index < readBatch.length; index += 1) {
+          await processToolExecution(readBatch[index]!, executions[index]!, { allowRevision: false });
+        }
+        if (state.plan?.complete) {
+          break;
+        }
+        continue;
+      }
 
       // Run fragility scan before trade tools
       const isTradeToolStep = nextStep.toolName === 'perp_place_order';
@@ -790,127 +1003,7 @@ export async function runOrchestrator(
       }
 
       const execution = await executeToolStep(nextStep, state, ctx);
-      state = addToolExecution(state, execution);
-
-      const stepBlockers = execution.result.success ? [] : detectBlockers(execution);
-
-      // Record structured incident artifacts on tool failure.
-      if (!execution.result.success) {
-        const failed = execution.result as { success: false; error: string };
-
-        // Persist incident (always), then seed any missing playbooks for detected blockers.
-        const primaryKind: AgentBlockerKind =
-          (stepBlockers[0]?.kind as AgentBlockerKind | undefined) ?? 'unknown';
-        recordAgentIncident({
-          goal,
-          mode: state.mode,
-          toolName: execution.toolName,
-          error: failed.error,
-          blockerKind: primaryKind,
-          details: {
-            stepId: nextStep.id,
-            planId: state.plan?.id ?? null,
-            detectedBlockers: stepBlockers.map((b) => ({
-              kind: b.kind,
-              summary: b.summary,
-              evidence: b.evidence,
-              suggestedNextSteps: b.suggestedNextSteps,
-              playbookKey: b.playbookKey ?? null,
-            })),
-          },
-        });
-
-        for (const b of stepBlockers) {
-          state = addWarning(state, `Detected blocker: ${b.kind} (${b.summary})`);
-          if (state.plan && !state.plan.blockers.includes(b.summary)) {
-            state = setPlan(state, {
-              ...state.plan,
-              blockers: [...state.plan.blockers, b.summary],
-              updatedAt: new Date().toISOString(),
-            });
-          }
-
-          if (b.playbookKey) {
-            const existing = getPlaybook(b.playbookKey);
-            if (!existing) {
-              const seed = seedPlaybookForBlocker(b.kind);
-              if (seed) {
-                upsertPlaybook(seed);
-              }
-            }
-          }
-        }
-      }
-
-      // Update plan with step result
-      if (execution.result.success) {
-        state = setPlan(state, completeStep(state.plan!, nextStep.id, execution.result));
-      } else {
-        const failedResult = execution.result as { success: false; error: string };
-        if (state.plan && stepBlockers.length > 0) {
-          const injected = injectRemediationAndRetry({
-            plan: state.plan,
-            failedStep: nextStep,
-            blockers: stepBlockers,
-            toolRegistry: ctx.toolRegistry,
-          });
-          if (injected.injected) {
-            state = setPlan(state, injected.updated);
-            state = addWarning(
-              state,
-              `Injected ${injected.injectedCount} remediation step(s) after tool failure`
-            );
-          } else {
-            state = setPlan(state, failStep(state.plan!, nextStep.id, failedResult.error));
-          }
-        } else {
-          state = setPlan(state, failStep(state.plan!, nextStep.id, failedResult.error));
-        }
-      }
-
-      // Reflect on tool result
-      const toolContext = toToolExecutionContext(execution);
-      reflectionState = {
-        ...reflectionState,
-        hypotheses: state.hypotheses,
-        assumptions: state.assumptions,
-        confidence: state.confidence,
-        toolExecutions: [...reflectionState.toolExecutions, toolContext],
-      };
-
-      try {
-        const reflection = await reflect(ctx.llm, reflectionState, toolContext);
-        state = applyReflectionToState(state, reflection);
-        reflectionState = applyReflection(reflectionState, reflection, toolContext);
-
-        // Check if reflection suggests plan revision
-        if (
-          shouldReviseAfterReflection(reflection, execution) &&
-          state.plan &&
-          state.plan.revisionCount < 3
-        ) {
-          const revisionResult = await revisePlan(ctx.llm, {
-            plan: state.plan,
-            reason: 'tool_result_unexpected',
-            context: reflection.revisionReason,
-            toolResult: execution.result,
-            triggerStepId: nextStep.id,
-          });
-
-          state = setPlan(state, revisionResult.plan);
-          state = enforceTradeTerminalContract(state, ctx, 'plan_revision');
-          for (const change of revisionResult.changes) {
-            state = addWarning(state, `Plan revised: ${change}`);
-          }
-        }
-      } catch (error) {
-        state = addWarning(
-          state,
-          `Reflection failed: ${error instanceof Error ? error.message : 'Unknown'}`
-        );
-      }
-
-      ctx.onUpdate?.(state);
+      await processToolExecution(nextStep, execution);
     } else {
       // Non-tool step - mark as complete
       state = setPlan(state, completeStep(state.plan!, nextStep.id));
