@@ -1142,7 +1142,49 @@ function hasPlaceholderInputs(input: Record<string, unknown>): boolean {
   return false;
 }
 
-function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
+const VALID_EXIT_MODES = new Set([
+  'thesis_invalidation',
+  'take_profit',
+  'time_exit',
+  'risk_reduction',
+  'manual',
+  'unknown',
+]);
+
+function mapExitModeAlias(raw: string): string {
+  if (
+    raw.includes('thesis') ||
+    raw.includes('invalid') ||
+    raw.includes('stop') ||
+    raw.includes('cut')
+  ) {
+    return 'thesis_invalidation';
+  }
+  if (raw === 'tp' || raw.includes('profit')) {
+    return 'take_profit';
+  }
+  if (raw.includes('time')) {
+    return 'time_exit';
+  }
+  if (
+    raw.includes('liquid') ||
+    raw.includes('probe') ||
+    raw.includes('de-risk') ||
+    raw.includes('risk') ||
+    raw.includes('emergency')
+  ) {
+    return 'risk_reduction';
+  }
+  if (raw.includes('manual') || raw.includes('discretion')) {
+    return 'manual';
+  }
+  if (raw.includes('unknown')) {
+    return 'unknown';
+  }
+  return 'risk_reduction';
+}
+
+export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
   const normalized = { ...input };
 
   if (typeof normalized.side === 'string') {
@@ -1171,6 +1213,16 @@ function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<st
       normalized.leverage = parsed;
     }
   }
+  if (typeof normalized.reduce_only === 'string') {
+    const value = normalized.reduce_only.toLowerCase().trim();
+    if (value === 'true') normalized.reduce_only = true;
+    if (value === 'false') normalized.reduce_only = false;
+  }
+  if (typeof normalized.thesis_invalidation_hit === 'string') {
+    const value = normalized.thesis_invalidation_hit.toLowerCase().trim();
+    if (value === 'true') normalized.thesis_invalidation_hit = true;
+    if (value === 'false') normalized.thesis_invalidation_hit = false;
+  }
 
   // Ensure a positive minimal size so schema validation doesn't fail before execution.
   const numericSize =
@@ -1187,6 +1239,17 @@ function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<st
   // Default to market for autonomous execution reliability unless a higher layer overrides this.
   normalized.order_type = 'market';
   delete normalized.price;
+
+  const reduceOnly = normalized.reduce_only === true;
+  if (typeof normalized.exit_mode === 'string') {
+    const candidate = normalized.exit_mode.toLowerCase().trim();
+    normalized.exit_mode = VALID_EXIT_MODES.has(candidate) ? candidate : mapExitModeAlias(candidate);
+  } else if (normalized.exit_mode != null) {
+    delete normalized.exit_mode;
+  }
+  if (reduceOnly && normalized.exit_mode === 'thesis_invalidation') {
+    normalized.thesis_invalidation_hit = true;
+  }
 
   if (normalized.side !== 'buy' && normalized.side !== 'sell') {
     normalized.side = 'buy';
