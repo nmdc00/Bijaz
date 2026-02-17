@@ -50,6 +50,11 @@ import type { ThufirConfig } from '../core/config.js';
 import { formatDelphiHelp, parseDelphiCliArgs } from '../delphi/command.js';
 import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
 import { getDelphiCalibrationReport } from '../memory/calibration_analytics.js';
+import { runDiscovery } from '../discovery/engine.js';
+import {
+  runContextPackEffectivenessEvaluation,
+  type ContextPackEffectivenessReport,
+} from '../discovery/context_pack_effectiveness.js';
 
 /**
  * Create the appropriate executor based on config execution mode.
@@ -1240,6 +1245,71 @@ calibration
     renderSegment('By Strategy Class', report.segments.strategyClass);
     renderSegment('By Horizon', report.segments.horizon);
     renderSegment('By Symbol', report.segments.symbol);
+  });
+
+calibration
+  .command('context-pack-eval')
+  .description('Run offline A/B context-pack effectiveness evaluation and persist report artifact')
+  .option(
+    '--fixture <path>',
+    'Optional fixture JSON with shape: { "expressions": ExpressionPlan[] }'
+  )
+  .option(
+    '--min-delta <number>',
+    'Minimum average score delta required for non-trivial improvement',
+    '0.03'
+  )
+  .option('--json', 'Output raw JSON')
+  .action(async (options) => {
+    const minDelta = Number(options.minDelta);
+    const config = loadConfig();
+
+    let expressions: Array<Record<string, unknown>> = [];
+    let source = 'calibration_context_pack_eval';
+
+    if (typeof options.fixture === 'string' && options.fixture.trim().length > 0) {
+      const fixturePath = options.fixture.trim();
+      const payload = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
+        expressions?: Array<Record<string, unknown>>;
+      };
+      expressions = Array.isArray(payload.expressions) ? payload.expressions : [];
+      source = `calibration_context_pack_eval_fixture:${fixturePath}`;
+    } else {
+      const discovery = await runDiscovery(config);
+      expressions = discovery.expressions as Array<Record<string, unknown>>;
+    }
+
+    const report: ContextPackEffectivenessReport = runContextPackEffectivenessEvaluation(
+      expressions as any,
+      {
+        source,
+        nonTrivialDeltaThreshold: Number.isFinite(minDelta) ? minDelta : 0.03,
+        persistArtifact: true,
+      }
+    );
+
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    const pct = (value: number): string => `${(value * 100).toFixed(2)}%`;
+    console.log('Context-Pack Effectiveness Evaluation');
+    console.log('═'.repeat(80));
+    console.log(`Samples: ${report.sampleSize}`);
+    console.log(`Fingerprint: ${report.fingerprint}`);
+    console.log(
+      `Baseline avg score: ${pct(report.baseline.avgQualityScore)} | pass rate: ${pct(report.baseline.passRate)}`
+    );
+    console.log(
+      `Context-pack avg score: ${pct(report.contextPack.avgQualityScore)} | pass rate: ${pct(report.contextPack.passRate)}`
+    );
+    console.log(
+      `Delta avg score: ${pct(report.delta.avgQualityScore)} | delta pass rate: ${pct(report.delta.passRate)}`
+    );
+    console.log(
+      `Non-trivial improvement: ${report.delta.nonTrivialImprovement ? 'yes' : 'no'} (threshold >= ${pct(Number.isFinite(minDelta) ? minDelta : 0.03)})`
+    );
   });
 
 // ============================================================================

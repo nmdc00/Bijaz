@@ -1,0 +1,127 @@
+{
+  "expressions": [
+    {
+      "id": "expr_btc_context_eval",
+      "hypothesisId": "hyp_btc_context_eval",
+      "symbol": "BTC/USDT",
+      "side": "buy",
+      "signalClass": "momentum_breakout",
+      "marketRegime": "trending",
+      "volatilityBucket": "medium",
+      "liquidityBucket": "normal",
+      "confidence": 0.76,
+      "expectedEdge": 0.12,
+      "entryZone": "market",
+      "invalidation": "Break below prior session VWAP",
+      "expectedMove": "Continuation after funding normalization",
+      "orderType": "market",
+      "leverage": 3,
+      "probeSizeUsd": 22,
+      "newsTrigger": null,
+      "contextPack": {
+        "regime": {
+          "marketRegime": "trending",
+          "volatilityBucket": "medium",
+          "liquidityBucket": "normal",
+          "confidence": 0.82,
+          "source": "provider"
+        },
+        "executionQuality": {
+          "status": "good",
+          "score": 0.79,
+          "recentWinRate": 0.63,
+          "slippageBps": 5,
+          "notes": [
+            "fills stable"
+          ],
+          "source": "provider"
+        },
+        "event": {
+          "kind": "technical",
+          "subtype": "breakout",
+          "catalyst": "orderflow imbalance",
+          "confidence": 0.64,
+          "expiresAtMs": null,
+          "source": "provider"
+        },
+        "portfolioState": {
+          "posture": "neutral",
+          "availableBalanceUsd": 1200,
+          "netExposureUsd": 180,
+          "openPositions": 2,
+          "source": "provider"
+        },
+        "missing": []
+      }
+    },
+    {
+      "id": "expr_eth_context_eval",
+      "hypothesisId": "hyp_eth_context_eval",
+      "symbol": "ETH/USDT",
+      "side": "sell",
+      "signalClass": "mean_reversion",
+      "marketRegime": "choppy",
+      "volatilityBucket": "high",
+      "liquidityBucket": "deep",
+      "confidence": 0.68,
+      "expectedEdge": 0.09,
+      "entryZone": "market",
+      "invalidation": "Reclaim of prior day high",
+      "expectedMove": "Mean reversion after expansion",
+      "orderType": "market",
+      "leverage": 2,
+      "probeSizeUsd": 18,
+      "newsTrigger": {
+        "enabled": true,
+        "subtype": "macro",
+        "sources": [
+          {
+            "source": "fixture",
+            "ref": "event-1",
+            "confidence": 0.7
+          }
+        ],
+        "noveltyScore": 0.7,
+        "marketConfirmationScore": 0.6,
+        "liquidityScore": 0.65,
+        "volatilityScore": 0.8,
+        "expiresAtMs": 1767225600000
+      },
+      "contextPack": {
+        "regime": {
+          "marketRegime": "high_vol_expansion",
+          "volatilityBucket": "high",
+          "liquidityBucket": "deep",
+          "confidence": 0.75,
+          "source": "provider"
+        },
+        "executionQuality": {
+          "status": "good",
+          "score": 0.74,
+          "recentWinRate": 0.57,
+          "slippageBps": 7,
+          "notes": [
+            "depth resilient"
+          ],
+          "source": "provider"
+        },
+        "event": {
+          "kind": "news_event",
+          "subtype": "macro",
+          "catalyst": "policy headline",
+          "confidence": 0.71,
+          "expiresAtMs": 1767225600000,
+          "source": "provider"
+        },
+        "portfolioState": {
+          "posture": "risk_off",
+          "availableBalanceUsd": 950,
+          "netExposureUsd": 260,
+          "openPositions": 3,
+          "source": "provider"
+        },
+        "missing": []
+      }
+    }
+  ]
+}
