@@ -19,6 +19,7 @@ function ensureDirectory(path: string): void {
 }
 
 function applySchema(db: Database.Database): void {
+  migratePredictionsForDelphiResolution(db);
   const schemaSql = getSchemaSql();
   db.exec(schemaSql);
   migratePredictionsForDelphiResolution(db);
@@ -26,6 +27,15 @@ function applySchema(db: Database.Database): void {
 }
 
 function migratePredictionsForDelphiResolution(db: Database.Database): void {
+  const hasPredictionsTable = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'predictions' LIMIT 1"
+    )
+    .get();
+  if (!hasPredictionsTable) {
+    return;
+  }
+
   const columns = db
     .prepare("PRAGMA table_info('predictions')")
     .all() as Array<{ name?: string }>;
@@ -39,6 +49,15 @@ function migratePredictionsForDelphiResolution(db: Database.Database): void {
   };
 
   addColumnIfMissing(
+    'domain',
+    "domain TEXT"
+  );
+  addColumnIfMissing('session_tag', 'session_tag TEXT');
+  addColumnIfMissing('regime_tag', 'regime_tag TEXT');
+  addColumnIfMissing('strategy_class', 'strategy_class TEXT');
+  addColumnIfMissing('symbol', 'symbol TEXT');
+  addColumnIfMissing('created_at', 'created_at TEXT');
+  addColumnIfMissing(
     'horizon_minutes',
     'horizon_minutes INTEGER CHECK(horizon_minutes IS NULL OR horizon_minutes > 0)'
   );
@@ -51,11 +70,32 @@ function migratePredictionsForDelphiResolution(db: Database.Database): void {
   addColumnIfMissing('resolution_metadata', 'resolution_metadata TEXT');
   addColumnIfMissing('resolution_error', 'resolution_error TEXT');
   addColumnIfMissing('resolution_timestamp', 'resolution_timestamp TEXT');
+  addColumnIfMissing('outcome', "outcome TEXT");
+  addColumnIfMissing('outcome_timestamp', 'outcome_timestamp TEXT');
+  addColumnIfMissing('pnl', 'pnl REAL');
+  addColumnIfMissing('brier_contribution', 'brier_contribution REAL');
+
+  db.exec(`
+    UPDATE predictions
+    SET created_at = datetime('now')
+    WHERE created_at IS NULL OR TRIM(created_at) = ''
+  `);
+
+  db.exec(`
+    UPDATE predictions
+    SET domain = 'global'
+    WHERE domain IS NULL OR TRIM(domain) = ''
+  `);
 
   db.exec(`
     UPDATE predictions
     SET resolution_status = 'open'
     WHERE resolution_status IS NULL
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_predictions_domain
+    ON predictions(domain)
   `);
 
   db.exec(`
