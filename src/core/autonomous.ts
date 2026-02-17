@@ -48,6 +48,13 @@ interface SessionWeightContext {
   sessionWeight: number;
 }
 
+interface ScanCycleSnapshot {
+  id: string;
+  capturedAtMs: number;
+  capturedAtIso: string;
+  clusterBySymbol: Map<string, (Awaited<ReturnType<typeof runDiscovery>>['clusters'])[number]>;
+}
+
 const SESSION_WEIGHTS: Record<SessionBucket, number> = {
   asia: 0.9,
   europe_open: 1.0,
@@ -90,6 +97,16 @@ function formatContextPackTrace(input: {
 }): string {
   const missing = input.missing.length > 0 ? input.missing.join(',') : 'none';
   return `context_pack{regime=${input.marketRegime};vol=${input.volatilityBucket};liq=${input.liquidityBucket};exec=${input.executionStatus};event=${input.eventKind};portfolio=${input.portfolioPosture};missing=${missing}}`;
+}
+
+function createScanCycleSnapshot(discovery: Awaited<ReturnType<typeof runDiscovery>>): ScanCycleSnapshot {
+  const capturedAtMs = Date.now();
+  return {
+    id: `scan_${capturedAtMs}`,
+    capturedAtMs,
+    capturedAtIso: new Date(capturedAtMs).toISOString(),
+    clusterBySymbol: new Map(discovery.clusters.map((cluster) => [cluster.symbol, cluster])),
+  };
 }
 
 export interface AutonomousConfig {
@@ -308,17 +325,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       policyState.observationOnlyUntilMs != null && policyState.observationOnlyUntilMs > Date.now();
 
     const result = await runDiscovery(this.thufirConfig);
+    const cycleSnapshot = createScanCycleSnapshot(result);
     if (result.expressions.length === 0) {
       return 'No discovery expressions generated.';
     }
-    const clusterBySymbol = new Map(result.clusters.map((cluster) => [cluster.symbol, cluster]));
 
     if (!input.executeTrades || observationActive) {
       const top = result.expressions.slice(0, 5);
       if (observationActive) {
         for (const expr of top) {
           const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
-          const cluster = clusterBySymbol.get(expr.symbol);
+          const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
           const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
           const signalClass = classifySignalClass(expr);
           const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
@@ -398,7 +415,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       policyState.leverageCapOverride ?? Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
 
     const eligible = result.expressions.filter((expr) => {
-      const cluster = clusterBySymbol.get(expr.symbol);
+      const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
       const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
       const signalClass = classifySignalClass(expr);
       const globalGate = evaluateGlobalTradeGate(this.thufirConfig, {
@@ -460,7 +477,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const confidenceWeighted = clamp01(confidenceRaw * sessionContext.sessionWeight);
       const sizingModifier = sessionContext.sessionWeight;
       const market = await this.marketClient.getMarket(symbol);
-      const cluster = clusterBySymbol.get(expr.symbol);
+      const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
+      const snapshotAgeMs = Math.max(0, Date.now() - cycleSnapshot.capturedAtMs);
       const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
       const signalClass = classifySignalClass(expr);
       const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
@@ -558,7 +576,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           confidenceWeighted * 100
         ).toFixed(1)}% regime=${regime} signal=${signalClass} kelly=${(kellyFraction * 100).toFixed(
           1
-        )}% session=${sessionContext.session} sessionWeight=${sessionContext.sessionWeight.toFixed(
+        )}% snapshotId=${cycleSnapshot.id} snapshotTs=${cycleSnapshot.capturedAtIso} snapshotAgeMs=${snapshotAgeMs} session=${sessionContext.session} sessionWeight=${sessionContext.sessionWeight.toFixed(
           2
         )} confidenceRaw=${confidenceRaw.toFixed(3)} confidenceWeighted=${confidenceWeighted.toFixed(
           3
