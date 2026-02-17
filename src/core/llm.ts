@@ -446,17 +446,26 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
   };
   if (provider === 'local') {
     const baseUrl = resolveLocalBaseUrl(config);
-    startLocalKeepWarm({ baseUrl, model });
+    startLocalKeepWarm({
+      baseUrl,
+      model,
+      enabled: trivialConfig.keepWarmEnabled ?? true,
+      intervalSeconds: trivialConfig.keepWarmIntervalSeconds ?? 180,
+      keepAlive: trivialConfig.keepAlive ?? '30m',
+    });
+    const localSoftTimeoutMs =
+      typeof trivialConfig.localSoftTimeoutMs === 'number'
+        ? Math.max(500, trivialConfig.localSoftTimeoutMs)
+        : 6_000;
     const inner = new LocalClient(config, model, 'trivial');
     const guarded = new LocalHealthGuard(inner, {
       baseUrl,
       model,
-      timeoutMs: trivialConfig.timeoutMs,
+      timeoutMs: Math.min(trivialConfig.timeoutMs ?? 12_000, localSoftTimeoutMs),
     });
 
     // Prefer local for trivial tasks, but do not block interactive paths on slow local inference.
     // If local cannot answer quickly, fall back to a remote provider for the same trivial task.
-    const localSoftTimeoutMs = 5_000;
     const localDefaults: LlmClientOptions = {
       temperature: defaults.temperature,
       timeoutMs:
@@ -468,6 +477,13 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
           ? Math.min(defaults.maxTokens, 96)
           : 96,
     };
+    const fallbackDefaults: LlmClientOptions = {
+      ...defaults,
+      timeoutMs:
+        typeof trivialConfig.fallbackTimeoutMs === 'number'
+          ? Math.max(500, trivialConfig.fallbackTimeoutMs)
+          : defaults.timeoutMs,
+    };
 
     const primary = new TrivialTaskClient(guarded, localDefaults);
     // Under llm-mux proxy, OpenAI requests may be unsupported; use Anthropic as the default remote fallback.
@@ -475,7 +491,7 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
       config.agent.provider === 'anthropic' || config.agent.useProxy
         ? new AnthropicClient(config, config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022', 'trivial')
         : new OpenAiClient(config, config.agent.openaiModel ?? config.agent.model, 'trivial');
-    const fallback = new TrivialTaskClient(fallbackRemote, defaults);
+    const fallback = new TrivialTaskClient(fallbackRemote, fallbackDefaults);
 
     return wrapWithLimiter(
       wrapWithInfra(
@@ -496,31 +512,44 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
 
 const localKeepWarmStarted = new Set<string>();
 
-function startLocalKeepWarm(params: { baseUrl: string; model: string }): void {
+function startLocalKeepWarm(params: {
+  baseUrl: string;
+  model: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  keepAlive: string;
+}): void {
+  if (!params.enabled) return;
   // Avoid keeping the process alive for short-lived CLI invocations.
   const key = `${params.baseUrl}::${params.model}`;
   if (localKeepWarmStarted.has(key)) return;
   localKeepWarmStarted.add(key);
 
-  const intervalMs = 3 * 60 * 1000;
-  const keepAlive = '10m';
+  const intervalMs = Math.max(15, Math.floor(params.intervalSeconds)) * 1000;
 
   const tick = async () => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 3_000) : null;
     try {
       // Best-effort: Ollama-specific keep-alive. If unavailable, ignore.
       await fetch(`${params.baseUrl}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller?.signal,
         body: JSON.stringify({
           model: params.model,
           prompt: 'ping',
           stream: false,
-          keep_alive: keepAlive,
+          keep_alive: params.keepAlive,
           options: { num_predict: 1 },
         }),
       });
     } catch {
       // ignore
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
   };
 
