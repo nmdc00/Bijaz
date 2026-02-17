@@ -1,0 +1,15 @@
+agent	branch	task	scope	test_hint
+agent-v161-a	feat/v1.61-mechanical-expression-selection	Mechanical expression selection	Remove blocking LLM selection in autonomous hot path	tests/core/autonomous-mechanical-selection.test.ts
+agent-v161-b	feat/v1.61-market-data-cache	Market data cache	Shared mids/metadata cache and refresh path	tests/execution/hyperliquid-markets-cache.test.ts
+agent-v161-c	feat/v1.61-scan-snapshot-reuse	Scan snapshot reuse	Immutable per-cycle snapshot reused across stages	tests/core/autonomous-scan-snapshot.test.ts
+agent-v161-d	feat/v1.61-event-driven-scan-triggers	Event-driven scans	Immediate trigger + cooldown/dedupe	tests/core/event-scan-trigger.test.ts
+agent-v161-e	feat/v1.61-execution-input-validation	Execution input validation	Strict preflight contracts/enums for execution	tests/agent/orchestrator-input-normalization.test.ts tests/core/tool-executor-perps.test.ts
+agent-v161-f	feat/v1.61-retry-classifier-hardening	Retry classifier hardening	Classify terminal vs retryable failures	tests/agent/retry-classifier.test.ts
+agent-v161-g	feat/v1.61-quote-freshness-control	Quote freshness control	Reject stale IOC quotes and reprice path	tests/execution/hyperliquid-live.test.ts
+agent-v161-h	feat/v1.61-async-llm-enrichment	Async LLM enrichment	Non-blocking enrichment + timeout fallback	tests/core/autonomous-async-enrichment.test.ts
+agent-v161-i	feat/v1.61-performance-telemetry	Performance telemetry	Per-stage latency metrics/rollups	tests/core/performance-metrics.test.ts
+agent-v161-j	feat/v1.61-performance-acceptance-suite	Performance acceptance suite	Budget evaluator and release gate	tests/integration/v1_6_performance_acceptance.test.ts
+agent-v161-k	feat/v1.61-orchestrator-read-concurrency	Orchestrator read concurrency	Parallel read tools with mutation safety	tests/agent/orchestrator-autonomous-trade.test.ts
+agent-v161-l	feat/v1.61-plan-context-persistence	Plan context persistence	Persist plan_context in journals across outcomes	tests/core/tool-executor-perps.test.ts
+agent-v161-m	feat/v1.61-operator-progress-streaming	Operator progress streaming	Progress milestones with dedupe/cooldown	tests/gateway/escalation.test.ts tests/core/conversation-tool-snapshot.test.ts
+agent-v161-n	feat/v1.61-build-test-hardening	Build/test hardening	Typecheck/test gating and stateful test isolation	tests/unit/wallet/limits.test.ts
