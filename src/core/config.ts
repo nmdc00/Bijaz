@@ -33,6 +33,22 @@ const ConfigSchema = z.object({
     showFragilityTrace: z.boolean().default(false),
     persistPlans: z.boolean().default(true),
     allowFallbackNonCritical: z.boolean().default(true),
+    nonCriticalFallbackSuppressReasons: z
+      .array(z.string())
+      .default([
+        'info_digest',
+        'session_compaction',
+        'proactive_query_refine',
+        'proactive_follow_up_queries',
+      ]),
+    nonCriticalReasonCooldownSeconds: z
+      .object({
+        infoDigest: z.number().default(10),
+        sessionCompaction: z.number().default(300),
+        proactiveQueryRefine: z.number().default(60),
+        proactiveFollowUpQueries: z.number().default(60),
+      })
+      .default({}),
     alwaysIncludeTime: z.boolean().default(false),
     proactiveRefresh: z
       .object({
@@ -537,6 +553,16 @@ const ConfigSchema = z.object({
                       fundingSymbols: z.array(z.string()).optional(),
                     })
                     .default({}),
+                  allowFallbackNonCritical: z.boolean().optional(),
+                  nonCriticalFallbackSuppressReasons: z.array(z.string()).optional(),
+                  nonCriticalReasonCooldownSeconds: z
+                    .object({
+                      infoDigest: z.number().optional(),
+                      sessionCompaction: z.number().optional(),
+                      proactiveQueryRefine: z.number().optional(),
+                      proactiveFollowUpQueries: z.number().optional(),
+                    })
+                    .optional(),
                   trivialTaskProvider: z.enum(['local', 'openai', 'anthropic']).optional(),
                   trivialTaskModel: z.string().optional(),
                   systemTools: z
@@ -606,6 +632,8 @@ const ConfigSchema = z.object({
                       blockBelowScore: z.number().optional(),
                       downweightBelowScore: z.number().optional(),
                       downweightMultiplier: z.number().optional(),
+                    })
+                    .optional(),
                   asyncEnrichment: z
                     .object({
                       enabled: z.boolean().optional(),
@@ -705,6 +733,8 @@ const ConfigSchema = z.object({
           blockBelowScore: z.number().default(0.45),
           downweightBelowScore: z.number().default(0.6),
           downweightMultiplier: z.number().default(0.6),
+        })
+        .default({}),
       asyncEnrichment: z
         .object({
           enabled: z.boolean().default(false),
@@ -861,6 +891,7 @@ const ConfigSchema = z.object({
           webLimitPerQuery: z.number().default(5),
           fetchPerQuery: z.number().default(1),
           fetchMaxChars: z.number().default(4000),
+          suppressLlmDuringActiveChatSeconds: z.number().default(90),
           channels: z.array(z.string()).default([]),
         })
         .default({}),
@@ -868,6 +899,7 @@ const ConfigSchema = z.object({
         .object({
           enabled: z.boolean().default(false),
           intervalMinutes: z.number().default(30),
+          suppressLlmDuringActiveChatSeconds: z.number().default(90),
           channels: z.array(z.string()).default([]),
           target: z.string().default('last'),
         })

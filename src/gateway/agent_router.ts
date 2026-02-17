@@ -52,6 +52,10 @@ function mergeConfig(
       ...base.agent.proactiveRefresh,
       ...(agentOverride?.proactiveRefresh ?? {}),
     },
+    nonCriticalReasonCooldownSeconds: {
+      ...base.agent.nonCriticalReasonCooldownSeconds,
+      ...(agentOverride?.nonCriticalReasonCooldownSeconds ?? {}),
+    },
   };
   return {
     ...base,
@@ -66,6 +70,10 @@ function mergeConfig(
     autonomy: {
       ...base.autonomy,
       ...(override?.autonomy ?? {}),
+      asyncEnrichment: {
+        ...base.autonomy.asyncEnrichment,
+        ...(override?.autonomy?.asyncEnrichment ?? {}),
+      },
       signalPerformance: {
         ...base.autonomy.signalPerformance,
         ...(override?.autonomy?.signalPerformance ?? {}),

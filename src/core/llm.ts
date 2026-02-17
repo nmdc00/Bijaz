@@ -279,6 +279,23 @@ class InfraLlmClient implements LlmClient {
       this.logger.warn('LLM execution context missing; defaulting to FULL_AGENT');
     }
 
+    if (!context.critical) {
+      const reason = context.reason ?? 'default';
+      const cooldownMs = resolveNonCriticalReasonCooldownMs(this.config, reason);
+      if (cooldownMs > 0) {
+        const last = nonCriticalReasonLastRunMs.get(reason) ?? 0;
+        const nowMs = Date.now();
+        if (nowMs - last < cooldownMs) {
+          this.logger.warn('LLM non-critical call throttled by reason cooldown', {
+            reason,
+            waitMs: cooldownMs - (nowMs - last),
+          });
+          return { content: '', model: meta.model };
+        }
+        nonCriticalReasonLastRunMs.set(reason, nowMs);
+      }
+    }
+
     if (context.mode === 'MONITOR_ONLY') {
       return { content: '', model: meta.model };
     }
@@ -572,6 +589,36 @@ type LocalHealthState = {
 };
 
 const localHealthState = new Map<string, LocalHealthState>();
+const nonCriticalReasonLastRunMs = new Map<string, number>();
+
+export function shouldSuppressNonCriticalFallback(
+  config: ThufirConfig | undefined,
+  reason: string | undefined
+): boolean {
+  if (!config || !reason) return false;
+  const blocked = new Set(config.agent?.nonCriticalFallbackSuppressReasons ?? []);
+  return blocked.has(reason);
+}
+
+export function resolveNonCriticalReasonCooldownMs(
+  config: ThufirConfig | undefined,
+  reason: string | undefined
+): number {
+  if (!config || !reason) return 0;
+  const rules = config.agent?.nonCriticalReasonCooldownSeconds;
+  switch (reason) {
+    case 'info_digest':
+      return Math.max(0, Number(rules?.infoDigest ?? 0)) * 1000;
+    case 'session_compaction':
+      return Math.max(0, Number(rules?.sessionCompaction ?? 0)) * 1000;
+    case 'proactive_query_refine':
+      return Math.max(0, Number(rules?.proactiveQueryRefine ?? 0)) * 1000;
+    case 'proactive_follow_up_queries':
+      return Math.max(0, Number(rules?.proactiveFollowUpQueries ?? 0)) * 1000;
+    default:
+      return 0;
+  }
+}
 
 function getLocalHealthState(baseUrl: string): LocalHealthState {
   const existing = localHealthState.get(baseUrl);
@@ -1542,10 +1589,13 @@ export class FallbackLlmClient implements LlmClient {
       const reason = extractErrorMessage(error);
       const ctx = getExecutionContext();
       const allowNonCritical = this.config?.agent?.allowFallbackNonCritical ?? true;
-      if (!ctx?.critical && !allowNonCritical) {
+      const suppressByReason = shouldSuppressNonCriticalFallback(this.config, ctx?.reason);
+      if (!ctx?.critical && (!allowNonCritical || suppressByReason)) {
         this.logger?.warn('LLM fallback suppressed (non-critical context)', {
           from: primaryMeta,
           to: fallbackMeta,
+          reasonCode: suppressByReason ? 'non_critical_reason_suppressed' : 'allowFallbackNonCritical=false',
+          contextReason: ctx?.reason ?? null,
           reason,
         });
         throw error;
