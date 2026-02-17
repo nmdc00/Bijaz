@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   hydrateEntryTradeContract,
+  normalizeReduceOnlyExitFsmInput,
   validateEntryTradeContract,
   validateReduceOnlyExitFsm,
 } from '../../src/core/trade_contract.js';
@@ -116,5 +117,27 @@ describe('trade contract validation', () => {
       emergencyReason: 'liquidation buffer collapsed after venue spike',
     });
     expect(result.valid).toBe(true);
+  });
+
+  it('normalizes missing reduce-only exit metadata under FSM enforcement', () => {
+    const normalized = normalizeReduceOnlyExitFsmInput({
+      enabled: true,
+      reduceOnly: true,
+      exitMode: null,
+      thesisInvalidationHit: null,
+    });
+    expect(normalized.exitMode).toBe('risk_reduction');
+    expect(normalized.thesisInvalidationHit).toBe(false);
+  });
+
+  it('normalizes conflicting reduce-only invalidation flags under FSM enforcement', () => {
+    const normalized = normalizeReduceOnlyExitFsmInput({
+      enabled: true,
+      reduceOnly: true,
+      exitMode: 'take_profit',
+      thesisInvalidationHit: true,
+    });
+    expect(normalized.exitMode).toBe('thesis_invalidation');
+    expect(normalized.thesisInvalidationHit).toBe(true);
   });
 });

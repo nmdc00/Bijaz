@@ -28,6 +28,7 @@ import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
 import {
   hydrateEntryTradeContract,
+  normalizeReduceOnlyExitFsmInput,
   validateEntryTradeContract,
   validateReduceOnlyExitFsm,
 } from './trade_contract.js';
@@ -920,11 +921,11 @@ export async function executeToolCall(
           Number.isFinite(Number(toolInput.thesis_expires_at_ms))
             ? Number(toolInput.thesis_expires_at_ms)
             : null;
-        const thesisInvalidationHit =
+        let thesisInvalidationHit =
           typeof toolInput.thesis_invalidation_hit === 'boolean'
             ? toolInput.thesis_invalidation_hit
             : null;
-        const exitMode = normalizeExitMode(toolInput.exit_mode);
+        let exitMode = normalizeExitMode(toolInput.exit_mode);
         const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
         const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
         const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
@@ -946,11 +947,6 @@ export async function executeToolCall(
             : null;
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
-        const exitAssessment = evaluateReduceOnlyExitAssessment({
-          reduceOnly,
-          thesisInvalidationHit,
-          exitMode,
-        });
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =
@@ -996,8 +992,22 @@ export async function executeToolCall(
           }
         }
         const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
+        const exitFsmEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm);
+        const normalizedReduceOnlyExit = normalizeReduceOnlyExitFsmInput({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+        });
+        exitMode = normalizedReduceOnlyExit.exitMode;
+        thesisInvalidationHit = normalizedReduceOnlyExit.thesisInvalidationHit;
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
         const exitFsmValidation = validateReduceOnlyExitFsm({
-          enabled: Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm),
+          enabled: exitFsmEnabled,
           reduceOnly,
           exitMode,
           thesisInvalidationHit,

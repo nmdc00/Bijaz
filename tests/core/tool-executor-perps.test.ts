@@ -377,6 +377,72 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('normalizes missing reduce-only exit_mode when exit FSM enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it('normalizes conflicting reduce-only invalidation fields when exit FSM enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        exit_mode: 'take_profit',
+        thesis_invalidation_hit: true,
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
   it('persists deterministic direction/timing/sizing/exit scores for closed trades', async () => {
     let markPrice = 100;
     const dynamicMarketClient = {
