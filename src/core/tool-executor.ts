@@ -26,6 +26,12 @@ import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
 import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
+import {
+  hydrateEntryTradeContract,
+  normalizeReduceOnlyExitFsmInput,
+  validateEntryTradeContract,
+  validateReduceOnlyExitFsm,
+} from './trade_contract.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -934,21 +940,32 @@ export async function executeToolCall(
           Number.isFinite(Number(toolInput.thesis_expires_at_ms))
             ? Number(toolInput.thesis_expires_at_ms)
             : null;
-        const thesisInvalidationHit =
+        let thesisInvalidationHit =
           typeof toolInput.thesis_invalidation_hit === 'boolean'
             ? toolInput.thesis_invalidation_hit
             : null;
-        const exitMode = normalizeExitMode(toolInput.exit_mode);
+        let exitMode = normalizeExitMode(toolInput.exit_mode);
         const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
         const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
         const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
+        const tradeArchetype =
+          typeof toolInput.trade_archetype === 'string' ? toolInput.trade_archetype.trim() : null;
+        const invalidationType =
+          typeof toolInput.invalidation_type === 'string' ? toolInput.invalidation_type.trim() : null;
+        const invalidationPrice = toFiniteNumberOrNull(toolInput.invalidation_price);
+        const timeStopAtMs =
+          toolInput.time_stop_at_ms != null && Number.isFinite(Number(toolInput.time_stop_at_ms))
+            ? Number(toolInput.time_stop_at_ms)
+            : null;
+        const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
+        const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
+        const emergencyOverride = Boolean(toolInput.emergency_override ?? false);
+        const emergencyReason =
+          typeof toolInput.emergency_reason === 'string' && toolInput.emergency_reason.trim().length > 0
+            ? toolInput.emergency_reason.trim()
+            : null;
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
-        const exitAssessment = evaluateReduceOnlyExitAssessment({
-          reduceOnly,
-          thesisInvalidationHit,
-          exitMode,
-        });
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =
@@ -961,7 +978,74 @@ export async function executeToolCall(
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
+        const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
+        const exitFsmEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm);
+        const normalizedReduceOnlyExit = normalizeReduceOnlyExitFsmInput({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+        });
+        exitMode = normalizedReduceOnlyExit.exitMode;
+        thesisInvalidationHit = normalizedReduceOnlyExit.thesisInvalidationHit;
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
+        const exitFsmValidation = validateReduceOnlyExitFsm({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+          emergencyOverride,
+          emergencyReason,
+        });
+        if (!exitFsmValidation.valid) {
+          return { success: false, error: exitFsmValidation.error };
+        }
+        const tradeContractJournalFields = {
+          tradeArchetype: null as 'scalp' | 'intraday' | 'swing' | null,
+          invalidationType: null as 'price_level' | 'structure_break' | null,
+          invalidationPrice: null as number | null,
+          timeStopAtMs: null as number | null,
+          takeProfitR: null as number | null,
+          trailMode: null as 'none' | 'atr' | 'structure' | null,
+          emergencyOverride: emergencyOverride || null,
+          emergencyReason,
+        };
         const market = await ctx.marketClient.getMarket(symbol);
+        const hydratedContractInput = hydrateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          side: side as 'buy' | 'sell',
+          markPrice: market.markPrice ?? null,
+          input: {
+            tradeArchetype,
+            invalidationType,
+            invalidationPrice,
+            timeStopAtMs,
+            takeProfitR,
+            trailMode,
+          },
+        });
+        const contractValidation = validateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          input: hydratedContractInput,
+        });
+        if (!contractValidation.valid) {
+          return { success: false, error: contractValidation.error };
+        }
+        const resolvedContract = contractValidation.contract;
+        if (resolvedContract) {
+          tradeContractJournalFields.tradeArchetype = resolvedContract.tradeArchetype;
+          tradeContractJournalFields.invalidationType = resolvedContract.invalidationType;
+          tradeContractJournalFields.invalidationPrice = resolvedContract.invalidationPrice;
+          tradeContractJournalFields.timeStopAtMs = resolvedContract.timeStopAtMs;
+          tradeContractJournalFields.takeProfitR = resolvedContract.takeProfitR;
+          tradeContractJournalFields.trailMode = resolvedContract.trailMode;
+        }
         const feeEstimate = await estimatePerpOrderFee(ctx, {
           orderType,
           size: requestedSize,
@@ -1002,6 +1086,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -1072,6 +1157,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -1121,6 +1207,7 @@ export async function executeToolCall(
                 noveltyScore,
                 marketConfirmationScore,
                 thesisExpiresAtMs,
+                ...tradeContractJournalFields,
                 thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
                 exitMode: exitAssessment.exitMode,
                 emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -1204,6 +1291,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisCorrect: exitAssessment.thesisCorrect,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
@@ -1226,7 +1314,16 @@ export async function executeToolCall(
           startTimeMs: Math.max(0, executionStartMs - 10_000),
         });
         let componentScores:
-          | { directionScore: number; timingScore: number; sizingScore: number; exitScore: number }
+          | {
+              directionScore: number;
+              timingScore: number;
+              sizingScore: number;
+              exitScore: number;
+              capturedR: number | null;
+              leftOnTableR: number | null;
+              wouldHit2R: boolean | null;
+              wouldHit3R: boolean | null;
+            }
           | null = null;
         if (reduceOnly) {
           try {
@@ -1248,6 +1345,7 @@ export async function executeToolCall(
               exitPrice: market.markPrice ?? null,
               pricePathHigh: closePathHigh,
               pricePathLow: closePathLow,
+              invalidationPrice: reference?.invalidationPrice ?? invalidationPrice,
             });
           } catch {
             componentScores = computeClosedTradeComponentScores({
@@ -1259,6 +1357,7 @@ export async function executeToolCall(
               exitPrice: market.markPrice ?? null,
               pricePathHigh: closePathHigh,
               pricePathLow: closePathLow,
+              invalidationPrice,
             });
           }
         }
@@ -1302,6 +1401,7 @@ export async function executeToolCall(
             noveltyScore,
             marketConfirmationScore,
             thesisExpiresAtMs,
+            ...tradeContractJournalFields,
             thesisCorrect: exitAssessment.thesisCorrect,
             thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
             exitMode: exitAssessment.exitMode,
@@ -1311,10 +1411,18 @@ export async function executeToolCall(
             timingScore: componentScores?.timingScore ?? null,
             sizingScore: componentScores?.sizingScore ?? null,
             exitScore: componentScores?.exitScore ?? null,
+            capturedR: componentScores?.capturedR ?? null,
+            leftOnTableR: componentScores?.leftOnTableR ?? null,
+            wouldHit2R: componentScores?.wouldHit2R ?? null,
+            wouldHit3R: componentScores?.wouldHit3R ?? null,
             direction_score: componentScores?.directionScore ?? null,
             timing_score: componentScores?.timingScore ?? null,
             sizing_score: componentScores?.sizingScore ?? null,
             exit_score: componentScores?.exitScore ?? null,
+            captured_r: componentScores?.capturedR ?? null,
+            left_on_table_r: componentScores?.leftOnTableR ?? null,
+            would_hit_2r: componentScores?.wouldHit2R ?? null,
+            would_hit_3r: componentScores?.wouldHit3R ?? null,
             realizedFeeUsd: realizedFee.realized_fee_usd,
             realizedFeeToken: realizedFee.realized_fee_token,
             realizedFillCount: realizedFee.realized_fill_count,

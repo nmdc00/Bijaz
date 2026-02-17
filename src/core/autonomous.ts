@@ -100,6 +100,8 @@ export interface OperatorStatusSnapshot {
     minEdgeOverride: number | null;
     maxTradesPerScanOverride: number | null;
     leverageCapOverride: number | null;
+    tradeContractEnforced: boolean;
+    decisionQualityGateEnabled: boolean;
   };
   lastTrade: OperatorTradeSnapshot | null;
   nextScanAt: string | null;
@@ -753,6 +755,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         minEdgeOverride: policyState.minEdgeOverride,
         maxTradesPerScanOverride: policyState.maxTradesPerScanOverride,
         leverageCapOverride: policyState.leverageCapOverride,
+        tradeContractEnforced: Boolean((this.thufirConfig.autonomy as any)?.tradeContract?.enabled),
+        decisionQualityGateEnabled: Boolean((this.thufirConfig.autonomy as any)?.tradeQuality?.enabled),
       },
       lastTrade: this.getLastTradeSnapshot(),
       nextScanAt: this.getNextScanAt(),

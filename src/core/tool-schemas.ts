@@ -570,6 +570,41 @@ export const THUFIR_TOOLS: Tool[] = [
           description: 'List of source refs/urls/intel ids used for a news-triggered trade',
         },
         hypothesis_id: { type: 'string', description: 'Optional hypothesis id linking entry and exit' },
+        trade_archetype: {
+          type: 'string',
+          enum: ['scalp', 'intraday', 'swing'],
+          description: 'Execution archetype required when trade-contract enforcement is enabled',
+        },
+        invalidation_type: {
+          type: 'string',
+          enum: ['price_level', 'structure_break'],
+          description: 'Invalidation mode required when trade-contract enforcement is enabled',
+        },
+        invalidation_price: {
+          type: 'number',
+          description: 'Required for invalidation_type=price_level',
+        },
+        time_stop_at_ms: {
+          type: 'number',
+          description: 'Unix ms time-stop deadline for the trade contract',
+        },
+        take_profit_r: {
+          type: 'number',
+          description: 'Optional target expressed in R-multiples',
+        },
+        trail_mode: {
+          type: 'string',
+          enum: ['none', 'atr', 'structure'],
+          description: 'Trailing mode for contract-based management',
+        },
+        emergency_override: {
+          type: 'boolean',
+          description: 'Allow manual/unknown reduce-only exit only when true under FSM enforcement',
+        },
+        emergency_reason: {
+          type: 'string',
+          description: 'Required rationale when emergency_override=true',
+        },
         thesis_invalidation_hit: {
           type: 'boolean',
           description: 'For reduce-only exits: true if recorded invalidation condition was hit',

@@ -114,6 +114,71 @@ describe('tool-executor perps', () => {
     }
   });
 
+  it('autofills missing entry contract fields when trade-contract enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.001 },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enabled: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it('accepts entry orders with a valid contract when enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const nowMs = Date.now();
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTC',
+        side: 'buy',
+        size: 0.01,
+        trade_archetype: 'intraday',
+        invalidation_type: 'price_level',
+        invalidation_price: 49000,
+        time_stop_at_ms: nowMs + 2 * 60 * 60 * 1000,
+        take_profit_r: 2,
+        trail_mode: 'structure',
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enabled: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
   it('perp_place_order blocks leverage above risk max', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
@@ -213,6 +278,142 @@ describe('tool-executor perps', () => {
         exit_mode: 'manual',
       },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it('blocks manual reduce-only exits when exit FSM enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        exit_mode: 'manual',
+        thesis_invalidation_hit: false,
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(false);
+    expect(String(res.error)).toMatch(/manual\/unknown reduce-only exits are blocked/i);
+  });
+
+  it('allows manual reduce-only exits with emergency override under FSM enforcement', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        exit_mode: 'manual',
+        emergency_override: true,
+        emergency_reason: 'Exchange-side stop desynced after outage',
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it('normalizes missing reduce-only exit_mode when exit FSM enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it('normalizes conflicting reduce-only invalidation fields when exit FSM enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        exit_mode: 'take_profit',
+        thesis_invalidation_hit: true,
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
     );
     expect(res.success).toBe(true);
   });

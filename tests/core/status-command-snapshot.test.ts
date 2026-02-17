@@ -36,6 +36,8 @@ vi.mock('../../src/core/autonomous.js', () => ({
           minEdgeOverride: null,
           maxTradesPerScanOverride: null,
           leverageCapOverride: null,
+          tradeContractEnforced: false,
+          decisionQualityGateEnabled: false,
         },
         lastTrade: {
           marketId: 'ETH',

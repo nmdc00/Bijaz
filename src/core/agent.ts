@@ -146,7 +146,11 @@ export class ThufirAgent {
     return this.toolContext;
   }
 
-  async handleMessage(sender: string, text: string): Promise<string> {
+  async handleMessage(
+    sender: string,
+    text: string,
+    onProgress?: (message: string) => Promise<void> | void
+  ): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);
 
@@ -607,7 +611,7 @@ Just type naturally to chat about markets, risks, or positioning.
       return autoTradeResponse;
     }
     try {
-      return await this.conversation.chat(sender, trimmed);
+      return await this.conversation.chat(sender, trimmed, onProgress);
     } catch (error) {
       this.logger.error('Conversation error', error);
       return `Sorry, I encountered an error. Try again or use /help for commands.`;
