@@ -62,6 +62,51 @@ const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
 const MAX_PARALLEL_READ_STEPS = 3;
 const MUTATING_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
 const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
+const EXECUTION_INTENT_PATTERNS = [
+  /\b(buy|sell|place|execute|open|close|reduce|trim|cut|flatten|cancel)\b/i,
+  /\b(go|going)\s+(long|short)\b/i,
+  /\b(rebalance|de-risk|derisk)\b/i,
+  /\b(take\s+(profit|tp)|set\s+(sl|stop.?loss|tp))/i,
+];
+const RETROSPECTIVE_INTENT_PATTERNS = [
+  /\b(why|reason|explain|walk me through|what happened|how come)\b/i,
+  /\b(prior|previous|last|earlier)\b/i,
+  /\b(trade|position|order|long|short)\b/i,
+];
+const LOSS_ALERT_PATTERNS = [
+  /\b(losing money|loss(?:es)?|drawdown|bleeding|underperforming|down bad)\b/i,
+  /\b(you('?re| are)\s+losing)\b/i,
+];
+
+function hasAnyPattern(input: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(input));
+}
+
+function isTradeRetrospectiveGoal(goal: string): boolean {
+  return (
+    hasAnyPattern(goal, RETROSPECTIVE_INTENT_PATTERNS) &&
+    /\b(trade|position|order|long|short)\b/i.test(goal)
+  );
+}
+
+function isTradeExecutionIntent(goal: string): boolean {
+  if (isTradeRetrospectiveGoal(goal)) {
+    return false;
+  }
+  if (hasAnyPattern(goal, LOSS_ALERT_PATTERNS) && !hasAnyPattern(goal, EXECUTION_INTENT_PATTERNS)) {
+    return false;
+  }
+  return hasAnyPattern(goal, EXECUTION_INTENT_PATTERNS);
+}
+
+function shouldPrefetchTradeHistory(goal: string): boolean {
+  return isTradeRetrospectiveGoal(goal) || hasAnyPattern(goal, LOSS_ALERT_PATTERNS);
+}
+
+function inferSymbolFromGoal(goal: string): string | undefined {
+  const match = goal.toUpperCase().match(/\b(BTC|ETH|SOL|AVAX|XRP|DOGE|ADA|BNB)\b/);
+  return match ? match[1] : undefined;
+}
 
 function isNoTradeDecisionStep(step: PlanStep): boolean {
   return !step.requiresTool && step.description.trim().startsWith(NO_TRADE_DECISION_PREFIX);
@@ -156,6 +201,9 @@ function enforceTradeTerminalContract(
   reason: string
 ): AgentState {
   if (state.mode !== 'trade' || !state.plan) {
+    return state;
+  }
+  if (!isTradeExecutionIntent(state.goal)) {
     return state;
   }
   if (hasTerminalTradeStep(state.plan)) {
@@ -505,11 +553,13 @@ Based on the tool results and analysis provided, generate a clear, actionable re
 6. **CRITICAL — You ARE connected to live tools**: You have full access to perp_place_order, get_portfolio, get_positions, perp_cancel_order, and all other trading tools. The orchestrator executes them on your behalf. NEVER say "I don't have live tools", "I can't execute", "tools aren't wired", or "I'm not connected". If a tool call failed, report the specific error. If no tool was called, that means the plan didn't include it — not that tools are unavailable.
 7. **Trade, don't talk about trading**: If the user wants you to trade, your response should report what you traded (or why a specific tool call failed), not describe what you "would" do hypothetically.
 8. **Ownership voice**: Speak as the autonomous operator of the managed trading book. Use first person ("I opened", "I reduced", "my position"). Avoid framing trade decisions as user-owned ("your position", "if you want").
-9. **Trade response contract**: In trade mode, always use this exact structure:
+9. **Trade response contract**: Use this exact structure only when a terminal trade tool was executed in this cycle or the user explicitly asked for trade execution:
 Action: ...
 Book State: ...
 Risk: ...
 Next Action: ...
+10. **Loss complaints are first-class**: If the user says performance is bad (losing money/drawdown), acknowledge that concern in the first line and ground it in tool evidence before proposing next actions.
+11. **No phantom history gaps**: For prior-trade "why" questions, use trade_review/perp_trade_journal_list evidence and do not claim missing logs unless those tools failed in this cycle.
 
 Respond directly to the user's goal. Do not explain your reasoning process unless asked.`;
 
@@ -584,7 +634,11 @@ function buildTradeNextActionSummary(state: AgentState): string {
 }
 
 function enforceTradeResponseContract(response: string, state: AgentState): string {
-  if (state.mode !== 'trade') {
+  const shouldEnforce =
+    state.mode === 'trade' &&
+    (isTradeExecutionIntent(state.goal) ||
+      state.toolExecutions.some((execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName)));
+  if (!shouldEnforce) {
     return response;
   }
 
@@ -702,6 +756,40 @@ export async function runOrchestrator(
   // Combine memory sources
   if (memoryParts.length > 0) {
     state = setMemoryContext(state, memoryParts.join('\n\n'));
+    ctx.onUpdate?.(state);
+  }
+
+  if (state.mode === 'trade' && shouldPrefetchTradeHistory(goal)) {
+    const availableTools = new Set(ctx.toolRegistry.listNames());
+    const symbol = inferSymbolFromGoal(goal);
+    const runPrefetch = async (toolName: string, input: Record<string, unknown>) => {
+      try {
+        const execution = await ctx.toolRegistry.execute(toolName, input, ctx.toolContext);
+        state = addToolExecution(state, execution);
+        if (!execution.result.success) {
+          const failed = execution.result as { success: false; error: string };
+          state = addWarning(state, `${toolName} prefetch failed: ${failed.error}`);
+        }
+      } catch (error) {
+        state = addWarning(
+          state,
+          `${toolName} prefetch threw: ${error instanceof Error ? error.message : 'Unknown'}`
+        );
+      }
+    };
+
+    if (availableTools.has('perp_trade_journal_list')) {
+      await runPrefetch('perp_trade_journal_list', {
+        limit: 200,
+        ...(symbol ? { symbol } : {}),
+      });
+    }
+    if (availableTools.has('trade_review')) {
+      await runPrefetch('trade_review', {
+        limit: 200,
+        ...(symbol ? { symbol } : {}),
+      });
+    }
     ctx.onUpdate?.(state);
   }
 
