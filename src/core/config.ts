@@ -582,6 +582,7 @@ const ConfigSchema = z.object({
                   watchlistOnly: z.boolean().optional(),
                   eventDriven: z.boolean().optional(),
                   eventDrivenMinItems: z.number().optional(),
+                  eventDrivenCooldownSeconds: z.number().optional(),
                   fullAuto: z.boolean().optional(),
                   minEdge: z.number().optional(),
                   requireHighConfidence: z.boolean().optional(),
@@ -671,6 +672,7 @@ const ConfigSchema = z.object({
       watchlistOnly: z.boolean().default(true),
       eventDriven: z.boolean().default(false),
       eventDrivenMinItems: z.number().default(1),
+      eventDrivenCooldownSeconds: z.number().default(120),
       strategy: z.enum(['opportunity', 'discovery']).default('discovery'),
       probeRiskFraction: z.number().default(0.005),
       // Full autonomous mode options
