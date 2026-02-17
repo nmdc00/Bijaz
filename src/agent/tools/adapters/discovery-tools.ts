@@ -60,6 +60,7 @@ export const perpPlaceOrderTool: ToolDefinition = {
     thesis_expires_at_ms: z.number().optional(),
     news_sources: z.array(z.string()).optional(),
     hypothesis_id: z.string().optional(),
+    trade_archetype: z.enum(['scalp', 'intraday', 'swing']).optional(),
     thesis_invalidation_hit: z.boolean().optional(),
     exit_mode: z.enum(['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown']).optional(),
     plan_context: z.record(z.unknown()).optional(),

@@ -312,6 +312,7 @@ export interface ThufirConfig {
     privateKey?: string;
     maxLeverage?: number;
     defaultSlippageBps?: number;
+    maxQuoteAgeMs?: number;
     symbols?: string[];
   };
   technical?: {

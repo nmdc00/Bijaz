@@ -43,6 +43,7 @@ import {
   seedPlaybookForBlocker,
   suggestedRemediationToolSteps,
 } from './blockers.js';
+import { classifyToolFailure } from './retry_classifier.js';
 import {
   createAgentState,
   updatePlan,
@@ -1003,7 +1004,136 @@ export async function runOrchestrator(
       }
 
       const execution = await executeToolStep(nextStep, state, ctx);
-      await processToolExecution(nextStep, execution);
+      state = addToolExecution(state, execution);
+
+      const stepBlockers = execution.result.success ? [] : detectBlockers(execution);
+
+      // Record structured incident artifacts on tool failure.
+      if (!execution.result.success) {
+        const failed = execution.result as { success: false; error: string };
+
+        // Persist incident (always), then seed any missing playbooks for detected blockers.
+        const primaryKind: AgentBlockerKind =
+          (stepBlockers[0]?.kind as AgentBlockerKind | undefined) ?? 'unknown';
+        recordAgentIncident({
+          goal,
+          mode: state.mode,
+          toolName: execution.toolName,
+          error: failed.error,
+          blockerKind: primaryKind,
+          details: {
+            stepId: nextStep.id,
+            planId: state.plan?.id ?? null,
+            detectedBlockers: stepBlockers.map((b) => ({
+              kind: b.kind,
+              summary: b.summary,
+              evidence: b.evidence,
+              suggestedNextSteps: b.suggestedNextSteps,
+              playbookKey: b.playbookKey ?? null,
+            })),
+          },
+        });
+
+        for (const b of stepBlockers) {
+          state = addWarning(state, `Detected blocker: ${b.kind} (${b.summary})`);
+          if (state.plan && !state.plan.blockers.includes(b.summary)) {
+            state = setPlan(state, {
+              ...state.plan,
+              blockers: [...state.plan.blockers, b.summary],
+              updatedAt: new Date().toISOString(),
+            });
+          }
+
+          if (b.playbookKey) {
+            const existing = getPlaybook(b.playbookKey);
+            if (!existing) {
+              const seed = seedPlaybookForBlocker(b.kind);
+              if (seed) {
+                upsertPlaybook(seed);
+              }
+            }
+          }
+        }
+      }
+
+      // Update plan with step result
+      if (execution.result.success) {
+        state = setPlan(state, completeStep(state.plan!, nextStep.id, execution.result));
+      } else {
+        const failedResult = execution.result as { success: false; error: string };
+        const failureClass = classifyToolFailure(execution.toolName, failedResult.error);
+        if (state.plan && stepBlockers.length > 0) {
+          if (failureClass.classification === 'terminal') {
+            state = setPlan(state, failStep(state.plan, nextStep.id, failedResult.error));
+            state = addWarning(
+              state,
+              `Terminal tool failure (${failureClass.reasonCode}); skipping same-cycle retry`
+            );
+          } else {
+            const injected = injectRemediationAndRetry({
+              plan: state.plan,
+              failedStep: nextStep,
+              blockers: stepBlockers,
+              toolRegistry: ctx.toolRegistry,
+            });
+            if (injected.injected) {
+              state = setPlan(state, injected.updated);
+              state = addWarning(
+                state,
+                `Injected ${injected.injectedCount} remediation step(s) after tool failure`
+              );
+            } else {
+              state = setPlan(state, failStep(state.plan, nextStep.id, failedResult.error));
+            }
+          }
+        } else {
+          state = setPlan(state, failStep(state.plan!, nextStep.id, failedResult.error));
+        }
+      }
+
+      // Reflect on tool result
+      const toolContext = toToolExecutionContext(execution);
+      reflectionState = {
+        ...reflectionState,
+        hypotheses: state.hypotheses,
+        assumptions: state.assumptions,
+        confidence: state.confidence,
+        toolExecutions: [...reflectionState.toolExecutions, toolContext],
+      };
+
+      try {
+        const reflection = await reflect(ctx.llm, reflectionState, toolContext);
+        state = applyReflectionToState(state, reflection);
+        reflectionState = applyReflection(reflectionState, reflection, toolContext);
+
+        // Check if reflection suggests plan revision
+        if (
+          shouldReviseAfterReflection(reflection, execution) &&
+          state.plan &&
+          state.plan.revisionCount < 3
+        ) {
+          const revisionResult = await revisePlan(ctx.llm, {
+            plan: state.plan,
+            reason: 'tool_result_unexpected',
+            context: reflection.revisionReason,
+            toolResult: execution.result,
+            triggerStepId: nextStep.id,
+          });
+
+          state = setPlan(state, revisionResult.plan);
+          state = enforceTradeTerminalContract(state, ctx, 'plan_revision');
+          for (const change of revisionResult.changes) {
+            state = addWarning(state, `Plan revised: ${change}`);
+          }
+        }
+      } catch (error) {
+        state = addWarning(
+          state,
+          `Reflection failed: ${error instanceof Error ? error.message : 'Unknown'}`
+        );
+      }
+
+      ctx.onUpdate?.(state);
     } else {
       // Non-tool step - mark as complete
       state = setPlan(state, completeStep(state.plan!, nextStep.id));
@@ -1369,6 +1499,16 @@ function mapEntryTriggerAlias(raw: string): string | null {
 
 export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
   const normalized = { ...input };
+  const normalizeEnum = (
+    raw: unknown,
+    allowed: string[],
+    aliasMap?: Record<string, string>
+  ): string | undefined => {
+    if (typeof raw !== 'string') return undefined;
+    const key = raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const mapped = aliasMap?.[key] ?? key;
+    return allowed.includes(mapped) ? mapped : undefined;
+  };
 
   if (typeof normalized.side === 'string') {
     normalized.side = normalized.side.toLowerCase().trim();
@@ -1421,6 +1561,49 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
     const value = normalized.thesis_invalidation_hit.toLowerCase().trim();
     if (value === 'true') normalized.thesis_invalidation_hit = true;
     if (value === 'false') normalized.thesis_invalidation_hit = false;
+  }
+
+  if (typeof normalized.thesis_invalidation_hit === 'string') {
+    const value = normalized.thesis_invalidation_hit.trim().toLowerCase();
+    if (value === 'true') normalized.thesis_invalidation_hit = true;
+    if (value === 'false') normalized.thesis_invalidation_hit = false;
+  }
+
+  const normalizedExitMode = normalizeEnum(
+    normalized.exit_mode,
+    ['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown'],
+    {
+      invalidation: 'thesis_invalidation',
+      thesis_invalidated: 'thesis_invalidation',
+      stop_loss: 'thesis_invalidation',
+      tp: 'take_profit',
+      takeprofit: 'take_profit',
+      time_stop: 'time_exit',
+      timeout: 'time_exit',
+      liquidity_probe: 'risk_reduction',
+      liquidity: 'risk_reduction',
+      de_risk: 'risk_reduction',
+      derisk: 'risk_reduction',
+      manual_close: 'manual',
+    }
+  );
+  if (normalizedExitMode) {
+    normalized.exit_mode = normalizedExitMode;
+  } else {
+    delete normalized.exit_mode;
+  }
+
+  const normalizedArchetype = normalizeEnum(
+    normalized.trade_archetype,
+    ['scalp', 'intraday', 'swing'],
+    { day_trade: 'intraday', daytrading: 'intraday' }
+  );
+  if (normalizedArchetype) {
+    normalized.trade_archetype = normalizedArchetype;
+  } else if (!Boolean(normalized.reduce_only)) {
+    normalized.trade_archetype = 'intraday';
+  } else {
+    delete normalized.trade_archetype;
   }
 
   // Ensure a positive minimal size so schema validation doesn't fail before execution.

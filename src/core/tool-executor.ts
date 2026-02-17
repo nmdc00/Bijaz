@@ -102,58 +102,7 @@ type PerpExitMode =
   | 'manual'
   | 'unknown';
 
-type PerpExecutionAttempt = {
-  attempt: number;
-  slippage_bps: number;
-  executed: boolean;
-  message: string;
-};
-
-function isNoImmediateMatchError(message: string | null | undefined): boolean {
-  if (!message) return false;
-  return /could not immediately match against any resting orders/i.test(message);
-}
-
-async function executePerpWithRetry(params: {
-  executor: ExecutionAdapter;
-  marketClient: MarketClient;
-  market: Market;
-  symbol: string;
-  decision: TradeDecision;
-  baseSlippageBps: number;
-}): Promise<{ result: TradeResult; attempts: PerpExecutionAttempt[] }> {
-  const slippageSequence = [params.baseSlippageBps, params.baseSlippageBps + 25, params.baseSlippageBps + 50]
-    .map((value) => Math.max(0, Math.min(300, value)));
-  const attempts: PerpExecutionAttempt[] = [];
-
-  for (let index = 0; index < slippageSequence.length; index += 1) {
-    const slippageBps = slippageSequence[index]!;
-    const market = index === 0 ? params.market : await params.marketClient.getMarket(params.symbol);
-    const attemptDecision: TradeDecision = {
-      ...params.decision,
-      marketSlippageBps: slippageBps,
-    };
-    const result = await params.executor.execute(market, attemptDecision);
-    attempts.push({
-      attempt: index + 1,
-      slippage_bps: slippageBps,
-      executed: result.executed,
-      message: result.message,
-    });
-
-    if (result.executed) {
-      return { result, attempts };
-    }
-    if (!isNoImmediateMatchError(result.message) || index === slippageSequence.length - 1) {
-      return { result, attempts };
-    }
-  }
-
-  return {
-    result: { executed: false, message: 'Execution failed before attempting order placement.' },
-    attempts,
-  };
-}
+type TradeArchetype = 'scalp' | 'intraday' | 'swing';
 
 function parseNewsSources(input: unknown): string[] | null {
   if (Array.isArray(input)) {
@@ -247,6 +196,48 @@ export function normalizeExitMode(input: unknown): PerpExitMode | null {
     value === 'unknown'
   ) {
     return value;
+  }
+  return null;
+}
+
+function normalizeTradeArchetype(input: unknown): TradeArchetype | null {
+  if (typeof input !== 'string') return null;
+  const value = input.trim();
+  if (value === 'scalp' || value === 'intraday' || value === 'swing') {
+    return value;
+  }
+  return null;
+}
+
+function validatePerpOrderContract(input: {
+  reduceOnly: boolean;
+  thesisInvalidationHit: boolean | null;
+  exitMode: PerpExitMode | null;
+  tradeArchetype: TradeArchetype | null;
+}): string | null {
+  const { reduceOnly, thesisInvalidationHit, exitMode, tradeArchetype } = input;
+
+  if (!reduceOnly) {
+    if (thesisInvalidationHit === true) {
+      return 'thesis_invalidation_hit=true conflicts with non-reduce-only order';
+    }
+    if (exitMode != null && exitMode !== 'unknown') {
+      return 'non-reduce-only order must not set exit_mode';
+    }
+    if (!tradeArchetype) {
+      return 'Missing/invalid trade_archetype (scalp|intraday|swing)';
+    }
+    return null;
+  }
+
+  if (thesisInvalidationHit === true && exitMode != null && exitMode !== 'thesis_invalidation') {
+    return 'thesis_invalidation_hit=true conflicts with non-invalidation exit_mode';
+  }
+  if (thesisInvalidationHit === false && exitMode === 'thesis_invalidation') {
+    return 'thesis_invalidation exit_mode requires thesis_invalidation_hit=true';
+  }
+  if (thesisInvalidationHit !== true && exitMode == null) {
+    return 'reduce-only exit requires exit_mode (thesis_invalidation|take_profit|time_exit|risk_reduction|manual|unknown)';
   }
   return null;
 }
@@ -985,29 +976,33 @@ export async function executeToolCall(
           typeof toolInput.thesis_invalidation_hit === 'boolean'
             ? toolInput.thesis_invalidation_hit
             : null;
-        let exitMode = normalizeExitMode(toolInput.exit_mode);
-        const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
-        const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
-        const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
-        const tradeArchetype =
-          typeof toolInput.trade_archetype === 'string' ? toolInput.trade_archetype.trim() : null;
-        const invalidationType =
-          typeof toolInput.invalidation_type === 'string' ? toolInput.invalidation_type.trim() : null;
-        const invalidationPrice = toFiniteNumberOrNull(toolInput.invalidation_price);
-        const timeStopAtMs =
-          toolInput.time_stop_at_ms != null && Number.isFinite(Number(toolInput.time_stop_at_ms))
-            ? Number(toolInput.time_stop_at_ms)
-            : null;
-        const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
-        const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
-        const emergencyOverride = Boolean(toolInput.emergency_override ?? false);
-        const emergencyReason =
-          typeof toolInput.emergency_reason === 'string' && toolInput.emergency_reason.trim().length > 0
-            ? toolInput.emergency_reason.trim()
-            : null;
+        const inputExitMode = normalizeExitMode(toolInput.exit_mode);
+        const tradeArchetype = normalizeTradeArchetype(toolInput.trade_archetype);
+        const exitMode: PerpExitMode | null =
+          inputExitMode ??
+          (reduceOnly
+            ? thesisInvalidationHit === true
+              ? 'thesis_invalidation'
+              : thesisInvalidationHit === false
+                ? 'unknown'
+                : null
+            : null);
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
-        const planContext = parsePlanContext(toolInput.plan_context);
+        const contractError = validatePerpOrderContract({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+          tradeArchetype,
+        });
+        if (contractError) {
+          return { success: false, error: contractError };
+        }
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =

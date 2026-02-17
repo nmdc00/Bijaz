@@ -58,7 +58,7 @@ describe('tool-executor calibration risk policy hook', () => {
 
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 1, signal_class: 'mean_reversion' },
+      { symbol: 'BTC', side: 'buy', size: 1, signal_class: 'mean_reversion', trade_archetype: 'intraday' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
 
