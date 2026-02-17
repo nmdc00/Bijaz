@@ -26,6 +26,13 @@ import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
+import {
+  createAlert,
+  markAlertSent,
+  recordAlertDelivery,
+  suppressAlert,
+} from '../memory/alerts.js';
+import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
 const config = loadConfig();
@@ -78,7 +85,7 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
     return;
   }
   const startedAt = Date.now();
-  const scanResult = await defaultAgent.getAutonomous().runScan();
+  const scanResult = await defaultAgent!.getAutonomous().runScan();
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );
@@ -667,7 +674,7 @@ if (mentatConfig?.enabled) {
             `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
             `and max delta ${(maxDelta * 100).toFixed(1)}%`,
           config: escalationConfig?.llmEnrichment,
-          onFallback: (error) => {
+          onFallback: (error: unknown) => {
             logger.warn('Alert LLM enrichment failed; sending mechanical fallback', {
               source: `mentat:${scheduleId}`,
               error: error instanceof Error ? error.message : String(error),
