@@ -5,6 +5,8 @@ import type { Market } from '../../src/execution/markets.js';
 
 const orderMock = vi.fn();
 const updateLeverageMock = vi.fn();
+let mockSzDecimals = 3;
+let mockMid = 100;
 
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: class {
@@ -12,10 +14,10 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => ({
       return { order: orderMock, updateLeverage: updateLeverageMock };
     }
     async listPerpMarkets() {
-      return [{ symbol: 'BTC', assetId: 0, szDecimals: 3, maxLeverage: 10 }];
+      return [{ symbol: 'BTC', assetId: 0, szDecimals: mockSzDecimals, maxLeverage: 10 }];
     }
     async getAllMids() {
-      return { BTC: 100 };
+      return { BTC: mockMid };
     }
   },
 }));
@@ -28,6 +30,8 @@ describe('HyperliquidLiveExecutor', () => {
   beforeEach(() => {
     orderMock.mockReset();
     updateLeverageMock.mockReset();
+    mockSzDecimals = 3;
+    mockMid = 100;
     orderMock.mockResolvedValue({
       response: { data: { statuses: [{ resting: { oid: 123 } }] } },
     });
@@ -57,7 +61,7 @@ describe('HyperliquidLiveExecutor', () => {
         {
           a: 0,
           b: true,
-          p: '100.5',
+          p: '100.49',
           s: '1',
           r: false,
           t: { limit: { tif: 'Ioc' } },
@@ -100,5 +104,35 @@ describe('HyperliquidLiveExecutor', () => {
 
     expect(result.executed).toBe(false);
     expect(result.message).toContain('bad request');
+  });
+
+  it('formats market price with Hyperliquid precision rules', async () => {
+    mockSzDecimals = 5;
+    mockMid = 66872.5;
+    const config: ThufirConfig = {
+      hyperliquid: { defaultSlippageBps: 0 },
+    } as ThufirConfig;
+    const executor = new HyperliquidLiveExecutor({ config });
+
+    const result = await executor.execute(market, {
+      action: 'sell',
+      size: 0.001,
+      orderType: 'market',
+    });
+
+    expect(result.executed).toBe(true);
+    expect(orderMock).toHaveBeenCalledWith({
+      orders: [
+        {
+          a: 0,
+          b: false,
+          p: '66872',
+          s: '0.001',
+          r: false,
+          t: { limit: { tif: 'Ioc' } },
+        },
+      ],
+      grouping: 'na',
+    });
   });
 });

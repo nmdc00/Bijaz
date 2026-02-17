@@ -2,6 +2,7 @@ import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../exe
 import type { Market } from '../markets.js';
 import type { ThufirConfig } from '../../core/config.js';
 import { HyperliquidClient } from '../hyperliquid/client.js';
+import { formatPrice } from '@nktkas/hyperliquid/utils';
 
 export interface HyperliquidLiveExecutorOptions {
   config: ThufirConfig;
@@ -69,11 +70,15 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         if (!price || price <= 0) {
           return { executed: false, message: 'Invalid decision: missing or invalid price.' };
         }
-        // Best effort: format the provided price; HL may reject prices not aligned to tick size.
-        priceStr = formatDecimal(price, 8);
+        priceStr = formatPerpPrice(price, marketMeta.szDecimals ?? 6);
       } else {
-        // For IOC-style market orders, pick a price from the live order book to ensure tick alignment.
-        priceStr = await this.getIocPriceStr(symbol, side, marketSlippageBps);
+        // For IOC-style market orders, pick a marketable price and format it to HL precision rules.
+        priceStr = await this.getIocPriceStr(
+          symbol,
+          side,
+          marketMeta.szDecimals ?? 6,
+          marketSlippageBps
+        );
       }
       if (!priceStr || !Number.isFinite(Number(priceStr)) || Number(priceStr) <= 0) {
         return { executed: false, message: `Invalid decision: missing or invalid price (p=${priceStr}).` };
@@ -183,6 +188,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
   private async getIocPriceStr(
     symbol: string,
     side: 'buy' | 'sell',
+    szDecimals: number,
     slippageBps = this.defaultSlippageBps
   ): Promise<string> {
     // Prefer top-of-book prices for tick alignment.
@@ -197,9 +203,9 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         if (Number.isFinite(base) && base > 0) {
           const slippage = Math.max(0, slippageBps) / 10000;
           const aggressivePx = side === 'buy' ? base * (1 + slippage) : base * (1 - slippage);
-          return formatDecimal(aggressivePx, 8);
+          return formatPerpPrice(aggressivePx, szDecimals);
         }
-        return best.trim();
+        return formatPerpPrice(base, szDecimals);
       }
     } catch {
       // fall through
@@ -215,7 +221,12 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       if (Array.isArray(impactPxs)) {
         const best = side === 'buy' ? impactPxs[1] : impactPxs[0];
         if (typeof best === 'string' && best.trim().length > 0) {
-          return best.trim();
+          const base = Number(best.trim());
+          if (Number.isFinite(base) && base > 0) {
+            const slippage = Math.max(0, slippageBps) / 10000;
+            const aggressivePx = side === 'buy' ? base * (1 + slippage) : base * (1 - slippage);
+            return formatPerpPrice(aggressivePx, szDecimals);
+          }
         }
       }
     } catch {
@@ -224,7 +235,15 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
 
     // Last resort: mid + slippage (may be off-tick; better than nothing).
     const px = await this.estimateMarketPrice(symbol, side, slippageBps);
-    return formatDecimal(px, 8);
+    return formatPerpPrice(px, szDecimals);
+  }
+}
+
+function formatPerpPrice(price: number, szDecimals: number): string {
+  try {
+    return formatPrice(price, szDecimals, 'perp');
+  } catch {
+    return formatDecimal(price, 8);
   }
 }
 
