@@ -33,6 +33,22 @@ const ConfigSchema = z.object({
     showFragilityTrace: z.boolean().default(false),
     persistPlans: z.boolean().default(true),
     allowFallbackNonCritical: z.boolean().default(true),
+    nonCriticalFallbackSuppressReasons: z
+      .array(z.string())
+      .default([
+        'info_digest',
+        'session_compaction',
+        'proactive_query_refine',
+        'proactive_follow_up_queries',
+      ]),
+    nonCriticalReasonCooldownSeconds: z
+      .object({
+        infoDigest: z.number().default(10),
+        sessionCompaction: z.number().default(300),
+        proactiveQueryRefine: z.number().default(60),
+        proactiveFollowUpQueries: z.number().default(60),
+      })
+      .default({}),
     alwaysIncludeTime: z.boolean().default(false),
     proactiveRefresh: z
       .object({
@@ -537,6 +553,16 @@ const ConfigSchema = z.object({
                       fundingSymbols: z.array(z.string()).optional(),
                     })
                     .default({}),
+                  allowFallbackNonCritical: z.boolean().optional(),
+                  nonCriticalFallbackSuppressReasons: z.array(z.string()).optional(),
+                  nonCriticalReasonCooldownSeconds: z
+                    .object({
+                      infoDigest: z.number().optional(),
+                      sessionCompaction: z.number().optional(),
+                      proactiveQueryRefine: z.number().optional(),
+                      proactiveFollowUpQueries: z.number().optional(),
+                    })
+                    .optional(),
                   trivialTaskProvider: z.enum(['local', 'openai', 'anthropic']).optional(),
                   trivialTaskModel: z.string().optional(),
                   systemTools: z
@@ -862,6 +888,7 @@ const ConfigSchema = z.object({
           fetchPerQuery: z.number().default(1),
           fetchMaxChars: z.number().default(4000),
           channels: z.array(z.string()).default([]),
+          suppressLlmDuringActiveChatSeconds: z.number().default(90),
         })
         .default({}),
       heartbeat: z
@@ -870,6 +897,7 @@ const ConfigSchema = z.object({
           intervalMinutes: z.number().default(30),
           channels: z.array(z.string()).default([]),
           target: z.string().default('last'),
+          suppressLlmDuringActiveChatSeconds: z.number().default(90),
         })
         .default({}),
       intelAlerts: z
