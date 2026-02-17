@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { validateEntryTradeContract, validateReduceOnlyExitFsm } from '../../src/core/trade_contract.js';
+import {
+  hydrateEntryTradeContract,
+  validateEntryTradeContract,
+  validateReduceOnlyExitFsm,
+} from '../../src/core/trade_contract.js';
 
 describe('trade contract validation', () => {
   const nowMs = Date.parse('2026-02-17T12:00:00Z');
@@ -71,6 +75,23 @@ describe('trade contract validation', () => {
       nowMs,
     });
     expect(result.valid).toBe(true);
+  });
+
+  it('hydrates missing entry fields deterministically when enforcement is enabled', () => {
+    const hydrated = hydrateEntryTradeContract({
+      enabled: true,
+      reduceOnly: false,
+      side: 'buy',
+      markPrice: 100,
+      input: {},
+      nowMs,
+    });
+
+    expect(hydrated.tradeArchetype).toBe('intraday');
+    expect(hydrated.invalidationType).toBe('price_level');
+    expect(Number(hydrated.invalidationPrice)).toBeGreaterThan(0);
+    expect(Number(hydrated.timeStopAtMs)).toBeGreaterThan(nowMs);
+    expect(hydrated.trailMode).toBe('structure');
   });
 
   it('rejects discretionary reduce-only exits when FSM enforcement is enabled', () => {

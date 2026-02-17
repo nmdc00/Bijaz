@@ -41,6 +41,12 @@ const MIN_HOLD_MS_BY_ARCHETYPE: Record<TradeArchetype, number> = {
   swing: 4 * 60 * 60 * 1000,
 };
 
+const DEFAULT_HOLD_MS_BY_ARCHETYPE: Record<TradeArchetype, number> = {
+  scalp: 90 * 60 * 1000,
+  intraday: 6 * 60 * 60 * 1000,
+  swing: 24 * 60 * 60 * 1000,
+};
+
 function normalizeArchetype(raw: string | null | undefined): TradeArchetype | null {
   if (raw === 'scalp' || raw === 'intraday' || raw === 'swing') return raw;
   return null;
@@ -54,6 +60,57 @@ function normalizeInvalidationType(raw: string | null | undefined): Invalidation
 function normalizeTrailMode(raw: string | null | undefined): TrailMode | null {
   if (raw === 'none' || raw === 'atr' || raw === 'structure') return raw;
   return null;
+}
+
+function toFiniteOrNull(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function hydrateEntryTradeContract(params: {
+  enabled: boolean;
+  reduceOnly: boolean;
+  side: 'buy' | 'sell';
+  markPrice: number | null;
+  input: EntryTradeContractInput;
+  nowMs?: number;
+}): EntryTradeContractInput {
+  if (!params.enabled || params.reduceOnly) {
+    return params.input;
+  }
+
+  const nowMs = params.nowMs ?? Date.now();
+  const archetype = normalizeArchetype(params.input.tradeArchetype) ?? 'intraday';
+  const invalidationType =
+    normalizeInvalidationType(params.input.invalidationType) ??
+    (toFiniteOrNull(params.markPrice) != null ? 'price_level' : 'structure_break');
+  const trailMode = normalizeTrailMode(params.input.trailMode) ?? 'structure';
+  const takeProfitR =
+    toFiniteOrNull(params.input.takeProfitR) ??
+    (trailMode === 'none' ? 2 : null);
+  const timeStopAtMs =
+    toFiniteOrNull(params.input.timeStopAtMs) ??
+    nowMs + DEFAULT_HOLD_MS_BY_ARCHETYPE[archetype];
+
+  let invalidationPrice = toFiniteOrNull(params.input.invalidationPrice);
+  const markPrice = toFiniteOrNull(params.markPrice);
+  if (invalidationType === 'price_level' && (invalidationPrice == null || invalidationPrice <= 0) && markPrice != null && markPrice > 0) {
+    const stopBufferPct = 0.015;
+    invalidationPrice =
+      params.side === 'buy'
+        ? markPrice * (1 - stopBufferPct)
+        : markPrice * (1 + stopBufferPct);
+  }
+
+  return {
+    tradeArchetype: archetype,
+    invalidationType,
+    invalidationPrice,
+    timeStopAtMs,
+    takeProfitR,
+    trailMode,
+  };
 }
 
 export function validateEntryTradeContract(params: {
