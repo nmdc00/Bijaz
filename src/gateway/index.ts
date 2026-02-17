@@ -674,7 +674,7 @@ if (mentatConfig?.enabled) {
             `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
             `and max delta ${(maxDelta * 100).toFixed(1)}%`,
           config: escalationConfig?.llmEnrichment,
-          onFallback: (error) => {
+          onFallback: (error: unknown) => {
             logger.warn('Alert LLM enrichment failed; sending mechanical fallback', {
               source: `mentat:${scheduleId}`,
               error: error instanceof Error ? error.message : String(error),

@@ -280,18 +280,19 @@ class InfraLlmClient implements LlmClient {
     }
 
     if (!context.critical) {
-      const cooldownMs = resolveNonCriticalReasonCooldownMs(this.config, context.reason);
+      const reason = context.reason ?? 'default';
+      const cooldownMs = resolveNonCriticalReasonCooldownMs(this.config, reason);
       if (cooldownMs > 0) {
-        const last = nonCriticalReasonLastRunMs.get(context.reason) ?? 0;
+        const last = nonCriticalReasonLastRunMs.get(reason) ?? 0;
         const nowMs = Date.now();
         if (nowMs - last < cooldownMs) {
           this.logger.warn('LLM non-critical call throttled by reason cooldown', {
-            reason: context.reason,
+            reason,
             waitMs: cooldownMs - (nowMs - last),
           });
           return { content: '', model: meta.model };
         }
-        nonCriticalReasonLastRunMs.set(context.reason, nowMs);
+        nonCriticalReasonLastRunMs.set(reason, nowMs);
       }
     }
 
