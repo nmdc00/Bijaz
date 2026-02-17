@@ -52,6 +52,10 @@ function mergeConfig(
       ...base.agent.proactiveRefresh,
       ...(agentOverride?.proactiveRefresh ?? {}),
     },
+    nonCriticalReasonCooldownSeconds: {
+      ...base.agent.nonCriticalReasonCooldownSeconds,
+      ...(agentOverride?.nonCriticalReasonCooldownSeconds ?? {}),
+    },
   };
   return {
     ...base,

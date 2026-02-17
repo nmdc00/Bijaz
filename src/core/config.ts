@@ -632,6 +632,8 @@ const ConfigSchema = z.object({
                       blockBelowScore: z.number().optional(),
                       downweightBelowScore: z.number().optional(),
                       downweightMultiplier: z.number().optional(),
+                    })
+                    .optional(),
                   asyncEnrichment: z
                     .object({
                       enabled: z.boolean().optional(),
@@ -731,6 +733,8 @@ const ConfigSchema = z.object({
           blockBelowScore: z.number().default(0.45),
           downweightBelowScore: z.number().default(0.6),
           downweightMultiplier: z.number().default(0.6),
+        })
+        .default({}),
       asyncEnrichment: z
         .object({
           enabled: z.boolean().default(false),
@@ -887,17 +891,17 @@ const ConfigSchema = z.object({
           webLimitPerQuery: z.number().default(5),
           fetchPerQuery: z.number().default(1),
           fetchMaxChars: z.number().default(4000),
-          channels: z.array(z.string()).default([]),
           suppressLlmDuringActiveChatSeconds: z.number().default(90),
+          channels: z.array(z.string()).default([]),
         })
         .default({}),
       heartbeat: z
         .object({
           enabled: z.boolean().default(false),
           intervalMinutes: z.number().default(30),
+          suppressLlmDuringActiveChatSeconds: z.number().default(90),
           channels: z.array(z.string()).default([]),
           target: z.string().default('last'),
-          suppressLlmDuringActiveChatSeconds: z.number().default(90),
         })
         .default({}),
       intelAlerts: z
