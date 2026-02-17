@@ -535,6 +535,13 @@ const ConfigSchema = z.object({
                   maxTradesPerDay: z.number().optional(),
                   tradeCapBypassMinEdge: z.number().optional(),
                   dailyDrawdownCapUsd: z.number().optional(),
+                  asyncEnrichment: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      timeoutMs: z.number().optional(),
+                      maxChars: z.number().optional(),
+                    })
+                    .optional(),
                   signalPerformance: z
                     .object({
                       minSharpe: z.number().optional(),
@@ -614,6 +621,13 @@ const ConfigSchema = z.object({
       maxTradesPerDay: z.number().default(25),
       tradeCapBypassMinEdge: z.number().default(0.12),
       dailyDrawdownCapUsd: z.number().default(0),
+      asyncEnrichment: z
+        .object({
+          enabled: z.boolean().default(false),
+          timeoutMs: z.number().default(4000),
+          maxChars: z.number().default(280),
+        })
+        .default({}),
       discoverySelection: z
         .object({
           enabled: z.boolean().default(true),
