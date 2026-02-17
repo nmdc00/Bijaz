@@ -1298,6 +1298,13 @@ const VALID_EXIT_MODES = new Set([
   'manual',
   'unknown',
 ]);
+const VALID_MARKET_REGIMES = new Set([
+  'trending',
+  'choppy',
+  'high_vol_expansion',
+  'low_vol_compression',
+]);
+const VALID_ENTRY_TRIGGERS = new Set(['news', 'technical', 'hybrid']);
 
 function mapExitModeAlias(raw: string): string {
   if (
@@ -1332,6 +1339,34 @@ function mapExitModeAlias(raw: string): string {
   return 'risk_reduction';
 }
 
+function normalizeAliasToken(value: string): string {
+  return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
+function mapMarketRegimeAlias(raw: string): string | null {
+  if (VALID_MARKET_REGIMES.has(raw)) return raw;
+  if (raw === 'balanced_up' || raw === 'uptrend' || raw === 'trend_up') return 'trending';
+  if (raw === 'balanced_down' || raw === 'downtrend' || raw === 'trend_down') return 'trending';
+  if (raw === 'range' || raw === 'ranging' || raw === 'sideways' || raw === 'range_bound') return 'choppy';
+  if (raw === 'high_vol' || raw === 'vol_expansion' || raw === 'high_volatility') return 'high_vol_expansion';
+  if (raw === 'low_vol' || raw === 'vol_compression' || raw === 'low_volatility') return 'low_vol_compression';
+  return null;
+}
+
+function mapEntryTriggerAlias(raw: string): string | null {
+  if (VALID_ENTRY_TRIGGERS.has(raw)) return raw;
+  if (raw.includes('imbalance') || raw.includes('orderflow') || raw.includes('breakout') || raw.includes('momentum')) {
+    return 'technical';
+  }
+  if (raw.includes('news') || raw.includes('headline') || raw.includes('catalyst')) {
+    return 'news';
+  }
+  if (raw.includes('hybrid') || (raw.includes('news') && raw.includes('technical'))) {
+    return 'hybrid';
+  }
+  return null;
+}
+
 export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
   const normalized = { ...input };
 
@@ -1340,6 +1375,22 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
   }
   if (typeof normalized.order_type === 'string') {
     normalized.order_type = normalized.order_type.toLowerCase().trim();
+  }
+  if (typeof normalized.market_regime === 'string') {
+    const canonical = mapMarketRegimeAlias(normalizeAliasToken(normalized.market_regime));
+    if (canonical) {
+      normalized.market_regime = canonical;
+    } else {
+      delete normalized.market_regime;
+    }
+  }
+  if (typeof normalized.entry_trigger === 'string') {
+    const canonical = mapEntryTriggerAlias(normalizeAliasToken(normalized.entry_trigger));
+    if (canonical) {
+      normalized.entry_trigger = canonical;
+    } else {
+      delete normalized.entry_trigger;
+    }
   }
 
   // Coerce numeric fields that often arrive as strings from planner/revision LLM output.
