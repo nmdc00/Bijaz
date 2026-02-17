@@ -30,6 +30,7 @@ import { withExecutionContext } from './llm_infra.js';
 import { TradeManagementService } from '../trade-management/service.js';
 import { formatDelphiHelp, parseDelphiSlashCommand } from '../delphi/command.js';
 import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
+import { formatOperatorStatusSnapshot } from './status_snapshot.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -541,24 +542,8 @@ export class ThufirAgent {
 
     // Command: /status - Get autonomous mode status
     if (trimmed === '/status') {
-      const status = this.autonomous.getStatus();
-      const pnl = this.autonomous.getDailyPnL();
-
-      const lines: string[] = [];
-      lines.push('**Thufir Status**');
-      lines.push('');
-      lines.push('**Autonomous Mode:**');
-      lines.push(`• Enabled: ${status.enabled ? 'YES' : 'NO'}`);
-      lines.push(`• Full auto: ${status.fullAuto ? 'ON' : 'OFF'}`);
-      lines.push(`• Paused: ${status.isPaused ? `YES (${status.pauseReason})` : 'NO'}`);
-      lines.push(`• Consecutive losses: ${status.consecutiveLosses}`);
-      lines.push('');
-      lines.push('**Today\'s Activity:**');
-      lines.push(`• Trades: ${pnl.tradesExecuted} (W:${pnl.wins} L:${pnl.losses} P:${pnl.pending})`);
-      lines.push(`• Realized P&L: ${pnl.realizedPnl >= 0 ? '+' : ''}$${pnl.realizedPnl.toFixed(2)}`);
-      lines.push(`• Remaining budget: $${status.remainingDaily.toFixed(2)}`);
-
-      return lines.join('\n');
+      const snapshot = this.autonomous.getOperatorSnapshot();
+      return formatOperatorStatusSnapshot(snapshot);
     }
 
     // Command: /report - Get full daily report
