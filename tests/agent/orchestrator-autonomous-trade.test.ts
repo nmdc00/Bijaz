@@ -540,4 +540,118 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).toContain('Next Action:');
     expect(result.response).not.toContain('Action: I executed 2 perp order(s).');
   });
+
+  it('skips redundant tools.list steps and continues with subsequent plan steps', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'List tools',
+                  requiresTool: true,
+                  toolName: 'tools.list',
+                  toolInput: {},
+                },
+                {
+                  id: '2',
+                  description: 'Fetch portfolio',
+                  requiresTool: true,
+                  toolName: 'get_portfolio',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'introspect then fetch',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: 'Action: done\nBook State: from portfolio\nRisk: low\nNext Action: continue',
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['tools.list', 'get_portfolio'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        if (name === 'get_portfolio') {
+          return mkExecution(name, input as Record<string, unknown>, {
+            success: true,
+            data: { available_balance: 100 },
+          });
+        }
+        if (name === 'tools.list') {
+          return mkExecution(name, input as Record<string, unknown>, {
+            success: true,
+            data: { count: 2, tools: ['tools.list', 'get_portfolio'] },
+          });
+        }
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: false,
+          error: `unexpected tool: ${name}`,
+        });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Review portfolio health',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(calls.includes('tools.list')).toBe(false);
+    expect(calls.filter((name) => name === 'get_portfolio').length).toBeGreaterThan(0);
+    const toolNames = result.state.toolExecutions.map((execution) => execution.toolName);
+    expect(toolNames).toContain('tools.list');
+    expect(toolNames).toContain('get_portfolio');
+    const toolsListExecution = result.state.toolExecutions.find(
+      (execution) => execution.toolName === 'tools.list'
+    );
+    expect(toolsListExecution?.cached).toBe(true);
+    expect((toolsListExecution?.result as { success: true; data: { skipped?: boolean } }).data.skipped).toBe(
+      true
+    );
+  });
 });

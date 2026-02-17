@@ -306,6 +306,36 @@ function debugLog(message: string, meta?: Record<string, unknown>): void {
   console.debug(`[orchestrator] ${message}`);
 }
 
+function isToolsListToolName(toolName: string | undefined): boolean {
+  return toolName === 'tools_list' || toolName === 'tools.list';
+}
+
+function hasUnknownToolFailure(state: AgentState): boolean {
+  return state.toolExecutions.some((execution) => {
+    if (execution.result.success) return false;
+    const error = (execution.result as { error?: string }).error ?? '';
+    return /Unknown tool:/i.test(error);
+  });
+}
+
+function goalRequestsToolsList(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  return (
+    normalized.includes('tools.list') ||
+    normalized.includes('tools_list') ||
+    normalized.includes('tool list') ||
+    normalized.includes('list tools') ||
+    normalized.includes('available tools')
+  );
+}
+
+function shouldSkipRedundantToolsList(state: AgentState, step: PlanStep): boolean {
+  if (!isToolsListToolName(step.toolName)) return false;
+  if (goalRequestsToolsList(state.goal)) return false;
+  if (hasUnknownToolFailure(state)) return false;
+  return true;
+}
+
 function enforceIdentityMarker(identity: { marker: string }, prompt: string): void {
   if (!isDebugEnabled()) {
     return;
@@ -725,6 +755,27 @@ export async function runOrchestrator(
 
     // Execute tool if step requires it
     if (nextStep.requiresTool && nextStep.toolName) {
+      if (shouldSkipRedundantToolsList(state, nextStep)) {
+        const skippedExecution: ToolExecution = {
+          toolName: nextStep.toolName,
+          input: nextStep.toolInput ?? {},
+          result: {
+            success: true,
+            data: {
+              skipped: true,
+              reason: 'Redundant tools.list skipped: registry already available in orchestrator context.',
+            },
+          },
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          cached: true,
+        };
+        state = addToolExecution(state, skippedExecution);
+        state = setPlan(state, completeStep(state.plan!, nextStep.id, skippedExecution.result));
+        ctx.onUpdate?.(state);
+        continue;
+      }
+
       // Run fragility scan before trade tools
       const isTradeToolStep = nextStep.toolName === 'perp_place_order';
       if (isTradeToolStep && !tradeFragilityScan) {
