@@ -24,6 +24,7 @@ import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
+import { computeClosedTradeComponentScores } from './decision_component_scores.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -107,6 +108,28 @@ function parseNewsSources(input: unknown): string[] | null {
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0);
     return values.length > 0 ? values : null;
+  }
+  return null;
+}
+
+function toFiniteNumberOrNull(input: unknown): number | null {
+  const value = Number(input);
+  return Number.isFinite(value) ? value : null;
+}
+
+function resolveClosedTradeReference(params: {
+  entries: ReturnType<typeof listPerpTradeJournals>;
+  symbol: string;
+  hypothesisId: string | null;
+  closeSide: 'buy' | 'sell';
+}) {
+  for (const entry of params.entries) {
+    if (entry.symbol !== params.symbol) continue;
+    if (entry.reduceOnly === true) continue;
+    if (entry.outcome !== 'executed') continue;
+    if (params.hypothesisId && entry.hypothesisId !== params.hypothesisId) continue;
+    if (!params.hypothesisId && entry.side && entry.side === params.closeSide) continue;
+    return entry;
   }
   return null;
 }
@@ -862,6 +885,9 @@ export async function executeToolCall(
             ? toolInput.thesis_invalidation_hit
             : null;
         const exitMode = normalizeExitMode(toolInput.exit_mode);
+        const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
+        const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
+        const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
         const exitAssessment = evaluateReduceOnlyExitAssessment({
@@ -1130,6 +1156,43 @@ export async function executeToolCall(
           orderId: inferredOrderId,
           startTimeMs: Math.max(0, executionStartMs - 10_000),
         });
+        let componentScores:
+          | { directionScore: number; timingScore: number; sizingScore: number; exitScore: number }
+          | null = null;
+        if (reduceOnly) {
+          try {
+            const history = listPerpTradeJournals({ symbol, limit: 200 });
+            const reference = resolveClosedTradeReference({
+              entries: history,
+              symbol,
+              hypothesisId,
+              closeSide: side as 'buy' | 'sell',
+            });
+            const entrySide =
+              reference?.side ?? ((side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy');
+            componentScores = computeClosedTradeComponentScores({
+              entrySide,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              size: reference?.size ?? size,
+              expectedEdge: reference?.expectedEdge ?? expectedEdge,
+              entryPrice: closeEntryPriceOverride ?? reference?.markPrice ?? null,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+            });
+          } catch {
+            componentScores = computeClosedTradeComponentScores({
+              entrySide: (side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy',
+              thesisCorrect: exitAssessment.thesisCorrect,
+              size,
+              expectedEdge,
+              entryPrice: closeEntryPriceOverride,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+            });
+          }
+        }
         try {
           const tradeId = recordPerpTrade({
             hypothesisId,
@@ -1175,6 +1238,14 @@ export async function executeToolCall(
             exitMode: exitAssessment.exitMode,
             emotionalExitFlag: exitAssessment.emotionalExitFlag,
             thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+            directionScore: componentScores?.directionScore ?? null,
+            timingScore: componentScores?.timingScore ?? null,
+            sizingScore: componentScores?.sizingScore ?? null,
+            exitScore: componentScores?.exitScore ?? null,
+            direction_score: componentScores?.directionScore ?? null,
+            timing_score: componentScores?.timingScore ?? null,
+            sizing_score: componentScores?.sizingScore ?? null,
+            exit_score: componentScores?.exitScore ?? null,
             realizedFeeUsd: realizedFee.realized_fee_usd,
             realizedFeeToken: realizedFee.realized_fee_token,
             realizedFillCount: realizedFee.realized_fill_count,

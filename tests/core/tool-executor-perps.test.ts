@@ -141,6 +141,104 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('persists deterministic direction/timing/sizing/exit scores for closed trades', async () => {
+    let markPrice = 100;
+    const dynamicMarketClient = {
+      getMarket: async (symbol: string) => ({
+        id: symbol,
+        question: `Perp: ${symbol}`,
+        outcomes: ['LONG', 'SHORT'],
+        prices: {},
+        platform: 'hyperliquid',
+        kind: 'perp',
+        symbol,
+        markPrice,
+        metadata: { maxLeverage: 10 },
+      }),
+      listMarkets: async () => [],
+      searchMarkets: async () => [],
+    };
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+
+    const symbol = 'SCORETESTBTC';
+    const hypothesisId = 'hyp_component_scoring_test';
+    const entryRes = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'buy',
+        size: 0.4,
+        expected_edge: 0.6,
+        hypothesis_id: hypothesisId,
+      },
+      {
+        config: { execution: { provider: 'hyperliquid' } } as any,
+        marketClient: dynamicMarketClient as any,
+        executor,
+        limiter,
+      }
+    );
+    expect(entryRes.success).toBe(true);
+
+    markPrice = 110;
+    const closeRes = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'sell',
+        size: 0.4,
+        reduce_only: true,
+        hypothesis_id: hypothesisId,
+        thesis_invalidation_hit: false,
+        exit_mode: 'take_profit',
+        price_path_high: 120,
+        price_path_low: 90,
+      },
+      {
+        config: { execution: { provider: 'hyperliquid' } } as any,
+        marketClient: dynamicMarketClient as any,
+        executor,
+        limiter,
+      }
+    );
+    expect(closeRes.success).toBe(true);
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 20 },
+      {
+        config: { execution: { provider: 'hyperliquid' } } as any,
+        marketClient: dynamicMarketClient as any,
+      }
+    );
+    expect(listRes.success).toBe(true);
+    const entries = ((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>;
+    const closed = entries.find(
+      (entry) =>
+        entry.hypothesisId === hypothesisId &&
+        entry.reduceOnly === true &&
+        entry.outcome === 'executed'
+    );
+    expect(closed).toBeDefined();
+    expect(Number(closed?.directionScore)).toBe(1);
+    expect(Number(closed?.timingScore)).toBeCloseTo(2 / 3, 8);
+    expect(Number(closed?.sizingScore)).toBeCloseTo(0.6857142857, 8);
+    expect(Number(closed?.exitScore)).toBeCloseTo(0.5, 8);
+    expect(Number(closed?.direction_score)).toBe(1);
+    expect(Number(closed?.timing_score)).toBeCloseTo(2 / 3, 8);
+    expect(Number(closed?.sizing_score)).toBeCloseTo(0.6857142857, 8);
+    expect(Number(closed?.exit_score)).toBeCloseTo(0.5, 8);
+  });
+
   it('accepts news provenance metadata on news-triggered entries', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),

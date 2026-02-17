@@ -579,6 +579,18 @@ export const THUFIR_TOOLS: Tool[] = [
           enum: ['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown'],
           description: 'For reduce-only exits: deterministic exit mode',
         },
+        entry_price: {
+          type: 'number',
+          description: 'Optional entry price override for closed-trade component scoring',
+        },
+        price_path_high: {
+          type: 'number',
+          description: 'Optional highest observed trade-path price for closed-trade component scoring',
+        },
+        price_path_low: {
+          type: 'number',
+          description: 'Optional lowest observed trade-path price for closed-trade component scoring',
+        },
       },
       required: ['symbol', 'side', 'size'],
     },
