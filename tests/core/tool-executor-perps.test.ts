@@ -1,8 +1,31 @@
-import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { executeToolCall } from '../../src/core/tool-executor.js';
 
 describe('tool-executor perps', () => {
+  const originalDbPath = process.env.THUFIR_DB_PATH;
+
+  beforeEach(() => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'thufir-tool-executor-perps-'));
+    process.env.THUFIR_DB_PATH = join(tempDir, 'thufir.sqlite');
+  });
+
+  afterEach(() => {
+    if (process.env.THUFIR_DB_PATH) {
+      rmSync(process.env.THUFIR_DB_PATH, { force: true });
+      rmSync(dirname(process.env.THUFIR_DB_PATH), { recursive: true, force: true });
+    }
+    if (originalDbPath === undefined) {
+      delete process.env.THUFIR_DB_PATH;
+    } else {
+      process.env.THUFIR_DB_PATH = originalDbPath;
+    }
+  });
+
   const marketClient = {
     getMarket: async (symbol: string) => ({
       id: symbol,
