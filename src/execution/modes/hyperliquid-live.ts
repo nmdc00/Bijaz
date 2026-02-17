@@ -12,11 +12,13 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
   private client: HyperliquidClient;
   private maxLeverage: number;
   private defaultSlippageBps: number;
+  private maxQuoteAgeMs: number;
 
   constructor(options: HyperliquidLiveExecutorOptions) {
     this.client = new HyperliquidClient(options.config);
     this.maxLeverage = options.config.hyperliquid?.maxLeverage ?? 5;
     this.defaultSlippageBps = options.config.hyperliquid?.defaultSlippageBps ?? 10;
+    this.maxQuoteAgeMs = Math.max(100, Number(options.config.hyperliquid?.maxQuoteAgeMs ?? 2_000));
   }
 
   async execute(market: Market, decision: TradeDecision): Promise<TradeResult> {
@@ -72,13 +74,21 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         }
         priceStr = formatPerpPrice(price, marketMeta.szDecimals ?? 6);
       } else {
-        // For IOC-style market orders, pick a marketable price and format it to HL precision rules.
-        priceStr = await this.getIocPriceStr(
+        // For IOC-style market orders, pick a fresh tick-aligned quote.
+        const quote = await this.getIocQuote(
           symbol,
           side,
           marketMeta.szDecimals ?? 6,
           marketSlippageBps
         );
+        const quoteAgeMs = Math.max(0, Date.now() - quote.quoteTsMs);
+        if (quoteAgeMs > this.maxQuoteAgeMs) {
+          return {
+            executed: false,
+            message: `Stale IOC quote rejected: age=${quoteAgeMs}ms max=${this.maxQuoteAgeMs}ms source=${quote.source}`,
+          };
+        }
+        priceStr = quote.priceStr;
       }
       if (!priceStr || !Number.isFinite(Number(priceStr)) || Number(priceStr) <= 0) {
         return { executed: false, message: `Invalid decision: missing or invalid price (p=${priceStr}).` };
@@ -185,12 +195,12 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     });
   }
 
-  private async getIocPriceStr(
+  private async getIocQuote(
     symbol: string,
     side: 'buy' | 'sell',
     szDecimals: number,
     slippageBps = this.defaultSlippageBps
-  ): Promise<string> {
+  ): Promise<{ priceStr: string; quoteTsMs: number; source: 'l2' | 'impact' | 'mid' }> {
     // Prefer top-of-book prices for tick alignment.
     try {
       const book = await this.client.getL2Book(symbol);
@@ -203,9 +213,8 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         if (Number.isFinite(base) && base > 0) {
           const slippage = Math.max(0, slippageBps) / 10000;
           const aggressivePx = side === 'buy' ? base * (1 + slippage) : base * (1 - slippage);
-          return formatPerpPrice(aggressivePx, szDecimals);
+          return { priceStr: formatPerpPrice(aggressivePx, szDecimals), quoteTsMs: Date.now(), source: 'l2' };
         }
-        return formatPerpPrice(base, szDecimals);
       }
     } catch {
       // fall through
@@ -225,7 +234,11 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
           if (Number.isFinite(base) && base > 0) {
             const slippage = Math.max(0, slippageBps) / 10000;
             const aggressivePx = side === 'buy' ? base * (1 + slippage) : base * (1 - slippage);
-            return formatPerpPrice(aggressivePx, szDecimals);
+            return {
+              priceStr: formatPerpPrice(aggressivePx, szDecimals),
+              quoteTsMs: Date.now(),
+              source: 'impact',
+            };
           }
         }
       }
@@ -235,7 +248,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
 
     // Last resort: mid + slippage (may be off-tick; better than nothing).
     const px = await this.estimateMarketPrice(symbol, side, slippageBps);
-    return formatPerpPrice(px, szDecimals);
+    return { priceStr: formatDecimal(px, 8), quoteTsMs: Date.now(), source: 'mid' };
   }
 }
 
