@@ -606,6 +606,11 @@ const ConfigSchema = z.object({
                       blockBelowScore: z.number().optional(),
                       downweightBelowScore: z.number().optional(),
                       downweightMultiplier: z.number().optional(),
+                  asyncEnrichment: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      timeoutMs: z.number().optional(),
+                      maxChars: z.number().optional(),
                     })
                     .optional(),
                   signalPerformance: z
@@ -700,6 +705,11 @@ const ConfigSchema = z.object({
           blockBelowScore: z.number().default(0.45),
           downweightBelowScore: z.number().default(0.6),
           downweightMultiplier: z.number().default(0.6),
+      asyncEnrichment: z
+        .object({
+          enabled: z.boolean().default(false),
+          timeoutMs: z.number().default(4000),
+          maxChars: z.number().default(280),
         })
         .default({}),
       discoverySelection: z
