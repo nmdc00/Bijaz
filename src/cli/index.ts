@@ -47,6 +47,8 @@ import type { CriticResult } from '../agent/critic/types.js';
 import { withExecutionContext } from '../core/llm_infra.js';
 import type { ExecutionAdapter } from '../execution/executor.js';
 import type { ThufirConfig } from '../core/config.js';
+import { formatDelphiHelp, parseDelphiCliArgs } from '../delphi/command.js';
+import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
 
 /**
  * Create the appropriate executor based on config execution mode.
@@ -411,6 +413,48 @@ function requireMarketClient(): typeof marketClient | null {
     return null;
   }
   return marketClient;
+}
+
+function optionsToDelphiArgs(
+  symbolArgs: string[],
+  options: {
+    horizon?: string;
+    symbols?: string;
+    count?: string;
+    dryRun?: boolean;
+    output?: string;
+  }
+): string[] {
+  const args: string[] = ['run', ...symbolArgs];
+  if (options.horizon) {
+    args.push('--horizon', options.horizon);
+  }
+  if (options.symbols) {
+    args.push('--symbols', options.symbols);
+  }
+  if (options.count) {
+    args.push('--count', options.count);
+  }
+  args.push(options.dryRun === false ? '--no-dry-run' : '--dry-run');
+  if (options.output) {
+    args.push('--output', options.output);
+  }
+  return args;
+}
+
+async function runDelphiCli(args: string[]): Promise<void> {
+  try {
+    const command = parseDelphiCliArgs(args);
+    if (command.kind === 'help') {
+      console.log(formatDelphiHelp('thufir delphi'));
+      return;
+    }
+    const predictions = await generateDelphiPredictions(marketClient, command.options);
+    console.log(formatDelphiPreview(command.options, predictions));
+  } catch (error) {
+    console.error(`Invalid delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exitCode = 1;
+  }
 }
 
 program
@@ -1122,6 +1166,45 @@ calibration
         `${summary.domain} | total=${summary.totalPredictions} | resolved=${summary.resolvedPredictions} | acc=${accuracy} | brier=${brier}`
       );
     }
+  });
+
+// ============================================================================
+// Delphi Commands
+// ============================================================================
+
+const delphi = program.command('delphi').description('Prediction-only delphi workflows');
+
+delphi
+  .argument('[symbols...]', 'Optional symbol list (space-separated)')
+  .option('--horizon <window>', 'Forecast horizon (for example: 6h, 24h, 3d)', '24h')
+  .option('--symbols <csv>', 'Symbol set as comma-separated values')
+  .option('--count <number>', 'Number of prediction previews to emit', '5')
+  .option('--dry-run', 'Emit dry-run output (non-executing)', true)
+  .option('--no-dry-run', 'Disable dry-run flag (preview still used until storage task lands)')
+  .option('--output <format>', 'Output format: text|json', 'text')
+  .action(async (symbols: string[], options) => {
+    await runDelphiCli(optionsToDelphiArgs(Array.isArray(symbols) ? symbols : [], options));
+  });
+
+delphi
+  .command('run')
+  .description('Run delphi prediction preview')
+  .argument('[symbols...]', 'Optional symbol list (space-separated)')
+  .option('--horizon <window>', 'Forecast horizon (for example: 6h, 24h, 3d)', '24h')
+  .option('--symbols <csv>', 'Symbol set as comma-separated values')
+  .option('--count <number>', 'Number of prediction previews to emit', '5')
+  .option('--dry-run', 'Emit dry-run output (non-executing)', true)
+  .option('--no-dry-run', 'Disable dry-run flag (preview still used until storage task lands)')
+  .option('--output <format>', 'Output format: text|json', 'text')
+  .action(async (symbols: string[], options) => {
+    await runDelphiCli(optionsToDelphiArgs(Array.isArray(symbols) ? symbols : [], options));
+  });
+
+delphi
+  .command('help')
+  .description('Show delphi command help')
+  .action(() => {
+    console.log(formatDelphiHelp('thufir delphi'));
   });
 
 // ============================================================================

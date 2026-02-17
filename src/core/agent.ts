@@ -28,6 +28,8 @@ import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
 import { TradeManagementService } from '../trade-management/service.js';
+import { formatDelphiHelp, parseDelphiSlashCommand } from '../delphi/command.js';
+import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -220,6 +222,11 @@ export class ThufirAgent {
     if (trimmed === '/scan') {
       const result = await this.autonomousScan();
       return result;
+    }
+
+    // Command: /delphi [run|help]
+    if (trimmed.startsWith('/delphi')) {
+      return this.handleDelphiCommand(trimmed);
     }
 
     // Command: /briefing
@@ -605,6 +612,7 @@ Just type naturally to chat about markets, risks, or positioning.
 /watch <symbol> - Add symbol to watchlist
 /watchlist - Show watched symbols
 /scan - Run autonomous discovery scan
+/delphi [run] [options] - Prediction-only delphi preview
 /perp <symbol> <buy|sell> <sizeUsd> [leverage] - Execute a perp trade
 
 **Info:**
@@ -648,6 +656,19 @@ Just type naturally to chat about markets, risks, or positioning.
         return this.autonomous.runScan();
       }
     );
+  }
+
+  private async handleDelphiCommand(rawCommand: string): Promise<string> {
+    try {
+      const command = parseDelphiSlashCommand(rawCommand);
+      if (command.kind === 'help') {
+        return formatDelphiHelp('/delphi');
+      }
+      const predictions = await generateDelphiPredictions(this.marketClient, command.options);
+      return formatDelphiPreview(command.options, predictions);
+    } catch (error) {
+      return `Invalid /delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   private async maybeHandleNaturalLanguageTrade(
