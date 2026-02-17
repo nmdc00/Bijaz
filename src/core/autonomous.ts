@@ -38,6 +38,7 @@ import { summarizeSignalPerformance } from './signal_performance.js';
 import { SchedulerControlPlane } from './scheduler_control_plane.js';
 import { resolveSessionWeightContext } from './session-weight.js';
 import { AutonomousScanTelemetry } from './performance_metrics.js';
+import { withExecutionContext } from './llm_infra.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -929,33 +930,34 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     void (async () => {
       try {
         const response = await Promise.race([
-          this.llm.complete(
-            [
-              {
-                role: 'system',
-                content:
-                  'You are a concise trading execution annotator. Return one short line with thesis, invalidation posture, and next check.',
-              },
-              {
-                role: 'user',
-                content: [
-                  `symbol=${input.symbol}`,
-                  `side=${input.side}`,
-                  `executed=${input.executed}`,
-                  `message=${input.message}`,
-                  `reasoning=${input.reasoning ?? 'n/a'}`,
-                ].join('\n'),
-              },
-            ],
+          withExecutionContext(
             {
-              maxTokens: 120,
-              executionContext: {
-                mode: 'LIGHT_REASONING',
-                critical: false,
-                reason: 'autonomous_async_execution_enrichment',
-                source: 'autonomous',
-              },
-            }
+              mode: 'LIGHT_REASONING',
+              critical: false,
+              reason: 'autonomous_async_execution_enrichment',
+              source: 'autonomous',
+            },
+            () =>
+              this.llm.complete(
+                [
+                  {
+                    role: 'system',
+                    content:
+                      'You are a concise trading execution annotator. Return one short line with thesis, invalidation posture, and next check.',
+                  },
+                  {
+                    role: 'user',
+                    content: [
+                      `symbol=${input.symbol}`,
+                      `side=${input.side}`,
+                      `executed=${input.executed}`,
+                      `message=${input.message}`,
+                      `reasoning=${input.reasoning ?? 'n/a'}`,
+                    ].join('\n'),
+                  },
+                ],
+                { maxTokens: 120 }
+              )
           ),
           new Promise<never>((_, reject) => {
             setTimeout(() => reject(new Error(`async enrichment timed out after ${timeoutMs}ms`)), timeoutMs);

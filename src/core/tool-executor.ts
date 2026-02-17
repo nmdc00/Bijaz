@@ -267,8 +267,9 @@ function validatePerpOrderContract(input: {
   thesisInvalidationHit: boolean | null;
   exitMode: PerpExitMode | null;
   tradeArchetype: TradeArchetype | null;
+  enforceReduceOnlyExitMode: boolean;
 }): string | null {
-  const { reduceOnly, thesisInvalidationHit, exitMode, tradeArchetype } = input;
+  const { reduceOnly, thesisInvalidationHit, exitMode, tradeArchetype, enforceReduceOnlyExitMode } = input;
 
   if (!reduceOnly) {
     if (thesisInvalidationHit === true) {
@@ -289,7 +290,7 @@ function validatePerpOrderContract(input: {
   if (thesisInvalidationHit === false && exitMode === 'thesis_invalidation') {
     return 'thesis_invalidation exit_mode requires thesis_invalidation_hit=true';
   }
-  if (thesisInvalidationHit !== true && exitMode == null) {
+  if (enforceReduceOnlyExitMode && thesisInvalidationHit !== true && exitMode == null) {
     return 'reduce-only exit requires exit_mode (thesis_invalidation|take_profit|time_exit|risk_reduction|manual|unknown)';
   }
   return null;
@@ -1042,7 +1043,7 @@ export async function executeToolCall(
         const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
         const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
         const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
-        const tradeArchetype = normalizeTradeArchetype(toolInput.trade_archetype);
+        let tradeArchetype = normalizeTradeArchetype(toolInput.trade_archetype);
         const invalidationType =
           typeof toolInput.invalidation_type === 'string' ? toolInput.invalidation_type.trim() : null;
         const invalidationPrice = toFiniteNumberOrNull(toolInput.invalidation_price);
@@ -1060,20 +1061,9 @@ export async function executeToolCall(
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
         const planContext = parsePlanContext(toolInput.plan_context);
-        const contractError = validatePerpOrderContract({
-          reduceOnly,
-          thesisInvalidationHit,
-          exitMode,
-          tradeArchetype,
-        });
-        if (contractError) {
-          return { success: false, error: contractError };
+        if (!reduceOnly && !tradeArchetype) {
+          tradeArchetype = 'intraday';
         }
-        const exitAssessment = evaluateReduceOnlyExitAssessment({
-          reduceOnly,
-          thesisInvalidationHit,
-          exitMode,
-        });
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =
@@ -1128,6 +1118,16 @@ export async function executeToolCall(
         });
         exitMode = normalizedReduceOnlyExit.exitMode;
         thesisInvalidationHit = normalizedReduceOnlyExit.thesisInvalidationHit;
+        const contractError = validatePerpOrderContract({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+          tradeArchetype,
+          enforceReduceOnlyExitMode: exitFsmEnabled,
+        });
+        if (contractError) {
+          return { success: false, error: contractError };
+        }
         const exitAssessment = evaluateReduceOnlyExitAssessment({
           reduceOnly,
           thesisInvalidationHit,

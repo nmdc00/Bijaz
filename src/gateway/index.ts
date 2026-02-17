@@ -85,7 +85,7 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
     return;
   }
   const startedAt = Date.now();
-  const scanResult = await defaultAgent.getAutonomous().runScan();
+  const scanResult = await defaultAgent!.getAutonomous().runScan();
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );
