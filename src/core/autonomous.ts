@@ -36,47 +36,10 @@ import {
 import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
 import { summarizeSignalPerformance } from './signal_performance.js';
 import { SchedulerControlPlane } from './scheduler_control_plane.js';
+import { resolveSessionWeightContext } from './session-weight.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
-}
-
-type SessionBucket = 'asia' | 'europe_open' | 'us_open' | 'us_midday' | 'us_close' | 'weekend';
-
-interface SessionWeightContext {
-  session: SessionBucket;
-  sessionWeight: number;
-}
-
-const SESSION_WEIGHTS: Record<SessionBucket, number> = {
-  asia: 0.9,
-  europe_open: 1.0,
-  us_open: 1.15,
-  us_midday: 0.95,
-  us_close: 1.05,
-  weekend: 0.65,
-};
-
-function resolveSessionWeightContext(now: Date): SessionWeightContext {
-  const day = now.getUTCDay();
-  if (day === 0 || day === 6) {
-    return { session: 'weekend', sessionWeight: SESSION_WEIGHTS.weekend };
-  }
-
-  const hour = now.getUTCHours();
-  if (hour >= 23 || hour < 7) {
-    return { session: 'asia', sessionWeight: SESSION_WEIGHTS.asia };
-  }
-  if (hour < 13) {
-    return { session: 'europe_open', sessionWeight: SESSION_WEIGHTS.europe_open };
-  }
-  if (hour < 17) {
-    return { session: 'us_open', sessionWeight: SESSION_WEIGHTS.us_open };
-  }
-  if (hour < 20) {
-    return { session: 'us_midday', sessionWeight: SESSION_WEIGHTS.us_midday };
-  }
-  return { session: 'us_close', sessionWeight: SESSION_WEIGHTS.us_close };
 }
 
 function formatContextPackTrace(input: {
