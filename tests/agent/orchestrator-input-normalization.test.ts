@@ -37,4 +37,36 @@ describe('normalizePerpPlaceOrderInput', () => {
     expect(normalized.exit_mode).toBe('thesis_invalidation');
     expect(normalized.thesis_invalidation_hit).toBe(true);
   });
+
+  it('maps market_regime alias to strict enum', () => {
+    const normalized = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'buy',
+      size: 0.1,
+      market_regime: 'balanced_up',
+    });
+    expect(normalized.market_regime).toBe('trending');
+  });
+
+  it('maps entry_trigger alias to strict enum', () => {
+    const normalized = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'buy',
+      size: 0.1,
+      entry_trigger: 'sustained_buy_imbalance_within_range',
+    });
+    expect(normalized.entry_trigger).toBe('technical');
+  });
+
+  it('drops unknown enum aliases instead of forwarding invalid values', () => {
+    const normalized = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'buy',
+      size: 0.1,
+      market_regime: 'mystery_regime',
+      entry_trigger: 'new_trigger_family',
+    });
+    expect(normalized.market_regime).toBeUndefined();
+    expect(normalized.entry_trigger).toBeUndefined();
+  });
 });
