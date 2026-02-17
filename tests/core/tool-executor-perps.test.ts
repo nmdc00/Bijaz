@@ -32,7 +32,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 1 },
+      { symbol: 'BTC', side: 'buy', size: 1, trade_archetype: 'intraday' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
@@ -51,7 +51,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 1, leverage: 7 },
+      { symbol: 'BTC', side: 'buy', size: 1, leverage: 7, trade_archetype: 'intraday' },
       {
         config: {
           execution: { provider: 'hyperliquid' },
@@ -79,7 +79,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 1 },
+      { symbol: 'BTC', side: 'buy', size: 1, trade_archetype: 'intraday' },
       {
         config: {
           execution: { provider: 'hyperliquid' },
@@ -107,7 +107,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true, exit_mode: 'risk_reduction' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
@@ -141,6 +141,53 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('blocks non-reduce-only orders without a trade archetype', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.01 },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(false);
+    expect(String((res as any).error)).toContain('trade_archetype');
+  });
+
+  it('blocks conflicting thesis invalidation fields for reduce-only exits', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTC',
+        side: 'sell',
+        size: 0.01,
+        reduce_only: true,
+        thesis_invalidation_hit: true,
+        exit_mode: 'risk_reduction',
+      },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(false);
+    expect(String((res as any).error)).toContain('conflicts');
+  });
+
   it('accepts news provenance metadata on news-triggered entries', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
@@ -160,6 +207,7 @@ describe('tool-executor perps', () => {
         symbol,
         side: 'buy',
         size: 0.001,
+        trade_archetype: 'intraday',
         entry_trigger: 'news',
         news_subtype: 'macro',
         news_sources: sources,
