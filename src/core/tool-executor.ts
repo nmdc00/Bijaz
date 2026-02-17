@@ -123,6 +123,40 @@ function toFiniteNumberOrNull(input: unknown): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+type ReduceOnlyPositionSnapshot = {
+  side: 'long' | 'short';
+  size: number;
+};
+
+async function getReduceOnlyPositionSnapshot(
+  config: ThufirConfig,
+  symbol: string
+): Promise<ReduceOnlyPositionSnapshot | null> {
+  const client = new HyperliquidClient(config);
+  const state = (await client.getClearinghouseState()) as {
+    assetPositions?: Array<{ position?: Record<string, unknown> }>;
+  };
+  const target = symbol.trim().toUpperCase();
+  for (const entry of state.assetPositions ?? []) {
+    const position = entry?.position ?? {};
+    const coin = String((position as { coin?: unknown }).coin ?? '')
+      .trim()
+      .toUpperCase();
+    if (!coin || coin !== target) {
+      continue;
+    }
+    const rawSize = Number((position as { szi?: unknown }).szi ?? NaN);
+    if (!Number.isFinite(rawSize) || rawSize === 0) {
+      return null;
+    }
+    return {
+      side: rawSize > 0 ? 'long' : 'short',
+      size: Math.abs(rawSize),
+    };
+  }
+  return null;
+}
+
 function resolveClosedTradeReference(params: {
   entries: ReturnType<typeof listPerpTradeJournals>;
   symbol: string;
@@ -929,6 +963,38 @@ export async function executeToolCall(
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
+        let size = requestedSize;
+        let reduceOnlyPreflightNote: string | null = null;
+        if (reduceOnly && ctx.config.execution?.provider === 'hyperliquid') {
+          try {
+            const position = await getReduceOnlyPositionSnapshot(ctx.config, symbol);
+            if (!position) {
+              return {
+                success: false,
+                error: `Reduce-only preflight blocked: no open ${symbol} position to reduce.`,
+              };
+            }
+            const wouldIncreaseLong = position.side === 'long' && side === 'buy';
+            const wouldIncreaseShort = position.side === 'short' && side === 'sell';
+            if (wouldIncreaseLong || wouldIncreaseShort) {
+              return {
+                success: false,
+                error:
+                  `Reduce-only preflight blocked: ${side} would increase current ` +
+                  `${position.side} ${symbol} position (size=${position.size}).`,
+              };
+            }
+            if (size > position.size) {
+              reduceOnlyPreflightNote =
+                `reduce_only size capped from ${size} to live position size ${position.size}`;
+              size = position.size;
+            }
+          } catch (error) {
+            // Best-effort preflight. If exchange state lookup fails, let exchange validation decide.
+            const detail = error instanceof Error ? error.message : String(error);
+            console.warn(`Reduce-only preflight lookup failed for ${symbol}: ${detail}`);
+          }
+        }
         const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
         const exitFsmValidation = validateReduceOnlyExitFsm({
           enabled: Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm),
@@ -1040,13 +1106,17 @@ export async function executeToolCall(
           }
           return { success: false, error: policyGate.reason ?? 'policy constraints active' };
         }
-        let size = requestedSize;
         let policyReasoning: string | null = null;
         if (!reduceOnly && policyGate.sizeMultiplier < 1) {
           size = Math.max(0.00000001, requestedSize * policyGate.sizeMultiplier);
           policyReasoning =
             `Policy applied (${policyGate.reasonCode ?? 'policy.size_adjust'}): ` +
             `${policyGate.reason ?? 'size multiplier enforced'}; requested_size=${requestedSize}, effective_size=${size}`;
+        }
+        if (reduceOnlyPreflightNote) {
+          policyReasoning = policyReasoning
+            ? `${policyReasoning} | ${reduceOnlyPreflightNote}`
+            : reduceOnlyPreflightNote;
         }
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
