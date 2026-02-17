@@ -268,6 +268,11 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(placeOrderInputs[0]?.order_type).toBe('market');
     expect(typeof placeOrderInputs[0]?.size).toBe('number');
     expect((placeOrderInputs[0]?.size as number) > 0).toBe(true);
+    expect(placeOrderInputs[0]?.plan_context).toMatchObject({
+      current_step_id: '1',
+      plan_goal: 'Buy BTC now',
+      mode: 'trade',
+    });
   });
 
   it('falls back to deterministic execution summary when critic disapproves without revision', async () => {
