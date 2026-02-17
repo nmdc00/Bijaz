@@ -439,10 +439,19 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return 'No expressions met autonomy thresholds (minEdge/confidence).';
     }
 
-    // If we're forcing execution, pick the "best" expression first (highest expected edge).
-    const ranked = input.ignoreThresholds
-      ? [...eligible].sort((a, b) => (b.expectedEdge ?? 0) - (a.expectedEdge ?? 0))
-      : eligible;
+    // Deterministic mechanical ranking for execution selection.
+    // This keeps selection off the LLM path and stable across equivalent runs.
+    const ranked = [...eligible].sort((a, b) => {
+      const edgeDelta = (b.expectedEdge ?? 0) - (a.expectedEdge ?? 0);
+      if (Math.abs(edgeDelta) > 1e-12) {
+        return edgeDelta;
+      }
+      const confidenceDelta = (b.confidence ?? 0) - (a.confidence ?? 0);
+      if (Math.abs(confidenceDelta) > 1e-12) {
+        return confidenceDelta;
+      }
+      return String(a.symbol ?? '').localeCompare(String(b.symbol ?? ''));
+    });
 
     const maxTrades = Number.isFinite(input.maxTrades)
       ? Math.min(Math.max(Number(input.maxTrades), 1), 10)
