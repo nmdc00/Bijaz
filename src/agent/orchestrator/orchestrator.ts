@@ -1581,6 +1581,7 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
       time_stop: 'time_exit',
       timeout: 'time_exit',
       liquidity_probe: 'risk_reduction',
+      emergency_override: 'risk_reduction',
       liquidity: 'risk_reduction',
       de_risk: 'risk_reduction',
       derisk: 'risk_reduction',

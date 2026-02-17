@@ -986,12 +986,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             ],
             {
               maxTokens: 120,
-              executionContext: {
-                mode: 'LIGHT_REASONING',
-                critical: false,
-                reason: 'autonomous_async_execution_enrichment',
-                source: 'autonomous',
-              },
             }
           ),
           new Promise<never>((_, reject) => {
