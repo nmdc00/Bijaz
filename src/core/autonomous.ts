@@ -126,6 +126,7 @@ export interface AutonomousEvents {
 
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
+  private llm: LlmClient;
   private marketClient: MarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
@@ -140,7 +141,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private scheduler: SchedulerControlPlane | null = null;
 
   constructor(
-    _llm: LlmClient,
+    llm: LlmClient,
     marketClient: MarketClient,
     executor: ExecutionAdapter,
     limiter: DbSpendingLimitEnforcer,
@@ -148,6 +149,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     logger?: Logger
   ) {
     super();
+    this.llm = llm;
     this.marketClient = marketClient;
     this.executor = executor;
     this.limiter = limiter;
@@ -576,6 +578,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       } else {
         this.limiter.release(probeUsd);
       }
+      this.scheduleAsyncExecutionEnrichment({
+        symbol,
+        side: expr.side,
+        executed: tradeResult.executed,
+        message: tradeResult.message,
+        reasoning: decision.reasoning ?? null,
+      });
       try {
         const tradeId = recordPerpTrade({
           hypothesisId: expr.hypothesisId,
@@ -827,6 +836,89 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       this.logger.error('Failed to generate daily report', error);
       throw error;
     }
+  }
+
+  private isAsyncEnrichmentEnabled(): boolean {
+    return Boolean((this.thufirConfig.autonomy as any)?.asyncEnrichment?.enabled ?? false);
+  }
+
+  private getAsyncEnrichmentTimeoutMs(): number {
+    const raw = Number((this.thufirConfig.autonomy as any)?.asyncEnrichment?.timeoutMs ?? 4000);
+    return Number.isFinite(raw) ? Math.max(250, Math.min(raw, 20_000)) : 4000;
+  }
+
+  private getAsyncEnrichmentMaxChars(): number {
+    const raw = Number((this.thufirConfig.autonomy as any)?.asyncEnrichment?.maxChars ?? 280);
+    return Number.isFinite(raw) ? Math.max(80, Math.min(raw, 2000)) : 280;
+  }
+
+  private scheduleAsyncExecutionEnrichment(input: {
+    symbol: string;
+    side: 'buy' | 'sell';
+    executed: boolean;
+    message: string;
+    reasoning: string | null;
+  }): void {
+    if (!this.isAsyncEnrichmentEnabled()) {
+      return;
+    }
+    const timeoutMs = this.getAsyncEnrichmentTimeoutMs();
+    const maxChars = this.getAsyncEnrichmentMaxChars();
+    const startedAt = Date.now();
+
+    void (async () => {
+      try {
+        const response = await Promise.race([
+          this.llm.complete(
+            [
+              {
+                role: 'system',
+                content:
+                  'You are a concise trading execution annotator. Return one short line with thesis, invalidation posture, and next check.',
+              },
+              {
+                role: 'user',
+                content: [
+                  `symbol=${input.symbol}`,
+                  `side=${input.side}`,
+                  `executed=${input.executed}`,
+                  `message=${input.message}`,
+                  `reasoning=${input.reasoning ?? 'n/a'}`,
+                ].join('\n'),
+              },
+            ],
+            {
+              maxTokens: 120,
+              executionContext: {
+                mode: 'LIGHT_REASONING',
+                critical: false,
+                reason: 'autonomous_async_execution_enrichment',
+                source: 'autonomous',
+              },
+            }
+          ),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error(`async enrichment timed out after ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]);
+        const textRaw =
+          typeof (response as any)?.content === 'string'
+            ? (response as any).content
+            : JSON.stringify((response as any)?.content ?? '');
+        const text = textRaw.trim().slice(0, maxChars);
+        this.logger.info('Async execution enrichment completed', {
+          symbol: input.symbol,
+          side: input.side,
+          executed: input.executed,
+          latencyMs: Date.now() - startedAt,
+          enrichment: text,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Async execution enrichment failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    })();
   }
 
   private calculateUnrealizedPnl(): number {
