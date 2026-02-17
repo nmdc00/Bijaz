@@ -37,6 +37,7 @@ import {
   seedPlaybookForBlocker,
   suggestedRemediationToolSteps,
 } from './blockers.js';
+import { classifyToolFailure } from './retry_classifier.js';
 import {
   createAgentState,
   updatePlan,
@@ -792,21 +793,30 @@ export async function runOrchestrator(
         state = setPlan(state, completeStep(state.plan!, nextStep.id, execution.result));
       } else {
         const failedResult = execution.result as { success: false; error: string };
+        const failureClass = classifyToolFailure(execution.toolName, failedResult.error);
         if (state.plan && stepBlockers.length > 0) {
-          const injected = injectRemediationAndRetry({
-            plan: state.plan,
-            failedStep: nextStep,
-            blockers: stepBlockers,
-            toolRegistry: ctx.toolRegistry,
-          });
-          if (injected.injected) {
-            state = setPlan(state, injected.updated);
+          if (failureClass.classification === 'terminal') {
+            state = setPlan(state, failStep(state.plan, nextStep.id, failedResult.error));
             state = addWarning(
               state,
-              `Injected ${injected.injectedCount} remediation step(s) after tool failure`
+              `Terminal tool failure (${failureClass.reasonCode}); skipping same-cycle retry`
             );
           } else {
-            state = setPlan(state, failStep(state.plan!, nextStep.id, failedResult.error));
+            const injected = injectRemediationAndRetry({
+              plan: state.plan,
+              failedStep: nextStep,
+              blockers: stepBlockers,
+              toolRegistry: ctx.toolRegistry,
+            });
+            if (injected.injected) {
+              state = setPlan(state, injected.updated);
+              state = addWarning(
+                state,
+                `Injected ${injected.injectedCount} remediation step(s) after tool failure`
+              );
+            } else {
+              state = setPlan(state, failStep(state.plan, nextStep.id, failedResult.error));
+            }
           }
         } else {
           state = setPlan(state, failStep(state.plan!, nextStep.id, failedResult.error));
