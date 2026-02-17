@@ -34,17 +34,17 @@ import {
   suppressAlert,
 } from '../memory/alerts.js';
 import {
-  createScheduledReport,
-  deactivateScheduledReport,
-  getScheduledReportById,
-  listActiveScheduledReports,
-  listScheduledReportsByRecipient,
-  markScheduledReportSent,
-} from '../memory/scheduled_reports.js';
+  createScheduledTask,
+  deactivateScheduledTask,
+  getScheduledTaskById,
+  listActiveScheduledTasks,
+  listScheduledTasksByRecipient,
+  markScheduledTaskRan,
+} from '../memory/scheduled_tasks.js';
 import {
-  formatScheduledReportHelp,
-  parseScheduledReportAction,
-} from './scheduled_report_commands.js';
+  formatScheduledTaskHelp,
+  parseScheduledTaskAction,
+} from './scheduled_task_commands.js';
 import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
@@ -180,7 +180,7 @@ function describeSchedule(rec: {
   return `every ${rec.intervalMinutes ?? 0} minute(s)`;
 }
 
-function registerScheduledReportJob(params: { jobName: string; reportId: string; schedule: ScheduleDefinition }) {
+function registerScheduledTaskJob(params: { jobName: string; taskId: string; schedule: ScheduleDefinition }) {
   scheduler.registerJob(
     {
       name: params.jobName,
@@ -188,8 +188,8 @@ function registerScheduledReportJob(params: { jobName: string; reportId: string;
       leaseMs: 120_000,
     },
     async () => {
-      const rec = getScheduledReportById(params.reportId);
-      if (!rec || !rec.active) return;
+      const rec = getScheduledTaskById(params.taskId);
+      if (!rec || !rec.active || !rec.instruction) return;
 
       if (rec.scheduleKind === 'once' && rec.runAt) {
         const dueMs = Date.parse(rec.runAt);
@@ -198,56 +198,65 @@ function registerScheduledReportJob(params: { jobName: string; reportId: string;
         }
       }
 
-      const report = await primaryAgent.getAutonomous().generateDailyPnLReport();
-      const header = `📌 Scheduled report (${describeSchedule(rec)})`;
+      const sessionKey = buildAgentPeerSessionKey({
+        agentId: agentRegistry.defaultAgentId,
+        mainKey: config.session?.mainKey,
+        channel: rec.channel as 'telegram' | 'whatsapp' | 'cli',
+        peerKind: 'dm',
+        peerId: rec.recipientId,
+        dmScope: config.session?.dmScope,
+        identityLinks: config.session?.identityLinks,
+      });
+      const result = await primaryAgent.handleMessage(sessionKey, rec.instruction);
+      const header = `📌 Scheduled task (${describeSchedule(rec)})`;
       await sendChannelReply(
         { channel: rec.channel as 'telegram' | 'whatsapp' | 'cli', senderId: rec.recipientId },
-        `${header}\n\n${report}`,
-        'scheduled report'
+        `${header}\nTask: ${rec.instruction}\n\n${result}`,
+        'scheduled task'
       );
-      markScheduledReportSent(rec.id);
+      markScheduledTaskRan(rec.id);
       if (rec.scheduleKind === 'once') {
-        deactivateScheduledReport(rec.id);
+        deactivateScheduledTask(rec.id);
       }
     }
   );
 }
 
-async function maybeHandleScheduledReportAction(message: {
+async function maybeHandleScheduledTaskAction(message: {
   channel: 'telegram' | 'whatsapp' | 'cli';
   senderId: string;
   text: string;
 }): Promise<string | null> {
-  const action = parseScheduledReportAction(message.text);
+  const action = parseScheduledTaskAction(message.text);
   if (action.kind === 'none') return null;
 
   if (action.kind === 'help') {
-    return formatScheduledReportHelp();
+    return formatScheduledTaskHelp();
   }
 
   if (action.kind === 'schedule_intent_without_parse') {
-    return `${formatScheduledReportHelp()}\n\nI detected scheduling intent but couldn't parse the time exactly.`;
+    return `${formatScheduledTaskHelp()}\n\nI detected scheduling intent but couldn't parse the time exactly.`;
   }
 
   if (action.kind === 'list') {
-    const rows = listScheduledReportsByRecipient({
+    const rows = listScheduledTasksByRecipient({
       channel: message.channel,
       recipientId: message.senderId,
     });
     if (rows.length === 0) {
-      return 'No scheduled reports configured.';
+      return 'No scheduled tasks configured.';
     }
     return [
-      'Scheduled reports:',
+      'Scheduled tasks:',
       ...rows.map(
         (row) =>
-          `- ${row.id.slice(0, 8)} | ${row.active ? 'active' : 'inactive'} | ${describeSchedule(row)}`
+          `- ${row.id.slice(0, 8)} | ${row.active ? 'active' : 'inactive'} | ${describeSchedule(row)} | ${row.instruction}`
       ),
     ].join('\n');
   }
 
   if (action.kind === 'cancel') {
-    const rows = listScheduledReportsByRecipient({
+    const rows = listScheduledTasksByRecipient({
       channel: message.channel,
       recipientId: message.senderId,
     });
@@ -255,15 +264,15 @@ async function maybeHandleScheduledReportAction(message: {
       (row) => row.id === action.id || row.id.startsWith(action.id)
     );
     if (!target) {
-      return `No scheduled report found for id ${action.id}.`;
+      return `No scheduled task found for id ${action.id}.`;
     }
-    const ok = deactivateScheduledReport(target.id);
-    return ok ? `Cancelled scheduled report ${target.id.slice(0, 8)}.` : `Scheduled report ${target.id.slice(0, 8)} was already inactive.`;
+    const ok = deactivateScheduledTask(target.id);
+    return ok ? `Cancelled scheduled task ${target.id.slice(0, 8)}.` : `Scheduled task ${target.id.slice(0, 8)} was already inactive.`;
   }
 
   if (action.kind === 'create') {
     const shortId = Math.random().toString(36).slice(2, 10);
-    const jobName = `gateway:${schedulerNamespace}:scheduled-report:${shortId}`;
+    const jobName = `gateway:${schedulerNamespace}:scheduled-task:${shortId}`;
     const schedule: ScheduleDefinition =
       action.scheduleKind === 'daily'
         ? { kind: 'daily', time: action.dailyTime ?? '00:00' }
@@ -275,7 +284,7 @@ async function maybeHandleScheduledReportAction(message: {
                 : 60 * 1000,
           };
 
-    const rec = createScheduledReport({
+    const rec = createScheduledTask({
       schedulerJobName: jobName,
       channel: message.channel,
       recipientId: message.senderId,
@@ -283,10 +292,11 @@ async function maybeHandleScheduledReportAction(message: {
       runAt: action.runAtIso ?? null,
       dailyTime: action.dailyTime ?? null,
       intervalMinutes: action.intervalMinutes ?? null,
+      instruction: action.instruction,
     });
-    registerScheduledReportJob({ jobName, reportId: rec.id, schedule });
+    registerScheduledTaskJob({ jobName, taskId: rec.id, schedule });
     hasSchedulerJobs = true;
-    return `Scheduled report created (${rec.id.slice(0, 8)}): ${describeSchedule(rec)}.`;
+    return `Scheduled task created (${rec.id.slice(0, 8)}): ${describeSchedule(rec)}.\nTask: ${action.instruction}`;
   }
 
   return null;
@@ -321,7 +331,7 @@ const onIncoming = async (
       logger.warn(`Telegram progress failed for ${message.senderId}`, error);
     }
   };
-  const scheduledReply = await maybeHandleScheduledReportAction(message);
+  const scheduledReply = await maybeHandleScheduledTaskAction(message);
   if (scheduledReply) {
     await sendChannelReply(message, scheduledReply);
     return;
@@ -357,7 +367,7 @@ const scheduler = new SchedulerControlPlane({
 });
 let hasSchedulerJobs = false;
 
-for (const rec of listActiveScheduledReports()) {
+for (const rec of listActiveScheduledTasks()) {
   const schedule: ScheduleDefinition =
     rec.scheduleKind === 'daily'
       ? { kind: 'daily', time: rec.dailyTime ?? '00:00' }
@@ -368,9 +378,9 @@ for (const rec of listActiveScheduledReports()) {
               ? Math.max(1, rec.intervalMinutes ?? 30) * 60 * 1000
               : 60 * 1000,
         };
-  registerScheduledReportJob({
+  registerScheduledTaskJob({
     jobName: rec.schedulerJobName,
-    reportId: rec.id,
+    taskId: rec.id,
     schedule,
   });
   hasSchedulerJobs = true;

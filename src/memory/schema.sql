@@ -582,7 +582,7 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
 CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next_run ON scheduler_jobs(next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_lock_expires ON scheduler_jobs(lock_expires_at);
 
-CREATE TABLE IF NOT EXISTS scheduled_reports (
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id TEXT PRIMARY KEY,
     scheduler_job_name TEXT NOT NULL UNIQUE,
     channel TEXT NOT NULL,
@@ -591,14 +591,15 @@ CREATE TABLE IF NOT EXISTS scheduled_reports (
     run_at TEXT,
     daily_time TEXT,
     interval_minutes INTEGER,
+    instruction TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
-    last_sent_at TEXT,
+    last_ran_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_scheduled_reports_active ON scheduled_reports(active);
-CREATE INDEX IF NOT EXISTS idx_scheduled_reports_recipient ON scheduled_reports(channel, recipient_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_active ON scheduled_tasks(active);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_recipient ON scheduled_tasks(channel, recipient_id);
 
 -- ============================================================================
 -- Alert Incident Lifecycle

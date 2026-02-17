@@ -2,31 +2,33 @@ import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
 
-export type ScheduledReportKind = 'once' | 'daily' | 'interval';
+export type ScheduledTaskKind = 'once' | 'daily' | 'interval';
 
-export interface ScheduledReportRecord {
+export interface ScheduledTaskRecord {
   id: string;
   schedulerJobName: string;
   channel: string;
   recipientId: string;
-  scheduleKind: ScheduledReportKind;
+  scheduleKind: ScheduledTaskKind;
   runAt: string | null;
   dailyTime: string | null;
   intervalMinutes: number | null;
+  instruction: string;
   active: boolean;
-  lastSentAt: string | null;
+  lastRanAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface CreateScheduledReportInput {
+export interface CreateScheduledTaskInput {
   schedulerJobName: string;
   channel: string;
   recipientId: string;
-  scheduleKind: ScheduledReportKind;
+  scheduleKind: ScheduledTaskKind;
   runAt?: string | null;
   dailyTime?: string | null;
   intervalMinutes?: number | null;
+  instruction: string;
 }
 
 function mapRow(row: {
@@ -34,15 +36,16 @@ function mapRow(row: {
   schedulerJobName: string;
   channel: string;
   recipientId: string;
-  scheduleKind: ScheduledReportKind;
+  scheduleKind: ScheduledTaskKind;
   runAt: string | null;
   dailyTime: string | null;
   intervalMinutes: number | null;
+  instruction: string;
   active: number;
-  lastSentAt: string | null;
+  lastRanAt: string | null;
   createdAt: string;
   updatedAt: string;
-}): ScheduledReportRecord {
+}): ScheduledTaskRecord {
   return {
     id: row.id,
     schedulerJobName: row.schedulerJobName,
@@ -52,20 +55,21 @@ function mapRow(row: {
     runAt: row.runAt,
     dailyTime: row.dailyTime,
     intervalMinutes: row.intervalMinutes,
+    instruction: row.instruction,
     active: row.active === 1,
-    lastSentAt: row.lastSentAt,
+    lastRanAt: row.lastRanAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
-export function createScheduledReport(input: CreateScheduledReportInput): ScheduledReportRecord {
+export function createScheduledTask(input: CreateScheduledTaskInput): ScheduledTaskRecord {
   const db = openDatabase();
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
     `
-      INSERT INTO scheduled_reports (
+      INSERT INTO scheduled_tasks (
         id,
         scheduler_job_name,
         channel,
@@ -74,8 +78,9 @@ export function createScheduledReport(input: CreateScheduledReportInput): Schedu
         run_at,
         daily_time,
         interval_minutes,
+        instruction,
         active,
-        last_sent_at,
+        last_ran_at,
         created_at,
         updated_at
       ) VALUES (
@@ -87,6 +92,7 @@ export function createScheduledReport(input: CreateScheduledReportInput): Schedu
         @runAt,
         @dailyTime,
         @intervalMinutes,
+        @instruction,
         1,
         NULL,
         @now,
@@ -102,17 +108,18 @@ export function createScheduledReport(input: CreateScheduledReportInput): Schedu
     runAt: input.runAt ?? null,
     dailyTime: input.dailyTime ?? null,
     intervalMinutes: input.intervalMinutes ?? null,
+    instruction: input.instruction,
     now,
   });
 
-  const created = getScheduledReportById(id);
+  const created = getScheduledTaskById(id);
   if (!created) {
-    throw new Error('Failed to create scheduled report');
+    throw new Error('Failed to create scheduled task');
   }
   return created;
 }
 
-export function listActiveScheduledReports(): ScheduledReportRecord[] {
+export function listActiveScheduledTasks(): ScheduledTaskRecord[] {
   const db = openDatabase();
   const rows = db
     .prepare(
@@ -126,11 +133,12 @@ export function listActiveScheduledReports(): ScheduledReportRecord[] {
         run_at AS runAt,
         daily_time AS dailyTime,
         interval_minutes AS intervalMinutes,
+        instruction,
         active,
-        last_sent_at AS lastSentAt,
+        last_ran_at AS lastRanAt,
         created_at AS createdAt,
         updated_at AS updatedAt
-      FROM scheduled_reports
+      FROM scheduled_tasks
       WHERE active = 1
       ORDER BY created_at DESC
     `
@@ -139,10 +147,10 @@ export function listActiveScheduledReports(): ScheduledReportRecord[] {
   return rows.map(mapRow);
 }
 
-export function listScheduledReportsByRecipient(params: {
+export function listScheduledTasksByRecipient(params: {
   channel: string;
   recipientId: string;
-}): ScheduledReportRecord[] {
+}): ScheduledTaskRecord[] {
   const db = openDatabase();
   const rows = db
     .prepare(
@@ -156,11 +164,12 @@ export function listScheduledReportsByRecipient(params: {
         run_at AS runAt,
         daily_time AS dailyTime,
         interval_minutes AS intervalMinutes,
+        instruction,
         active,
-        last_sent_at AS lastSentAt,
+        last_ran_at AS lastRanAt,
         created_at AS createdAt,
         updated_at AS updatedAt
-      FROM scheduled_reports
+      FROM scheduled_tasks
       WHERE channel = @channel
         AND recipient_id = @recipientId
       ORDER BY created_at DESC
@@ -170,7 +179,7 @@ export function listScheduledReportsByRecipient(params: {
   return rows.map(mapRow);
 }
 
-export function getScheduledReportById(id: string): ScheduledReportRecord | null {
+export function getScheduledTaskById(id: string): ScheduledTaskRecord | null {
   const db = openDatabase();
   const row = db
     .prepare(
@@ -184,11 +193,12 @@ export function getScheduledReportById(id: string): ScheduledReportRecord | null
         run_at AS runAt,
         daily_time AS dailyTime,
         interval_minutes AS intervalMinutes,
+        instruction,
         active,
-        last_sent_at AS lastSentAt,
+        last_ran_at AS lastRanAt,
         created_at AS createdAt,
         updated_at AS updatedAt
-      FROM scheduled_reports
+      FROM scheduled_tasks
       WHERE id = @id
       LIMIT 1
     `
@@ -197,27 +207,27 @@ export function getScheduledReportById(id: string): ScheduledReportRecord | null
   return row ? mapRow(row) : null;
 }
 
-export function markScheduledReportSent(id: string, atIso?: string): void {
+export function markScheduledTaskRan(id: string, atIso?: string): void {
   const db = openDatabase();
   const now = atIso ?? new Date().toISOString();
   db.prepare(
     `
-      UPDATE scheduled_reports
+      UPDATE scheduled_tasks
       SET
-        last_sent_at = @now,
+        last_ran_at = @now,
         updated_at = @now
       WHERE id = @id
     `
   ).run({ id, now });
 }
 
-export function deactivateScheduledReport(id: string): boolean {
+export function deactivateScheduledTask(id: string): boolean {
   const db = openDatabase();
   const now = new Date().toISOString();
   const result = db
     .prepare(
       `
-      UPDATE scheduled_reports
+      UPDATE scheduled_tasks
       SET
         active = 0,
         updated_at = @now

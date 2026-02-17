@@ -30,10 +30,11 @@ v1.6 and v1.6.1 closure highlights:
 - reduce-only/FSM contract-validation order fixes.
 
 ## In Progress
-1. `feat/v1.6.1-scheduled-report-jobs`:
-- explicit scheduled report commands (`/schedule_report`, `/scheduled_reports`, `/unschedule_report`),
-- persisted scheduler-backed report jobs with startup rehydration,
-- natural-language report-time guard to prevent accidental trade execution.
+1. `feat/v1.6.1-scheduled-report-jobs` (pivoted to generic tasks):
+- explicit scheduled task commands (`/schedule`, `/scheduled_tasks`, `/unschedule_task`),
+- persisted scheduler-backed task jobs with startup rehydration,
+- scheduled entries execute arbitrary instructions through normal agent flow,
+- natural-language time-intent guard to prevent accidental trade execution.
 2. Deployment/runtime soak on server for latest `develop` baseline.
 
 ## Next Steps
