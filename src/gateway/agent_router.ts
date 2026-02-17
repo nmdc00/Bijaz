@@ -74,6 +74,14 @@ function mergeConfig(
         ...base.autonomy.calibrationRisk,
         ...(override?.autonomy?.calibrationRisk ?? {}),
       },
+      tradeContract: {
+        ...base.autonomy.tradeContract,
+        ...(override?.autonomy?.tradeContract ?? {}),
+      },
+      tradeQuality: {
+        ...base.autonomy.tradeQuality,
+        ...(override?.autonomy?.tradeQuality ?? {}),
+      },
       newsEntry: {
         ...base.autonomy.newsEntry,
         ...(override?.autonomy?.newsEntry ?? {}),
