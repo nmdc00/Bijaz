@@ -25,6 +25,7 @@ import { createLlmClient } from '../core/llm.js';
 import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
+import type { ScheduleDefinition } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
 import {
   createAlert,
@@ -32,6 +33,18 @@ import {
   recordAlertDelivery,
   suppressAlert,
 } from '../memory/alerts.js';
+import {
+  createScheduledReport,
+  deactivateScheduledReport,
+  getScheduledReportById,
+  listActiveScheduledReports,
+  listScheduledReportsByRecipient,
+  markScheduledReportSent,
+} from '../memory/scheduled_reports.js';
+import {
+  formatScheduledReportHelp,
+  parseScheduledReportAction,
+} from './scheduled_report_commands.js';
 import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
@@ -60,6 +73,7 @@ const defaultAgent =
 if (!defaultAgent) {
   throw new Error('No agents configured');
 }
+const primaryAgent = defaultAgent;
 
 const telegram = config.channels.telegram.enabled ? new TelegramAdapter(config) : null;
 const whatsapp = config.channels.whatsapp.enabled ? new WhatsAppAdapter(config) : null;
@@ -85,7 +99,7 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
     return;
   }
   const startedAt = Date.now();
-  const scanResult = await defaultAgent!.getAutonomous().runScan();
+  const scanResult = await primaryAgent.getAutonomous().runScan();
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );
@@ -98,7 +112,7 @@ for (const instance of agentRegistry.agents.values()) {
 const positionHeartbeatConfig = config.heartbeat;
 if (positionHeartbeatConfig?.enabled) {
   try {
-    const service = new PositionHeartbeatService(config, defaultAgent.getToolContext(), logger);
+    const service = new PositionHeartbeatService(config, primaryAgent.getToolContext(), logger);
     service.start();
   } catch (error) {
     logger.error('PositionHeartbeat failed to start', error);
@@ -123,6 +137,159 @@ function isWithinActiveChatWindow(seconds: number | undefined): boolean {
     return false;
   }
   return Date.now() - lastInteractiveMessageAtMs < windowSeconds * 1000;
+}
+
+async function sendChannelReply(
+  message: {
+    channel: 'telegram' | 'whatsapp' | 'cli';
+    senderId: string;
+  },
+  reply: string,
+  label: string = 'reply'
+): Promise<void> {
+  if (message.channel === 'telegram' && telegram) {
+    try {
+      await telegram.sendMessage(message.senderId, reply);
+      logger.info(`Telegram ${label} sent to ${message.senderId}`);
+    } catch (error) {
+      logger.error(`Telegram ${label} failed for ${message.senderId}`, error);
+    }
+  }
+  if (message.channel === 'whatsapp' && whatsapp) {
+    try {
+      await whatsapp.sendMessage(message.senderId, reply);
+      logger.info(`WhatsApp ${label} sent to ${message.senderId}`);
+    } catch (error) {
+      logger.error(`WhatsApp ${label} failed for ${message.senderId}`, error);
+    }
+  }
+}
+
+function describeSchedule(rec: {
+  scheduleKind: 'once' | 'daily' | 'interval';
+  runAt: string | null;
+  dailyTime: string | null;
+  intervalMinutes: number | null;
+}): string {
+  if (rec.scheduleKind === 'once') {
+    return rec.runAt ? `once at ${rec.runAt} (UTC)` : 'once';
+  }
+  if (rec.scheduleKind === 'daily') {
+    return `daily at ${rec.dailyTime ?? '??:??'} (UTC)`;
+  }
+  return `every ${rec.intervalMinutes ?? 0} minute(s)`;
+}
+
+function registerScheduledReportJob(params: { jobName: string; reportId: string; schedule: ScheduleDefinition }) {
+  scheduler.registerJob(
+    {
+      name: params.jobName,
+      schedule: params.schedule,
+      leaseMs: 120_000,
+    },
+    async () => {
+      const rec = getScheduledReportById(params.reportId);
+      if (!rec || !rec.active) return;
+
+      if (rec.scheduleKind === 'once' && rec.runAt) {
+        const dueMs = Date.parse(rec.runAt);
+        if (Number.isFinite(dueMs) && Date.now() < dueMs) {
+          return;
+        }
+      }
+
+      const report = await primaryAgent.getAutonomous().generateDailyPnLReport();
+      const header = `📌 Scheduled report (${describeSchedule(rec)})`;
+      await sendChannelReply(
+        { channel: rec.channel as 'telegram' | 'whatsapp' | 'cli', senderId: rec.recipientId },
+        `${header}\n\n${report}`,
+        'scheduled report'
+      );
+      markScheduledReportSent(rec.id);
+      if (rec.scheduleKind === 'once') {
+        deactivateScheduledReport(rec.id);
+      }
+    }
+  );
+}
+
+async function maybeHandleScheduledReportAction(message: {
+  channel: 'telegram' | 'whatsapp' | 'cli';
+  senderId: string;
+  text: string;
+}): Promise<string | null> {
+  const action = parseScheduledReportAction(message.text);
+  if (action.kind === 'none') return null;
+
+  if (action.kind === 'help') {
+    return formatScheduledReportHelp();
+  }
+
+  if (action.kind === 'schedule_intent_without_parse') {
+    return `${formatScheduledReportHelp()}\n\nI detected scheduling intent but couldn't parse the time exactly.`;
+  }
+
+  if (action.kind === 'list') {
+    const rows = listScheduledReportsByRecipient({
+      channel: message.channel,
+      recipientId: message.senderId,
+    });
+    if (rows.length === 0) {
+      return 'No scheduled reports configured.';
+    }
+    return [
+      'Scheduled reports:',
+      ...rows.map(
+        (row) =>
+          `- ${row.id.slice(0, 8)} | ${row.active ? 'active' : 'inactive'} | ${describeSchedule(row)}`
+      ),
+    ].join('\n');
+  }
+
+  if (action.kind === 'cancel') {
+    const rows = listScheduledReportsByRecipient({
+      channel: message.channel,
+      recipientId: message.senderId,
+    });
+    const target = rows.find(
+      (row) => row.id === action.id || row.id.startsWith(action.id)
+    );
+    if (!target) {
+      return `No scheduled report found for id ${action.id}.`;
+    }
+    const ok = deactivateScheduledReport(target.id);
+    return ok ? `Cancelled scheduled report ${target.id.slice(0, 8)}.` : `Scheduled report ${target.id.slice(0, 8)} was already inactive.`;
+  }
+
+  if (action.kind === 'create') {
+    const shortId = Math.random().toString(36).slice(2, 10);
+    const jobName = `gateway:${schedulerNamespace}:scheduled-report:${shortId}`;
+    const schedule: ScheduleDefinition =
+      action.scheduleKind === 'daily'
+        ? { kind: 'daily', time: action.dailyTime ?? '00:00' }
+        : {
+            kind: 'interval',
+            intervalMs:
+              action.scheduleKind === 'interval'
+                ? Math.max(1, action.intervalMinutes ?? 30) * 60 * 1000
+                : 60 * 1000,
+          };
+
+    const rec = createScheduledReport({
+      schedulerJobName: jobName,
+      channel: message.channel,
+      recipientId: message.senderId,
+      scheduleKind: action.scheduleKind,
+      runAt: action.runAtIso ?? null,
+      dailyTime: action.dailyTime ?? null,
+      intervalMinutes: action.intervalMinutes ?? null,
+    });
+    registerScheduledReportJob({ jobName, reportId: rec.id, schedule });
+    hasSchedulerJobs = true;
+    return `Scheduled report created (${rec.id.slice(0, 8)}): ${describeSchedule(rec)}.`;
+  }
+
+  return null;
 }
 
 const onIncoming = async (
@@ -154,6 +321,11 @@ const onIncoming = async (
       logger.warn(`Telegram progress failed for ${message.senderId}`, error);
     }
   };
+  const scheduledReply = await maybeHandleScheduledReportAction(message);
+  if (scheduledReply) {
+    await sendChannelReply(message, scheduledReply);
+    return;
+  }
   const { agentId, agent: activeAgent } = agentRegistry.resolveAgent(message);
   const sessionKey = buildAgentPeerSessionKey({
     agentId,
@@ -174,22 +346,7 @@ const onIncoming = async (
     logger.warn(`Empty reply for ${message.channel}:${message.senderId}`);
     return;
   }
-  if (message.channel === 'telegram' && telegram) {
-    try {
-      await telegram.sendMessage(message.senderId, reply);
-      logger.info(`Telegram reply sent to ${message.senderId}`);
-    } catch (error) {
-      logger.error(`Telegram send failed for ${message.senderId}`, error);
-    }
-  }
-  if (message.channel === 'whatsapp' && whatsapp) {
-    try {
-      await whatsapp.sendMessage(message.senderId, reply);
-      logger.info(`WhatsApp reply sent to ${message.senderId}`);
-    } catch (error) {
-      logger.error(`WhatsApp send failed for ${message.senderId}`, error);
-    }
-  }
+  await sendChannelReply(message, reply);
 };
 
 const schedulerSeed = config.memory?.dbPath ?? config.agent?.workspace ?? 'default';
@@ -199,6 +356,25 @@ const scheduler = new SchedulerControlPlane({
   pollIntervalMs: 1_000,
 });
 let hasSchedulerJobs = false;
+
+for (const rec of listActiveScheduledReports()) {
+  const schedule: ScheduleDefinition =
+    rec.scheduleKind === 'daily'
+      ? { kind: 'daily', time: rec.dailyTime ?? '00:00' }
+      : {
+          kind: 'interval',
+          intervalMs:
+            rec.scheduleKind === 'interval'
+              ? Math.max(1, rec.intervalMinutes ?? 30) * 60 * 1000
+              : 60 * 1000,
+        };
+  registerScheduledReportJob({
+    jobName: rec.schedulerJobName,
+    reportId: rec.id,
+    schedule,
+  });
+  hasSchedulerJobs = true;
+}
 
 const briefingConfig = config.notifications?.briefing;
 let lastBriefingDate = '';
@@ -217,7 +393,7 @@ if (briefingConfig?.enabled) {
       return;
     }
 
-    const message = await defaultAgent.generateBriefing();
+    const message = await primaryAgent.generateBriefing();
     const channels = briefingConfig.channels ?? [];
     if (channels.includes('telegram') && telegram) {
       for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
@@ -472,7 +648,7 @@ if (heartbeatConfig?.enabled) {
       logger.info('Heartbeat LLM message generation suppressed due to active chat window');
       return;
     }
-    const response = await defaultAgent.handleMessage(heartbeatUserId, prompt);
+    const response = await primaryAgent.handleMessage(heartbeatUserId, prompt);
     if (!response || response.trim().length === 0) {
       return;
     }
@@ -797,7 +973,7 @@ if (mentatConfig?.enabled) {
 
 const dailyReportConfig = config.notifications?.dailyReport;
 if (dailyReportConfig?.enabled) {
-  defaultAgent.getAutonomous().on('daily-report', async (report) => {
+  primaryAgent.getAutonomous().on('daily-report', async (report) => {
     const channels = dailyReportConfig.channels ?? [];
     if (channels.includes('telegram') && telegram) {
       for (const chatId of config.channels.telegram.allowedChatIds ?? []) {

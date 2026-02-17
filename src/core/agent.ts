@@ -577,6 +577,9 @@ Just type naturally to chat about markets, risks, or positioning.
 /top10 - Get today's top 10 discovery expressions
 /status - Show autonomous mode status and P&L
 /report - Full daily report
+/schedule_report ... - Schedule report delivery (gateway command)
+/scheduled_reports - List scheduled reports (gateway command)
+/unschedule_report <id> - Cancel scheduled report (gateway command)
 /fullauto [on|off] - Toggle autonomous execution
 /pause - Pause autonomous trading
 /resume - Resume autonomous trading
