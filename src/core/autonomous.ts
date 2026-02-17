@@ -36,6 +36,7 @@ import {
 import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
 import { summarizeSignalPerformance } from './signal_performance.js';
 import { SchedulerControlPlane } from './scheduler_control_plane.js';
+import { AutonomousScanTelemetry } from './performance_metrics.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -301,6 +302,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     maxTrades?: number;
     ignoreThresholds?: boolean;
   }): Promise<string> {
+    const telemetry = new AutonomousScanTelemetry();
     const recentJournal = listPerpTradeJournals({ limit: 50 });
     const reflectionMutation = applyReflectionMutation(this.thufirConfig, recentJournal);
     const policyState = getAutonomyPolicyState();
@@ -308,7 +310,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       policyState.observationOnlyUntilMs != null && policyState.observationOnlyUntilMs > Date.now();
 
     const result = await runDiscovery(this.thufirConfig);
+    telemetry.markDiscoveryDone();
     if (result.expressions.length === 0) {
+      telemetry.markFilterDone();
+      telemetry.markFinished();
+      this.logger.info('Autonomous performance metrics', telemetry.summarize({
+        expressions: 0,
+        eligible: 0,
+        executed: 0,
+      }));
       return 'No discovery expressions generated.';
     }
     const clusterBySymbol = new Map(result.clusters.map((cluster) => [cluster.symbol, cluster]));
@@ -388,6 +398,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const header = observationActive
         ? `Discovery scan completed in observation-only mode (${policyState.reason ?? 'adaptive policy active'}).`
         : 'Discovery scan completed:';
+      telemetry.markFilterDone();
+      telemetry.markFinished();
+      this.logger.info('Autonomous performance metrics', telemetry.summarize({
+        expressions: result.expressions.length,
+        eligible: Math.min(5, result.expressions.length),
+        executed: 0,
+      }));
       return `${header}\n${lines.join('\n')}`;
     }
 
@@ -429,7 +446,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       }
       return true;
     });
+    telemetry.markFilterDone();
     if (eligible.length === 0) {
+      telemetry.markFinished();
+      this.logger.info('Autonomous performance metrics', telemetry.summarize({
+        expressions: result.expressions.length,
+        eligible: 0,
+        executed: 0,
+      }));
       return 'No expressions met autonomy thresholds (minEdge/confidence).';
     }
 
@@ -443,6 +467,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       : adaptiveMaxTrades;
     const toExecute = ranked.slice(0, maxTrades);
     const outputs: string[] = [];
+    let executedCount = 0;
 
     for (const expr of toExecute) {
       const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
@@ -566,6 +591,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
       const tradeResult = await this.executor.execute(market, decision);
       if (tradeResult.executed) {
+        executedCount += 1;
         this.limiter.confirm(probeUsd);
       } else {
         this.limiter.release(probeUsd);
@@ -663,6 +689,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     if (reflectionMutation.mutated) {
       outputs.push(`Adaptive policy updated: ${reflectionMutation.reason ?? 'performance mutation applied'}`);
     }
+
+    telemetry.markFinished();
+    this.logger.info('Autonomous performance metrics', telemetry.summarize({
+      expressions: result.expressions.length,
+      eligible: eligible.length,
+      executed: executedCount,
+    }));
 
     return outputs.join('\n');
   }
