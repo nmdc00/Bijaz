@@ -512,6 +512,16 @@ const ConfigSchema = z.object({
                       minSamples: z.number().optional(),
                     })
                     .optional(),
+                  calibrationRisk: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      minSamples: z.number().optional(),
+                      downweightBelowAccuracy: z.number().optional(),
+                      blockBelowAccuracy: z.number().optional(),
+                      downweightMultiplier: z.number().optional(),
+                      blockEnabled: z.boolean().optional(),
+                    })
+                    .optional(),
                   newsEntry: z
                     .object({
                       minNoveltyScore: z.number().optional(),
@@ -577,6 +587,16 @@ const ConfigSchema = z.object({
         .object({
           minSharpe: z.number().default(0.8),
           minSamples: z.number().default(8),
+        })
+        .default({}),
+      calibrationRisk: z
+        .object({
+          enabled: z.boolean().default(true),
+          minSamples: z.number().default(12),
+          downweightBelowAccuracy: z.number().default(0.5),
+          blockBelowAccuracy: z.number().default(0.35),
+          downweightMultiplier: z.number().default(0.5),
+          blockEnabled: z.boolean().default(true),
         })
         .default({}),
       newsEntry: z

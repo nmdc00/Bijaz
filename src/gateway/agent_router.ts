@@ -66,6 +66,10 @@ function mergeConfig(
         ...base.autonomy.signalPerformance,
         ...(override?.autonomy?.signalPerformance ?? {}),
       },
+      calibrationRisk: {
+        ...base.autonomy.calibrationRisk,
+        ...(override?.autonomy?.calibrationRisk ?? {}),
+      },
       newsEntry: {
         ...base.autonomy.newsEntry,
         ...(override?.autonomy?.newsEntry ?? {}),
