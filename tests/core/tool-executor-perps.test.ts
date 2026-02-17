@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { executeToolCall } from '../../src/core/tool-executor.js';
+import { HyperliquidClient } from '../../src/execution/hyperliquid/client.js';
 
 describe('tool-executor perps', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
@@ -15,6 +16,7 @@ describe('tool-executor perps', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (process.env.THUFIR_DB_PATH) {
       rmSync(process.env.THUFIR_DB_PATH, { force: true });
       rmSync(dirname(process.env.THUFIR_DB_PATH), { recursive: true, force: true });
@@ -202,6 +204,9 @@ describe('tool-executor perps', () => {
   });
 
   it('accepts deterministic thesis evaluation fields for reduce-only exits', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [{ position: { coin: 'XBTTEST', szi: '0.005' } }],
+    } as any);
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
       getOpenOrders: async () => [],
@@ -227,6 +232,79 @@ describe('tool-executor perps', () => {
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
+  });
+
+  it('blocks reduce-only when no live position exists', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [],
+    } as any);
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(false);
+    expect(String(res.error)).toContain('no open BTC position');
+  });
+
+  it('blocks reduce-only when side would increase current position', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [{ position: { coin: 'BTC', szi: '0.4' } }],
+    } as any);
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: true },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(false);
+    expect(String(res.error)).toContain('would increase current long BTC position');
+  });
+
+  it('caps reduce-only size to live position size before execution', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [{ position: { coin: 'BTC', szi: '0.25' } }],
+    } as any);
+    let executedSize = 0;
+    const executor = {
+      execute: async (_market: unknown, decision: { size?: number }) => {
+        executedSize = Number(decision.size ?? 0);
+        return { executed: true, message: 'ok' };
+      },
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'sell', size: 0.8, reduce_only: true },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+    expect(executedSize).toBeCloseTo(0.25, 8);
   });
 
   it('blocks manual reduce-only exits when exit FSM enforcement is enabled', async () => {

@@ -1212,6 +1212,18 @@ function buildCriticFailureFallbackResponse(state: AgentState, originalResponse:
       lines.push(
         `Partial failures: ${failedTrades.length} additional attempt(s) failed${lastErr ? ` (last error: ${lastErr})` : ''}.`
       );
+      lines.push('Failed attempts detail:');
+      for (const attempt of failedTrades.slice(0, 3)) {
+        const input = (attempt.input ?? {}) as Record<string, unknown>;
+        const symbol = typeof input.symbol === 'string' ? input.symbol : '?';
+        const side = typeof input.side === 'string' ? input.side : '?';
+        const size = Number(input.size);
+        const reduceOnly = Boolean(input.reduce_only ?? false);
+        const err = ((attempt.result as { error?: string } | undefined)?.error ?? 'unknown error').trim();
+        lines.push(
+          `- symbol=${symbol} side=${side} size=${Number.isFinite(size) ? size : '?'} reduce_only=${reduceOnly}: ${err}`
+        );
+      }
     }
     return lines.join('\n');
   }
