@@ -626,6 +626,11 @@ export const THUFIR_TOOLS: Tool[] = [
           type: 'number',
           description: 'Optional lowest observed trade-path price for closed-trade component scoring',
         },
+        plan_context: {
+          type: 'object',
+          additionalProperties: true,
+          description: 'Optional plan snapshot metadata to persist with this trade attempt',
+        },
       },
       required: ['symbol', 'side', 'size'],
     },

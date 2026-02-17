@@ -172,6 +172,13 @@ function parseNewsSources(input: unknown): string[] | null {
   return null;
 }
 
+function parsePlanContext(input: unknown): Record<string, unknown> | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return null;
+  }
+  return input as Record<string, unknown>;
+}
+
 function toFiniteNumberOrNull(input: unknown): number | null {
   const value = Number(input);
   return Number.isFinite(value) ? value : null;
@@ -1000,6 +1007,7 @@ export async function executeToolCall(
             : null;
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
+        const planContext = parsePlanContext(toolInput.plan_context);
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =
@@ -1161,6 +1169,7 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              planContext,
               outcome: 'blocked',
               error: policyGate.reason ?? 'policy constraints active',
             });
@@ -1232,6 +1241,7 @@ export async function executeToolCall(
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              planContext,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
             });
@@ -1282,6 +1292,7 @@ export async function executeToolCall(
                 exitMode: exitAssessment.exitMode,
                 emotionalExitFlag: exitAssessment.emotionalExitFlag,
                 thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+                planContext,
                 outcome: 'blocked',
                 error: limitCheck.reason ?? 'limit exceeded',
               });
@@ -1367,6 +1378,7 @@ export async function executeToolCall(
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              planContext,
               outcome: 'failed',
               error: `${result.message}${retrySummary}`,
             });
@@ -1499,6 +1511,7 @@ export async function executeToolCall(
             realizedOrderId: realizedFee.realized_order_id,
             realizedFillTimeMs: realizedFee.realized_fill_time_ms,
             feeObservationError: realizedFee.error ?? null,
+            planContext,
             outcome: 'executed',
             message: result.message,
           });
