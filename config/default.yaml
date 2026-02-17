@@ -210,6 +210,8 @@ autonomy:
   pauseOnLossStreak: 3         # Pause after N consecutive losses
   dailyReportTime: "20:00"     # Time to send daily P&L report
   maxTradesPerScan: 3          # Max trades per scan cycle
+  tradeContract:
+    enabled: false             # Enforce entry trade contract (archetype/invalidation/time stop)
   discoverySelection:
     enabled: true
     fullUniverseWhenSymbolsEmpty: true  # If hyperliquid.symbols is [], rank full perp universe

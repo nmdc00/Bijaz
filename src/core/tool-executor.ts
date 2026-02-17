@@ -26,6 +26,7 @@ import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
 import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
+import { validateEntryTradeContract } from './trade_contract.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -889,6 +890,17 @@ export async function executeToolCall(
         const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
         const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
         const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
+        const tradeArchetype =
+          typeof toolInput.trade_archetype === 'string' ? toolInput.trade_archetype.trim() : null;
+        const invalidationType =
+          typeof toolInput.invalidation_type === 'string' ? toolInput.invalidation_type.trim() : null;
+        const invalidationPrice = toFiniteNumberOrNull(toolInput.invalidation_price);
+        const timeStopAtMs =
+          toolInput.time_stop_at_ms != null && Number.isFinite(Number(toolInput.time_stop_at_ms))
+            ? Number(toolInput.time_stop_at_ms)
+            : null;
+        const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
+        const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
         const exitAssessment = evaluateReduceOnlyExitAssessment({
@@ -907,6 +919,21 @@ export async function executeToolCall(
             : null;
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
+        }
+        const contractValidation = validateEntryTradeContract({
+          enabled: Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled),
+          reduceOnly,
+          input: {
+            tradeArchetype,
+            invalidationType,
+            invalidationPrice,
+            timeStopAtMs,
+            takeProfitR,
+            trailMode,
+          },
+        });
+        if (!contractValidation.valid) {
+          return { success: false, error: contractValidation.error };
         }
         const market = await ctx.marketClient.getMarket(symbol);
         const feeEstimate = await estimatePerpOrderFee(ctx, {

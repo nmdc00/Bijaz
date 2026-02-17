@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest';
+
+import { validateEntryTradeContract } from '../../src/core/trade_contract.js';
+
+describe('trade contract validation', () => {
+  const nowMs = Date.parse('2026-02-17T12:00:00Z');
+
+  it('passes through when enforcement is disabled', () => {
+    const result = validateEntryTradeContract({
+      enabled: false,
+      reduceOnly: false,
+      input: {},
+      nowMs,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('requires archetype/invalidation/time stop when enabled', () => {
+    const result = validateEntryTradeContract({
+      enabled: true,
+      reduceOnly: false,
+      input: {},
+      nowMs,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('enforces invalidation_price for price-level contracts', () => {
+    const result = validateEntryTradeContract({
+      enabled: true,
+      reduceOnly: false,
+      input: {
+        tradeArchetype: 'intraday',
+        invalidationType: 'price_level',
+        timeStopAtMs: nowMs + 60 * 60 * 1000,
+        trailMode: 'atr',
+      },
+      nowMs,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('enforces minimum hold windows by archetype', () => {
+    const result = validateEntryTradeContract({
+      enabled: true,
+      reduceOnly: false,
+      input: {
+        tradeArchetype: 'swing',
+        invalidationType: 'structure_break',
+        timeStopAtMs: nowMs + 60 * 60 * 1000,
+        takeProfitR: 2,
+        trailMode: 'none',
+      },
+      nowMs,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('accepts a valid enabled contract', () => {
+    const result = validateEntryTradeContract({
+      enabled: true,
+      reduceOnly: false,
+      input: {
+        tradeArchetype: 'intraday',
+        invalidationType: 'price_level',
+        invalidationPrice: 49000,
+        timeStopAtMs: nowMs + 3 * 60 * 60 * 1000,
+        takeProfitR: 2,
+        trailMode: 'structure',
+      },
+      nowMs,
+    });
+    expect(result.valid).toBe(true);
+  });
+});
