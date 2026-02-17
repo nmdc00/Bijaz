@@ -1457,6 +1457,16 @@ function mapEntryTriggerAlias(raw: string): string | null {
 
 export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
   const normalized = { ...input };
+  const normalizeEnum = (
+    raw: unknown,
+    allowed: string[],
+    aliasMap?: Record<string, string>
+  ): string | undefined => {
+    if (typeof raw !== 'string') return undefined;
+    const key = raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const mapped = aliasMap?.[key] ?? key;
+    return allowed.includes(mapped) ? mapped : undefined;
+  };
 
   if (typeof normalized.side === 'string') {
     normalized.side = normalized.side.toLowerCase().trim();
@@ -1509,6 +1519,49 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
     const value = normalized.thesis_invalidation_hit.toLowerCase().trim();
     if (value === 'true') normalized.thesis_invalidation_hit = true;
     if (value === 'false') normalized.thesis_invalidation_hit = false;
+  }
+
+  if (typeof normalized.thesis_invalidation_hit === 'string') {
+    const value = normalized.thesis_invalidation_hit.trim().toLowerCase();
+    if (value === 'true') normalized.thesis_invalidation_hit = true;
+    if (value === 'false') normalized.thesis_invalidation_hit = false;
+  }
+
+  const normalizedExitMode = normalizeEnum(
+    normalized.exit_mode,
+    ['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown'],
+    {
+      invalidation: 'thesis_invalidation',
+      thesis_invalidated: 'thesis_invalidation',
+      stop_loss: 'thesis_invalidation',
+      tp: 'take_profit',
+      takeprofit: 'take_profit',
+      time_stop: 'time_exit',
+      timeout: 'time_exit',
+      liquidity_probe: 'risk_reduction',
+      liquidity: 'risk_reduction',
+      de_risk: 'risk_reduction',
+      derisk: 'risk_reduction',
+      manual_close: 'manual',
+    }
+  );
+  if (normalizedExitMode) {
+    normalized.exit_mode = normalizedExitMode;
+  } else {
+    delete normalized.exit_mode;
+  }
+
+  const normalizedArchetype = normalizeEnum(
+    normalized.trade_archetype,
+    ['scalp', 'intraday', 'swing'],
+    { day_trade: 'intraday', daytrading: 'intraday' }
+  );
+  if (normalizedArchetype) {
+    normalized.trade_archetype = normalizedArchetype;
+  } else if (!Boolean(normalized.reduce_only)) {
+    normalized.trade_archetype = 'intraday';
+  } else {
+    delete normalized.trade_archetype;
   }
 
   // Ensure a positive minimal size so schema validation doesn't fail before execution.
