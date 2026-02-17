@@ -5,11 +5,20 @@
  * All tests MUST pass before any deployment.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   SpendingLimitEnforcer,
   type SpendingLimits,
 } from '../../../src/execution/wallet/limits.js';
+
+vi.mock('../../../src/memory/db.js', () => ({
+  openDatabase: () => ({
+    prepare: () => ({
+      get: () => undefined,
+      run: () => ({ changes: 1 }),
+    }),
+  }),
+}));
 
 describe('SpendingLimitEnforcer', () => {
   let enforcer: SpendingLimitEnforcer;
