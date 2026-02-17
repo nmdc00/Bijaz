@@ -803,7 +803,7 @@ export async function executeToolCall(
         }
         const symbol = String(toolInput.symbol ?? '');
         const side = String(toolInput.side ?? '').toLowerCase();
-        const size = Number(toolInput.size ?? 0);
+        const requestedSize = Number(toolInput.size ?? 0);
         const orderTypeRaw = String(toolInput.order_type ?? 'market').toLowerCase();
         const orderType: 'market' | 'limit' = orderTypeRaw === 'limit' ? 'limit' : 'market';
         const price = toolInput.price !== undefined ? Number(toolInput.price) : undefined;
@@ -878,19 +878,21 @@ export async function executeToolCall(
           marketRegimeRaw === 'low_vol_compression'
             ? marketRegimeRaw
             : null;
-        if (!symbol || !size || (side !== 'buy' && side !== 'sell')) {
+        if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
         const market = await ctx.marketClient.getMarket(symbol);
         const feeEstimate = await estimatePerpOrderFee(ctx, {
           orderType,
-          size,
+          size: requestedSize,
           inputPrice: price,
           markPrice: market.markPrice ?? null,
         });
         const policyGate = evaluateGlobalTradeGate(ctx.config, {
           signalClass,
           marketRegime,
+          volatilityBucket,
+          liquidityBucket,
           expectedEdge,
         });
         if (!policyGate.allowed) {
@@ -901,7 +903,7 @@ export async function executeToolCall(
               hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
-              size,
+              size: requestedSize,
               leverage: leverage ?? null,
               orderType,
               reduceOnly,
@@ -936,6 +938,14 @@ export async function executeToolCall(
           }
           return { success: false, error: policyGate.reason ?? 'policy constraints active' };
         }
+        let size = requestedSize;
+        let policyReasoning: string | null = null;
+        if (!reduceOnly && policyGate.sizeMultiplier < 1) {
+          size = Math.max(0.00000001, requestedSize * policyGate.sizeMultiplier);
+          policyReasoning =
+            `Policy applied (${policyGate.reasonCode ?? 'policy.size_adjust'}): ` +
+            `${policyGate.reason ?? 'size multiplier enforced'}; requested_size=${requestedSize}, effective_size=${size}`;
+        }
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
           symbol,
@@ -963,7 +973,9 @@ export async function executeToolCall(
               reduceOnly,
               markPrice: market.markPrice ?? null,
               confidence: null,
-              reasoning: `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`,
+              reasoning:
+                `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}` +
+                (policyReasoning ? ` | ${policyReasoning}` : ''),
               estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
@@ -1010,7 +1022,9 @@ export async function executeToolCall(
                 reduceOnly,
                 markPrice: market.markPrice ?? null,
                 confidence: null,
-                reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
+                reasoning:
+                  `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}` +
+                  (policyReasoning ? ` | ${policyReasoning}` : ''),
                 estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
                 estimatedFeeRate: feeEstimate.estimated_fee_rate,
                 estimatedFeeType: feeEstimate.estimated_fee_type,
@@ -1078,7 +1092,7 @@ export async function executeToolCall(
               reduceOnly,
               markPrice: market.markPrice ?? null,
               confidence: 'medium',
-              reasoning: null,
+              reasoning: policyReasoning,
               estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
@@ -1139,7 +1153,7 @@ export async function executeToolCall(
             reduceOnly,
             markPrice: market.markPrice ?? null,
             confidence: 'medium',
-            reasoning: null,
+            reasoning: policyReasoning,
             estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
             estimatedFeeRate: feeEstimate.estimated_fee_rate,
             estimatedFeeType: feeEstimate.estimated_fee_type,
@@ -1177,6 +1191,13 @@ export async function executeToolCall(
           success: true,
           data: {
             ...result,
+            policy: {
+              reason_code: policyGate.reasonCode ?? null,
+              reason: policyGate.reason ?? null,
+              size_multiplier: policyGate.sizeMultiplier,
+              requested_size: requestedSize,
+              effective_size: size,
+            },
             fees: {
               ...feeEstimate,
               ...realizedFee,
@@ -1422,7 +1443,23 @@ export async function executeToolCall(
 
       case 'discovery_run': {
         const { runDiscovery } = await import('../discovery/engine.js');
-        const result = await runDiscovery(ctx.config);
+        const limit = Number(toolInput.limit ?? undefined);
+        const result = await runDiscovery(ctx.config, {
+          preselectLimit: Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : undefined,
+        });
+        return { success: true, data: result };
+      }
+
+      case 'discovery_select_markets': {
+        const { selectDiscoveryMarkets } = await import('../discovery/market_selector.js');
+        const limit = Number(toolInput.limit ?? undefined);
+        const minOpenInterestUsd = Number(toolInput.min_open_interest_usd ?? undefined);
+        const minDayVolumeUsd = Number(toolInput.min_day_volume_usd ?? undefined);
+        const result = await selectDiscoveryMarkets(ctx.config, {
+          limit: Number.isFinite(limit) ? limit : undefined,
+          minOpenInterestUsd: Number.isFinite(minOpenInterestUsd) ? minOpenInterestUsd : undefined,
+          minDayVolumeUsd: Number.isFinite(minDayVolumeUsd) ? minDayVolumeUsd : undefined,
+        });
         return { success: true, data: result };
       }
 

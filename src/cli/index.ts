@@ -47,6 +47,9 @@ import type { CriticResult } from '../agent/critic/types.js';
 import { withExecutionContext } from '../core/llm_infra.js';
 import type { ExecutionAdapter } from '../execution/executor.js';
 import type { ThufirConfig } from '../core/config.js';
+import { formatDelphiHelp, parseDelphiCliArgs } from '../delphi/command.js';
+import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
+import { getDelphiCalibrationReport } from '../memory/calibration_analytics.js';
 
 /**
  * Create the appropriate executor based on config execution mode.
@@ -411,6 +414,48 @@ function requireMarketClient(): typeof marketClient | null {
     return null;
   }
   return marketClient;
+}
+
+function optionsToDelphiArgs(
+  symbolArgs: string[],
+  options: {
+    horizon?: string;
+    symbols?: string;
+    count?: string;
+    dryRun?: boolean;
+    output?: string;
+  }
+): string[] {
+  const args: string[] = ['run', ...symbolArgs];
+  if (options.horizon) {
+    args.push('--horizon', options.horizon);
+  }
+  if (options.symbols) {
+    args.push('--symbols', options.symbols);
+  }
+  if (options.count) {
+    args.push('--count', options.count);
+  }
+  args.push(options.dryRun === false ? '--no-dry-run' : '--dry-run');
+  if (options.output) {
+    args.push('--output', options.output);
+  }
+  return args;
+}
+
+async function runDelphiCli(args: string[]): Promise<void> {
+  try {
+    const command = parseDelphiCliArgs(args);
+    if (command.kind === 'help') {
+      console.log(formatDelphiHelp('thufir delphi'));
+      return;
+    }
+    const predictions = await generateDelphiPredictions(marketClient, command.options);
+    console.log(formatDelphiPreview(command.options, predictions));
+  } catch (error) {
+    console.error(`Invalid delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exitCode = 1;
+  }
 }
 
 program
@@ -1122,6 +1167,118 @@ calibration
         `${summary.domain} | total=${summary.totalPredictions} | resolved=${summary.resolvedPredictions} | acc=${accuracy} | brier=${brier}`
       );
     }
+  });
+
+calibration
+  .command('report')
+  .description('Show Delphi calibration analytics report')
+  .option('--bins <number>', 'Reliability bins (default: 10)', '10')
+  .option('--limit <number>', 'Max resolved predictions included', '2000')
+  .option('--min-resolved <number>', 'Warn if fewer than this many resolved rows', '100')
+  .option('--segment-limit <number>', 'Rows per segment table', '10')
+  .action(async (options) => {
+    const bins = Number(options.bins);
+    const limit = Number(options.limit);
+    const minResolved = Number(options.minResolved);
+    const segmentLimit = Number(options.segmentLimit);
+    const report = getDelphiCalibrationReport({
+      bins: Number.isFinite(bins) && bins > 0 ? bins : 10,
+      limit: Number.isFinite(limit) && limit > 0 ? limit : 2000,
+    });
+
+    const pct = (value: number | null): string => (value == null ? '-' : `${(value * 100).toFixed(1)}%`);
+    const num = (value: number | null): string => (value == null ? '-' : value.toFixed(4));
+
+    console.log('Delphi Calibration Report');
+    console.log('═'.repeat(80));
+    console.log(`Resolved predictions: ${report.resolvedCount}`);
+    console.log(`Brier score: ${num(report.brierScore)}`);
+    console.log(`Accuracy: ${pct(report.accuracy)}`);
+    console.log(`Confidence bias: ${num(report.confidenceBias)}`);
+    if (report.resolvedCount < minResolved) {
+      console.log(
+        `Warning: only ${report.resolvedCount} resolved predictions; target is >= ${minResolved} for stable calibration read.`
+      );
+    }
+
+    if (report.reliabilityBins.length > 0) {
+      console.log('');
+      console.log('Reliability Bins');
+      console.log('─'.repeat(80));
+      console.log('range | count | avg_conf | observed | bias');
+      for (const bin of report.reliabilityBins) {
+        const range = `[${bin.lowerBound.toFixed(2)}, ${bin.upperBound.toFixed(2)}]`;
+        console.log(
+          `${range} | ${bin.count} | ${num(bin.avgConfidence)} | ${num(bin.empiricalRate)} | ${num(bin.confidenceBias)}`
+        );
+      }
+    }
+
+    const renderSegment = (
+      title: string,
+      rows: Array<{
+        key: string;
+        resolvedCount: number;
+        brierScore: number | null;
+        accuracy: number | null;
+        confidenceBias: number | null;
+      }>
+    ) => {
+      console.log('');
+      console.log(title);
+      console.log('─'.repeat(80));
+      console.log('segment | resolved | brier | accuracy | bias');
+      for (const row of rows.slice(0, Number.isFinite(segmentLimit) && segmentLimit > 0 ? segmentLimit : 10)) {
+        console.log(
+          `${row.key} | ${row.resolvedCount} | ${num(row.brierScore)} | ${pct(row.accuracy)} | ${num(row.confidenceBias)}`
+        );
+      }
+    };
+
+    renderSegment('By Session', report.segments.session);
+    renderSegment('By Regime', report.segments.regime);
+    renderSegment('By Strategy Class', report.segments.strategyClass);
+    renderSegment('By Horizon', report.segments.horizon);
+    renderSegment('By Symbol', report.segments.symbol);
+  });
+
+// ============================================================================
+// Delphi Commands
+// ============================================================================
+
+const delphi = program.command('delphi').description('Prediction-only delphi workflows');
+
+delphi
+  .argument('[symbols...]', 'Optional symbol list (space-separated)')
+  .option('--horizon <window>', 'Forecast horizon (for example: 6h, 24h, 3d)', '24h')
+  .option('--symbols <csv>', 'Symbol set as comma-separated values')
+  .option('--count <number>', 'Number of prediction previews to emit', '5')
+  .option('--dry-run', 'Emit dry-run output (non-executing)', true)
+  .option('--no-dry-run', 'Disable dry-run flag (preview still used until storage task lands)')
+  .option('--output <format>', 'Output format: text|json', 'text')
+  .action(async (symbols: string[], options) => {
+    await runDelphiCli(optionsToDelphiArgs(Array.isArray(symbols) ? symbols : [], options));
+  });
+
+delphi
+  .command('run')
+  .description('Run delphi prediction preview')
+  .argument('[symbols...]', 'Optional symbol list (space-separated)')
+  .option('--horizon <window>', 'Forecast horizon (for example: 6h, 24h, 3d)', '24h')
+  .option('--symbols <csv>', 'Symbol set as comma-separated values')
+  .option('--count <number>', 'Number of prediction previews to emit', '5')
+  .option('--dry-run', 'Emit dry-run output (non-executing)', true)
+  .option('--no-dry-run', 'Disable dry-run flag (preview still used until storage task lands)')
+  .option('--output <format>', 'Output format: text|json', 'text')
+  .action(async (symbols: string[], options) => {
+    await runDelphiCli(optionsToDelphiArgs(Array.isArray(symbols) ? symbols : [], options));
+  });
+
+delphi
+  .command('help')
+  .description('Show delphi command help')
+  .action(() => {
+    console.log(formatDelphiHelp('thufir delphi'));
   });
 
 // ============================================================================

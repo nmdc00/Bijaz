@@ -154,6 +154,7 @@ describe('AutonomousManager v1.3 observation mode', () => {
     const text = await manager.runScan();
 
     expect(text).toContain('observation-only mode');
+    expect(text).toContain('context_pack{');
     expect(executor.execute).not.toHaveBeenCalled();
     expect(recordPerpTradeJournal).toHaveBeenCalled();
     expect(recordPerpTrade).not.toHaveBeenCalled();

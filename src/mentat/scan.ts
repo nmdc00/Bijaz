@@ -17,6 +17,7 @@ import {
   type SystemMap,
 } from './types.js';
 import { computeDetectorBundle, summarizeSignals } from './detectors.js';
+import { deriveSessionContext, type SessionContext } from './session-context.js';
 
 interface MentatScanOptions {
   system: string;
@@ -349,6 +350,7 @@ export async function runMentatScan(options: MentatScanOptions): Promise<MentatS
 
       const signalsSummary = summarizeSignals(signals.markets, signals.intel);
       const detectors = computeDetectorBundle(signals);
+      const sessionContext = deriveSessionContext({ at: now, markets: signals.markets });
       const fingerprint = buildMentatFingerprint(options.system, signals);
       const context = selectExecutionContext({
         config: options.config,
@@ -375,6 +377,7 @@ export async function runMentatScan(options: MentatScanOptions): Promise<MentatS
         return {
           system: options.system,
           generatedAt: now,
+          sessionContext,
           signalsSummary,
           detectors,
           systemMap: { nodes: [], edges: [] },
@@ -503,6 +506,7 @@ export async function runMentatScan(options: MentatScanOptions): Promise<MentatS
         const output: MentatScanOutput = {
           system: options.system,
           generatedAt: now,
+          sessionContext,
           signalsSummary,
           detectors,
           systemMap,
@@ -536,6 +540,7 @@ export async function runMentatScan(options: MentatScanOptions): Promise<MentatS
  */
 export interface QuickFragilityScan {
   marketId: string;
+  sessionContext: SessionContext;
   fragilityScore: number;
   riskSignals: string[];
   fragilityCards: Array<{
@@ -583,9 +588,11 @@ export async function runQuickFragilityScan(
       try {
         market = await options.marketClient.getMarket(options.marketId);
       } catch (error) {
+        const fallbackSessionContext = deriveSessionContext({ at: now, markets: [] });
         // Return minimal scan if market fetch fails
         return {
           marketId: options.marketId,
+          sessionContext: fallbackSessionContext,
           fragilityScore: 0.5,
           riskSignals: ['Unable to fetch market data for fragility analysis'],
           fragilityCards: [],
@@ -614,6 +621,7 @@ export async function runQuickFragilityScan(
     generatedAt: now,
   };
   const detectors = computeDetectorBundle(signals);
+  const sessionContext = deriveSessionContext({ at: now, markets: [market] });
 
   // Build a focused prompt for this specific market
   const prompt = buildQuickFragilityPrompt(market, intel, now);
@@ -665,6 +673,7 @@ export async function runQuickFragilityScan(
 
       return {
         marketId: options.marketId,
+        sessionContext,
         fragilityScore: detectors.overall,
         riskSignals: allRiskSignals,
         fragilityCards: llmResult.fragilityCards.map((card) => ({
@@ -779,6 +788,10 @@ export function formatMentatScan(scan: MentatScanOutput): string {
   const lines: string[] = [];
   lines.push(`🧠 Mentat Scan: ${scan.system}`);
   lines.push(`Generated: ${scan.generatedAt}`);
+  lines.push(
+    `Session: ${scan.sessionContext.session} | Liquidity Regime: ${scan.sessionContext.liquidityRegime} | Weight: ${scan.sessionContext.sessionWeight.toFixed(2)}`
+  );
+  lines.push(`Session Notes: ${scan.sessionContext.qualityNotes.join(' | ')}`);
   lines.push('─'.repeat(60));
   const intelCount = scan.signalsSummary.intelCount ?? 0;
   lines.push(`Markets: ${scan.signalsSummary.marketCount ?? 0} | Intel: ${intelCount}`);

@@ -15,6 +15,36 @@ export type SignalClass =
   | 'unknown';
 
 export type NewsGateResult = { allowed: boolean; reason?: string };
+export type VolatilityBucket = 'low' | 'medium' | 'high';
+export type LiquidityBucket = 'thin' | 'normal' | 'deep';
+export type CalibrationPolicyReasonCode =
+  | 'calibration.segment.block'
+  | 'calibration.segment.downweight'
+  | 'calibration.segment.fallback_insufficient_samples'
+  | 'calibration.segment.pass'
+  | 'calibration.segment.disabled';
+export type CalibrationSegmentScope = {
+  signalClass?: string | null;
+  marketRegime?: MarketRegime | null;
+  volatilityBucket?: VolatilityBucket | null;
+  liquidityBucket?: LiquidityBucket | null;
+};
+export type CalibrationSegmentPolicyResult = {
+  action: 'none' | 'downweight' | 'block';
+  sizeMultiplier: number;
+  sampleCount: number;
+  successRate: number | null;
+  segmentKey: string;
+  reasonCode: CalibrationPolicyReasonCode;
+  reason: string;
+};
+export type GlobalTradeGateResult = {
+  allowed: boolean;
+  reason?: string;
+  reasonCode?: string;
+  sizeMultiplier: number;
+  policyState: ReturnType<typeof getAutonomyPolicyState>;
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -54,6 +84,125 @@ export function resolveLiquidityBucket(cluster: SignalCluster): 'thin' | 'normal
   if (count >= 18) return 'deep';
   if (count <= 4) return 'thin';
   return 'normal';
+}
+
+function normalizeSegmentValue(value: string | null | undefined): string {
+  if (typeof value !== 'string') return 'any';
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : 'any';
+}
+
+function formatSegmentKey(scope: CalibrationSegmentScope): string {
+  return [
+    `signalClass=${normalizeSegmentValue(scope.signalClass ?? null)}`,
+    `marketRegime=${normalizeSegmentValue(scope.marketRegime ?? null)}`,
+    `volatilityBucket=${normalizeSegmentValue(scope.volatilityBucket ?? null)}`,
+    `liquidityBucket=${normalizeSegmentValue(scope.liquidityBucket ?? null)}`,
+  ].join('|');
+}
+
+function entryMatchesScope(entry: PerpTradeJournalEntry, scope: CalibrationSegmentScope): boolean {
+  if (scope.signalClass && entry.signalClass !== scope.signalClass) return false;
+  if (scope.marketRegime && entry.marketRegime !== scope.marketRegime) return false;
+  if (scope.volatilityBucket && entry.volatilityBucket !== scope.volatilityBucket) return false;
+  if (scope.liquidityBucket && entry.liquidityBucket !== scope.liquidityBucket) return false;
+  return true;
+}
+
+export function evaluateCalibrationSegmentPolicy(
+  config: ThufirConfig,
+  entries: PerpTradeJournalEntry[],
+  scope: CalibrationSegmentScope
+): CalibrationSegmentPolicyResult {
+  const gate = (config.autonomy as any)?.calibrationRisk ?? {};
+  const enabled = gate.enabled !== false;
+  const segmentKey = formatSegmentKey(scope);
+
+  if (!enabled) {
+    return {
+      action: 'none',
+      sizeMultiplier: 1,
+      sampleCount: 0,
+      successRate: null,
+      segmentKey,
+      reasonCode: 'calibration.segment.disabled',
+      reason: `calibration policy disabled for segment ${segmentKey}`,
+    };
+  }
+
+  const minSamplesRaw = Number(gate.minSamples);
+  const minSamples = Number.isFinite(minSamplesRaw) ? Math.max(1, Math.floor(minSamplesRaw)) : 12;
+  const downweightBelowAccuracyRaw = Number(gate.downweightBelowAccuracy);
+  const downweightBelowAccuracy = Number.isFinite(downweightBelowAccuracyRaw)
+    ? clamp(downweightBelowAccuracyRaw, 0, 1)
+    : 0.5;
+  const blockBelowAccuracyRaw = Number(gate.blockBelowAccuracy);
+  const blockBelowAccuracy = Number.isFinite(blockBelowAccuracyRaw)
+    ? clamp(blockBelowAccuracyRaw, 0, downweightBelowAccuracy)
+    : 0.35;
+  const downweightMultiplierRaw = Number(gate.downweightMultiplier);
+  const downweightMultiplier = Number.isFinite(downweightMultiplierRaw)
+    ? clamp(downweightMultiplierRaw, 0.05, 1)
+    : 0.5;
+  const blockEnabled = gate.blockEnabled !== false;
+
+  const scoped = entries.filter((entry) => entryMatchesScope(entry, scope));
+  const resolved = scoped.filter((entry) => typeof entry.thesisCorrect === 'boolean');
+  const sampleCount = resolved.length;
+  if (sampleCount < minSamples) {
+    return {
+      action: 'none',
+      sizeMultiplier: 1,
+      sampleCount,
+      successRate: null,
+      segmentKey,
+      reasonCode: 'calibration.segment.fallback_insufficient_samples',
+      reason: `insufficient calibration samples for segment ${segmentKey}: ${sampleCount}/${minSamples}`,
+    };
+  }
+
+  const wins = resolved.filter((entry) => entry.thesisCorrect === true).length;
+  const successRate = wins / sampleCount;
+
+  if (blockEnabled && successRate <= blockBelowAccuracy) {
+    return {
+      action: 'block',
+      sizeMultiplier: 0,
+      sampleCount,
+      successRate,
+      segmentKey,
+      reasonCode: 'calibration.segment.block',
+      reason:
+        `segment ${segmentKey} blocked by calibration policy: success_rate=${successRate.toFixed(2)} ` +
+        `<= block_threshold=${blockBelowAccuracy.toFixed(2)} over ${sampleCount} samples`,
+    };
+  }
+
+  if (successRate < downweightBelowAccuracy) {
+    return {
+      action: 'downweight',
+      sizeMultiplier: downweightMultiplier,
+      sampleCount,
+      successRate,
+      segmentKey,
+      reasonCode: 'calibration.segment.downweight',
+      reason:
+        `segment ${segmentKey} downweighted by calibration policy: success_rate=${successRate.toFixed(2)} ` +
+        `< downweight_threshold=${downweightBelowAccuracy.toFixed(2)} over ${sampleCount} samples`,
+    };
+  }
+
+  return {
+    action: 'none',
+    sizeMultiplier: 1,
+    sampleCount,
+    successRate,
+    segmentKey,
+    reasonCode: 'calibration.segment.pass',
+    reason:
+      `segment ${segmentKey} passed calibration policy: success_rate=${successRate.toFixed(2)} ` +
+      `over ${sampleCount} samples`,
+  };
 }
 
 export function isSignalClassAllowedForRegime(
@@ -188,13 +337,16 @@ export function shouldForceObservationMode(
 export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
   signalClass?: string | null;
   marketRegime?: MarketRegime | null;
+  volatilityBucket?: VolatilityBucket | null;
+  liquidityBucket?: LiquidityBucket | null;
   expectedEdge?: number | null;
-}): { allowed: boolean; reason?: string; policyState: ReturnType<typeof getAutonomyPolicyState> } {
+}): GlobalTradeGateResult {
   const autonomyEnabled = Boolean((config.autonomy as any)?.enabled);
   const fullAutoEnabled = Boolean((config.autonomy as any)?.fullAuto);
   if (!autonomyEnabled && !fullAutoEnabled) {
     return {
       allowed: true,
+      sizeMultiplier: 1,
       policyState: {
         minEdgeOverride: null,
         maxTradesPerScanOverride: null,
@@ -211,7 +363,9 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
   if (policyState.observationOnlyUntilMs != null && policyState.observationOnlyUntilMs > nowMs) {
     return {
       allowed: false,
+      reasonCode: 'policy.observation_only',
       reason: `observation-only mode active until ${new Date(policyState.observationOnlyUntilMs).toISOString()}`,
+      sizeMultiplier: 1,
       policyState,
     };
   }
@@ -226,7 +380,9 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
   if (dailyCap.blocked) {
     return {
       allowed: false,
+      reasonCode: 'policy.daily_trade_cap',
       reason: dailyCap.reason ?? 'maxTradesPerDay reached',
+      sizeMultiplier: 1,
       policyState,
     };
   }
@@ -238,7 +394,9 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
     if (perf.sampleCount >= minSamples && perf.sharpeLike < minSharpe) {
       return {
         allowed: false,
+        reasonCode: 'policy.signal_sharpe',
         reason: `signal_class ${input.signalClass} sharpeLike ${perf.sharpeLike.toFixed(2)} below ${minSharpe.toFixed(2)}`,
+        sizeMultiplier: 1,
         policyState,
       };
     }
@@ -246,13 +404,40 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
     if (input.marketRegime && !isSignalClassAllowedForRegime(input.signalClass as SignalClass, input.marketRegime)) {
       return {
         allowed: false,
+        reasonCode: 'policy.signal_regime_matrix',
         reason: `signal_class ${input.signalClass} disallowed in regime ${input.marketRegime}`,
+        sizeMultiplier: 1,
+        policyState,
+      };
+    }
+
+    const calibrationPolicy = evaluateCalibrationSegmentPolicy(config, listPerpTradeJournals({ limit: 500 }), {
+      signalClass: input.signalClass,
+      marketRegime: input.marketRegime ?? null,
+      volatilityBucket: input.volatilityBucket ?? null,
+      liquidityBucket: input.liquidityBucket ?? null,
+    });
+    if (calibrationPolicy.action === 'block') {
+      return {
+        allowed: false,
+        reasonCode: calibrationPolicy.reasonCode,
+        reason: `${calibrationPolicy.reasonCode}: ${calibrationPolicy.reason}`,
+        sizeMultiplier: 1,
+        policyState,
+      };
+    }
+    if (calibrationPolicy.action === 'downweight') {
+      return {
+        allowed: true,
+        reasonCode: calibrationPolicy.reasonCode,
+        reason: `${calibrationPolicy.reasonCode}: ${calibrationPolicy.reason}`,
+        sizeMultiplier: calibrationPolicy.sizeMultiplier,
         policyState,
       };
     }
   }
 
-  return { allowed: true, policyState };
+  return { allowed: true, sizeMultiplier: 1, policyState };
 }
 
 export function applyReflectionMutation(config: ThufirConfig, entries: PerpTradeJournalEntry[]): {

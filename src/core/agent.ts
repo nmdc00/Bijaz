@@ -28,6 +28,8 @@ import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
 import { TradeManagementService } from '../trade-management/service.js';
+import { formatDelphiHelp, parseDelphiSlashCommand } from '../delphi/command.js';
+import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -37,7 +39,6 @@ export class ThufirAgent {
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
   private logger: Logger;
-  private scanTimer: NodeJS.Timeout | null = null;
   private conversation: ConversationHandler;
   private autonomous: AutonomousManager;
   private toolContext: ToolExecutorContext;
@@ -116,7 +117,7 @@ export class ThufirAgent {
   }
 
   start(): void {
-    // Start autonomous manager (handles its own scheduling)
+    // Start autonomous manager (handles persisted scheduler control-plane jobs).
     this.autonomous.start();
     this.tradeManagement?.start();
 
@@ -125,26 +126,11 @@ export class ThufirAgent {
       this.logger.info('Daily report generated');
       // Reports will be pushed to channels by the gateway
     });
-
-    // Legacy scan loop (for backwards compatibility when fullAuto is off)
-    if (this.config.autonomy.enabled && !(this.config.autonomy as any).fullAuto) {
-      const interval = this.config.autonomy.scanIntervalSeconds * 1000;
-      this.scanTimer = setInterval(() => {
-        this.autonomousScan().catch((err) =>
-          this.logger.error('Autonomous scan failed', err)
-        );
-      }, interval);
-      this.logger.info(`Legacy scan enabled: scanning every ${interval / 1000}s`);
-    }
   }
 
   stop(): void {
     this.autonomous.stop();
     this.tradeManagement?.stop();
-    if (this.scanTimer) {
-      clearInterval(this.scanTimer);
-      this.scanTimer = null;
-    }
   }
 
   /**
@@ -220,6 +206,11 @@ export class ThufirAgent {
     if (trimmed === '/scan') {
       const result = await this.autonomousScan();
       return result;
+    }
+
+    // Command: /delphi [run|help]
+    if (trimmed.startsWith('/delphi')) {
+      return this.handleDelphiCommand(trimmed);
     }
 
     // Command: /briefing
@@ -605,6 +596,7 @@ Just type naturally to chat about markets, risks, or positioning.
 /watch <symbol> - Add symbol to watchlist
 /watchlist - Show watched symbols
 /scan - Run autonomous discovery scan
+/delphi [run] [options] - Prediction-only delphi preview
 /perp <symbol> <buy|sell> <sizeUsd> [leverage] - Execute a perp trade
 
 **Info:**
@@ -648,6 +640,19 @@ Just type naturally to chat about markets, risks, or positioning.
         return this.autonomous.runScan();
       }
     );
+  }
+
+  private async handleDelphiCommand(rawCommand: string): Promise<string> {
+    try {
+      const command = parseDelphiSlashCommand(rawCommand);
+      if (command.kind === 'help') {
+        return formatDelphiHelp('/delphi');
+      }
+      const predictions = await generateDelphiPredictions(this.marketClient, command.options);
+      return formatDelphiPreview(command.options, predictions);
+    } catch (error) {
+      return `Invalid /delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   private async maybeHandleNaturalLanguageTrade(

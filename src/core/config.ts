@@ -512,6 +512,16 @@ const ConfigSchema = z.object({
                       minSamples: z.number().optional(),
                     })
                     .optional(),
+                  calibrationRisk: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      minSamples: z.number().optional(),
+                      downweightBelowAccuracy: z.number().optional(),
+                      blockBelowAccuracy: z.number().optional(),
+                      downweightMultiplier: z.number().optional(),
+                      blockEnabled: z.boolean().optional(),
+                    })
+                    .optional(),
                   newsEntry: z
                     .object({
                       minNoveltyScore: z.number().optional(),
@@ -573,10 +583,29 @@ const ConfigSchema = z.object({
       maxTradesPerScan: z.number().default(3),
       maxTradesPerDay: z.number().default(25),
       tradeCapBypassMinEdge: z.number().default(0.12),
+      discoverySelection: z
+        .object({
+          enabled: z.boolean().default(true),
+          fullUniverseWhenSymbolsEmpty: z.boolean().default(true),
+          preselectLimit: z.number().default(24),
+          minOpenInterestUsd: z.number().default(5_000_000),
+          minDayVolumeUsd: z.number().default(20_000_000),
+        })
+        .default({}),
       signalPerformance: z
         .object({
           minSharpe: z.number().default(0.8),
           minSamples: z.number().default(8),
+        })
+        .default({}),
+      calibrationRisk: z
+        .object({
+          enabled: z.boolean().default(true),
+          minSamples: z.number().default(12),
+          downweightBelowAccuracy: z.number().default(0.5),
+          blockBelowAccuracy: z.number().default(0.35),
+          downweightMultiplier: z.number().default(0.5),
+          blockEnabled: z.boolean().default(true),
         })
         .default({}),
       newsEntry: z
@@ -770,6 +799,32 @@ const ConfigSchema = z.object({
               })
             )
             .default([]),
+        })
+        .default({}),
+      escalation: z
+        .object({
+          enabled: z.boolean().default(false),
+          channels: z.array(z.string()).default([]),
+          actionableReasons: z
+            .array(
+              z.enum([
+                'risk_breach',
+                'stop_failure',
+                'abnormal_slippage',
+                'high_conviction_setup',
+              ])
+            )
+            .default(['risk_breach', 'stop_failure', 'abnormal_slippage', 'high_conviction_setup']),
+          dedupeWindowSeconds: z.number().default(300),
+          cooldownSeconds: z.number().default(900),
+          severityChannels: z
+            .object({
+              info: z.array(z.string()).default([]),
+              warning: z.array(z.string()).default([]),
+              high: z.array(z.string()).default([]),
+              critical: z.array(z.string()).default([]),
+            })
+            .default({}),
         })
         .default({}),
     })

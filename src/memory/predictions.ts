@@ -5,6 +5,11 @@ import { adjustCashBalance } from './portfolio.js';
 
 export type ConfidenceLevel = 'low' | 'medium' | 'high';
 export type Outcome = 'YES' | 'NO';
+export type PredictionResolutionStatus =
+  | 'open'
+  | 'resolved_true'
+  | 'resolved_false'
+  | 'unresolved_error';
 
 export interface PredictionInput {
   marketId: string;
@@ -18,6 +23,14 @@ export interface PredictionInput {
   keyFactors?: string[];
   intelIds?: string[];
   domain?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  contextTags?: string[];
+  sessionTag?: string;
+  regimeTag?: string;
+  strategyClass?: string;
+  horizonMinutes?: number;
+  symbol?: string;
   // Execution details (for auto-executed trades)
   executed?: boolean;
   executionPrice?: number;
@@ -37,7 +50,18 @@ export interface PredictionRecord {
   keyFactors?: string[];
   intelIds?: string[];
   domain?: string;
+  sessionTag?: string;
+  regimeTag?: string;
+  strategyClass?: string;
+  horizonMinutes?: number | null;
+  symbol?: string;
   createdAt: string;
+  expiresAt?: string | null;
+  contextTags?: string[];
+  resolutionStatus: PredictionResolutionStatus;
+  resolutionMetadata?: Record<string, unknown> | null;
+  resolutionError?: string | null;
+  resolutionTimestamp?: string | null;
   executed: boolean;
   executionPrice?: number | null;
   positionSize?: number | null;
@@ -60,6 +84,13 @@ export interface OpenPositionRecord {
 
 function serializeJson(value?: string[]): string | null {
   if (!value || value.length === 0) {
+    return null;
+  }
+  return JSON.stringify(value);
+}
+
+function serializeObject(value?: Record<string, unknown> | null): string | null {
+  if (!value) {
     return null;
   }
   return JSON.stringify(value);
@@ -95,9 +126,37 @@ function parseJsonObject(value: string | null): Record<string, number> | number[
   return null;
 }
 
+function parseJsonRecord(value: string | null): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function createPrediction(input: PredictionInput): string {
   const db = openDatabase();
   const id = randomUUID();
+  const createdAtEpoch = Date.parse(input.createdAt ?? '');
+  const createdAt = Number.isFinite(createdAtEpoch)
+    ? new Date(createdAtEpoch).toISOString()
+    : new Date().toISOString();
+  const horizonMinutes =
+    typeof input.horizonMinutes === 'number' && input.horizonMinutes > 0
+      ? Math.floor(input.horizonMinutes)
+      : null;
+  const expiresAt =
+    input.expiresAt ??
+    (horizonMinutes
+      ? new Date(Date.parse(createdAt) + horizonMinutes * 60_000).toISOString()
+      : null);
 
   const stmt = db.prepare(`
     INSERT INTO predictions (
@@ -113,6 +172,15 @@ export function createPrediction(input: PredictionInput): string {
       key_factors,
       intel_ids,
       domain,
+      created_at,
+      session_tag,
+      regime_tag,
+      strategy_class,
+      horizon_minutes,
+      symbol,
+      expires_at,
+      context_tags,
+      resolution_status,
       executed,
       execution_price,
       position_size
@@ -129,6 +197,15 @@ export function createPrediction(input: PredictionInput): string {
       @keyFactors,
       @intelIds,
       @domain,
+      @createdAt,
+      @sessionTag,
+      @regimeTag,
+      @strategyClass,
+      @horizonMinutes,
+      @symbol,
+      @expiresAt,
+      @contextTags,
+      @resolutionStatus,
       @executed,
       @executionPrice,
       @positionSize
@@ -148,6 +225,15 @@ export function createPrediction(input: PredictionInput): string {
     keyFactors: serializeJson(input.keyFactors),
     intelIds: serializeJson(input.intelIds),
     domain: input.domain ?? null,
+    createdAt,
+    sessionTag: input.sessionTag ?? null,
+    regimeTag: input.regimeTag ?? null,
+    strategyClass: input.strategyClass ?? null,
+    horizonMinutes,
+    symbol: input.symbol ?? null,
+    expiresAt,
+    contextTags: serializeJson(input.contextTags),
+    resolutionStatus: 'open',
     executed: input.executed ? 1 : 0,
     executionPrice: input.executionPrice ?? null,
     positionSize: input.positionSize ?? null,
@@ -177,7 +263,18 @@ export function listPredictions(options?: {
       key_factors as keyFactors,
       intel_ids as intelIds,
       domain,
+      session_tag as sessionTag,
+      regime_tag as regimeTag,
+      strategy_class as strategyClass,
+      horizon_minutes as horizonMinutes,
+      symbol,
       created_at as createdAt,
+      expires_at as expiresAt,
+      context_tags as contextTags,
+      resolution_status as resolutionStatus,
+      resolution_metadata as resolutionMetadata,
+      resolution_error as resolutionError,
+      resolution_timestamp as resolutionTimestamp,
       executed,
       execution_price as executionPrice,
       position_size as positionSize,
@@ -211,7 +308,22 @@ export function listPredictions(options?: {
     keyFactors: parseJsonArray((row.keyFactors as string | null) ?? null),
     intelIds: parseJsonArray((row.intelIds as string | null) ?? null),
     domain: (row.domain as string) ?? undefined,
+    sessionTag: (row.sessionTag as string) ?? undefined,
+    regimeTag: (row.regimeTag as string) ?? undefined,
+    strategyClass: (row.strategyClass as string) ?? undefined,
+    horizonMinutes:
+      row.horizonMinutes === null || row.horizonMinutes === undefined
+        ? null
+        : Number(row.horizonMinutes),
+    symbol: (row.symbol as string) ?? undefined,
     createdAt: String(row.createdAt),
+    expiresAt: (row.expiresAt as string | null) ?? null,
+    contextTags: parseJsonArray((row.contextTags as string | null) ?? null),
+    resolutionStatus:
+      (row.resolutionStatus as PredictionResolutionStatus | null) ?? 'open',
+    resolutionMetadata: parseJsonRecord((row.resolutionMetadata as string | null) ?? null),
+    resolutionError: (row.resolutionError as string | null) ?? null,
+    resolutionTimestamp: (row.resolutionTimestamp as string | null) ?? null,
     executed: Boolean(row.executed),
     executionPrice: row.executionPrice as number | null,
     positionSize: row.positionSize as number | null,
@@ -238,7 +350,18 @@ export function getPrediction(id: string): PredictionRecord | null {
         key_factors as keyFactors,
         intel_ids as intelIds,
         domain,
+        session_tag as sessionTag,
+        regime_tag as regimeTag,
+        strategy_class as strategyClass,
+        horizon_minutes as horizonMinutes,
+        symbol,
         created_at as createdAt,
+        expires_at as expiresAt,
+        context_tags as contextTags,
+        resolution_status as resolutionStatus,
+        resolution_metadata as resolutionMetadata,
+        resolution_error as resolutionError,
+        resolution_timestamp as resolutionTimestamp,
         executed,
         execution_price as executionPrice,
         position_size as positionSize,
@@ -269,7 +392,22 @@ export function getPrediction(id: string): PredictionRecord | null {
     keyFactors: parseJsonArray((row.keyFactors as string | null) ?? null),
     intelIds: parseJsonArray((row.intelIds as string | null) ?? null),
     domain: (row.domain as string) ?? undefined,
+    sessionTag: (row.sessionTag as string) ?? undefined,
+    regimeTag: (row.regimeTag as string) ?? undefined,
+    strategyClass: (row.strategyClass as string) ?? undefined,
+    horizonMinutes:
+      row.horizonMinutes === null || row.horizonMinutes === undefined
+        ? null
+        : Number(row.horizonMinutes),
+    symbol: (row.symbol as string) ?? undefined,
     createdAt: String(row.createdAt),
+    expiresAt: (row.expiresAt as string | null) ?? null,
+    contextTags: parseJsonArray((row.contextTags as string | null) ?? null),
+    resolutionStatus:
+      (row.resolutionStatus as PredictionResolutionStatus | null) ?? 'open',
+    resolutionMetadata: parseJsonRecord((row.resolutionMetadata as string | null) ?? null),
+    resolutionError: (row.resolutionError as string | null) ?? null,
+    resolutionTimestamp: (row.resolutionTimestamp as string | null) ?? null,
     executed: Boolean(row.executed),
     executionPrice: row.executionPrice as number | null,
     positionSize: row.positionSize as number | null,
@@ -321,6 +459,7 @@ export function listUnresolvedPredictions(limit = 50): Array<{
         SELECT id, market_id as marketId
         FROM predictions
         WHERE outcome IS NULL
+          AND COALESCE(resolution_status, 'open') = 'open'
         ORDER BY created_at DESC
         LIMIT ?
       `
@@ -362,4 +501,80 @@ export function listOpenPositions(limit = 50): OpenPositionRecord[] {
     createdAt: String(row.createdAt),
     currentPrices: parseJsonObject((row.currentPrices as string | null) ?? null),
   }));
+}
+
+export function listDuePredictionsForResolution(
+  asOfIso: string,
+  limit = 50
+): Array<{
+  id: string;
+  marketId: string;
+  predictedOutcome?: Outcome | null;
+  predictedProbability?: number | null;
+  createdAt: string;
+  expiresAt: string;
+  horizonMinutes?: number | null;
+}> {
+  const db = openDatabase();
+  const rows = db
+    .prepare(
+      `
+        SELECT
+          id,
+          market_id as marketId,
+          predicted_outcome as predictedOutcome,
+          predicted_probability as predictedProbability,
+          created_at as createdAt,
+          expires_at as expiresAt,
+          horizon_minutes as horizonMinutes
+        FROM predictions
+        WHERE resolution_status = 'open'
+          AND expires_at IS NOT NULL
+          AND expires_at <= @asOfIso
+        ORDER BY expires_at ASC
+        LIMIT @limit
+      `
+    )
+    .all({ asOfIso, limit }) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    marketId: String(row.marketId),
+    predictedOutcome: (row.predictedOutcome as Outcome | null) ?? null,
+    predictedProbability:
+      row.predictedProbability === null || row.predictedProbability === undefined
+        ? null
+        : Number(row.predictedProbability),
+    createdAt: String(row.createdAt),
+    expiresAt: String(row.expiresAt),
+    horizonMinutes:
+      row.horizonMinutes === null || row.horizonMinutes === undefined
+        ? null
+        : Number(row.horizonMinutes),
+  }));
+}
+
+export function markPredictionResolutionError(params: {
+  id: string;
+  error: string;
+  metadata?: Record<string, unknown> | null;
+  resolutionTimestamp?: string;
+}): void {
+  const db = openDatabase();
+  db.prepare(
+    `
+      UPDATE predictions
+      SET resolution_status = 'unresolved_error',
+          resolution_error = @error,
+          resolution_metadata = @metadata,
+          resolution_timestamp = @resolutionTimestamp
+      WHERE id = @id
+        AND resolution_status = 'open'
+    `
+  ).run({
+    id: params.id,
+    error: params.error,
+    metadata: serializeObject(params.metadata ?? null),
+    resolutionTimestamp: params.resolutionTimestamp ?? new Date().toISOString(),
+  });
 }

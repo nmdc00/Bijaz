@@ -68,4 +68,39 @@ export interface ExpressionPlan {
     volatilityScore?: number;
     expiresAtMs?: number;
   } | null;
+  contextPack?: ExpressionContextPack;
+}
+
+export interface ExpressionContextPack {
+  regime: {
+    marketRegime: 'trending' | 'choppy' | 'high_vol_expansion' | 'low_vol_compression';
+    volatilityBucket: 'low' | 'medium' | 'high';
+    liquidityBucket: 'thin' | 'normal' | 'deep';
+    confidence: number | null;
+    source: 'derived' | 'provider' | 'default';
+  };
+  executionQuality: {
+    status: 'good' | 'mixed' | 'poor' | 'unknown';
+    score: number | null;
+    recentWinRate: number | null;
+    slippageBps: number | null;
+    notes: string[];
+    source: 'provider' | 'default';
+  };
+  event: {
+    kind: 'news_event' | 'technical' | 'none';
+    subtype: string | null;
+    catalyst: string | null;
+    confidence: number | null;
+    expiresAtMs: number | null;
+    source: 'derived' | 'provider' | 'default';
+  };
+  portfolioState: {
+    posture: 'risk_on' | 'risk_off' | 'neutral' | 'unknown';
+    availableBalanceUsd: number | null;
+    netExposureUsd: number | null;
+    openPositions: number | null;
+    source: 'provider' | 'default';
+  };
+  missing: string[];
 }

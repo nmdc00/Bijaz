@@ -9,7 +9,8 @@ import {
   signalReflexivityFragility,
 } from './signals.js';
 import { generateHypotheses } from './hypotheses.js';
-import { mapExpressionPlan } from './expressions.js';
+import { enrichExpressionContextPack, mapExpressionPlan, type ContextPackProviders } from './expressions.js';
+import { selectDiscoveryMarkets } from './market_selector.js';
 
 function clusterSignals(symbol: string, signals: Array<SignalPrimitive | null>): SignalCluster {
   const flat = signals.filter((s): s is NonNullable<typeof s> => !!s);
@@ -27,12 +28,30 @@ function clusterSignals(symbol: string, signals: Array<SignalPrimitive | null>):
   };
 }
 
-export async function runDiscovery(config: ThufirConfig): Promise<{
+export async function runDiscovery(
+  config: ThufirConfig,
+  options?: { contextPackProviders?: ContextPackProviders; preselectLimit?: number }
+): Promise<{
   clusters: SignalCluster[];
   hypotheses: ReturnType<typeof generateHypotheses>;
   expressions: ReturnType<typeof mapExpressionPlan>[];
+  selector: {
+    source: 'configured' | 'full_universe';
+    symbols: string[];
+  };
 }> {
-  const symbols = config.hyperliquid?.symbols ?? ['BTC', 'ETH'];
+  const selectorEnabled = config.autonomy?.discoverySelection?.enabled ?? true;
+  const selected = selectorEnabled
+    ? await selectDiscoveryMarkets(config, {
+        limit:
+          options?.preselectLimit && Number.isFinite(options.preselectLimit)
+            ? Math.max(1, Math.floor(options.preselectLimit))
+            : undefined,
+      })
+    : null;
+  const symbols = selected
+    ? selected.candidates.map((item) => item.symbol)
+    : (config.hyperliquid?.symbols?.length ? config.hyperliquid.symbols : ['BTC', 'ETH']);
   const formatted = symbols.map((s) => `${s}/USDT`);
 
   const priceSignals = await Promise.all(formatted.map((symbol) => signalPriceVolRegime(config, symbol)));
@@ -72,18 +91,24 @@ export async function runDiscovery(config: ThufirConfig): Promise<{
     return items;
   });
 
-  const expressions = hypotheses.map((hyp) => {
+  const expressions = await Promise.all(hypotheses.map(async (hyp) => {
     const cluster = clusters.find((c) => c.id === hyp.clusterId)!;
     const expr = mapExpressionPlan(config, cluster, hyp);
+    const enriched = await enrichExpressionContextPack({
+      expression: expr,
+      cluster,
+      hypothesis: hyp,
+      providers: options?.contextPackProviders,
+    });
     storeDecisionArtifact({
       source: 'discovery',
       kind: 'expression',
       marketId: cluster.symbol,
-      fingerprint: expr.id,
-      payload: expr,
+      fingerprint: enriched.id,
+      payload: enriched,
     });
-    return expr;
-  });
+    return enriched;
+  }));
 
   for (const cluster of clusters) {
     storeDecisionArtifact({
@@ -95,5 +120,13 @@ export async function runDiscovery(config: ThufirConfig): Promise<{
     });
   }
 
-  return { clusters, hypotheses, expressions };
+  return {
+    clusters,
+    hypotheses,
+    expressions,
+    selector: {
+      source: selected?.source ?? 'configured',
+      symbols,
+    },
+  };
 }

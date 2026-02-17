@@ -35,9 +35,61 @@ import {
 } from './autonomy_policy.js';
 import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
 import { summarizeSignalPerformance } from './signal_performance.js';
+import { SchedulerControlPlane } from './scheduler_control_plane.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+type SessionBucket = 'asia' | 'europe_open' | 'us_open' | 'us_midday' | 'us_close' | 'weekend';
+
+interface SessionWeightContext {
+  session: SessionBucket;
+  sessionWeight: number;
+}
+
+const SESSION_WEIGHTS: Record<SessionBucket, number> = {
+  asia: 0.9,
+  europe_open: 1.0,
+  us_open: 1.15,
+  us_midday: 0.95,
+  us_close: 1.05,
+  weekend: 0.65,
+};
+
+function resolveSessionWeightContext(now: Date): SessionWeightContext {
+  const day = now.getUTCDay();
+  if (day === 0 || day === 6) {
+    return { session: 'weekend', sessionWeight: SESSION_WEIGHTS.weekend };
+  }
+
+  const hour = now.getUTCHours();
+  if (hour >= 23 || hour < 7) {
+    return { session: 'asia', sessionWeight: SESSION_WEIGHTS.asia };
+  }
+  if (hour < 13) {
+    return { session: 'europe_open', sessionWeight: SESSION_WEIGHTS.europe_open };
+  }
+  if (hour < 17) {
+    return { session: 'us_open', sessionWeight: SESSION_WEIGHTS.us_open };
+  }
+  if (hour < 20) {
+    return { session: 'us_midday', sessionWeight: SESSION_WEIGHTS.us_midday };
+  }
+  return { session: 'us_close', sessionWeight: SESSION_WEIGHTS.us_close };
+}
+
+function formatContextPackTrace(input: {
+  marketRegime: string;
+  volatilityBucket: string;
+  liquidityBucket: string;
+  executionStatus: string;
+  eventKind: string;
+  portfolioPosture: string;
+  missing: string[];
+}): string {
+  const missing = input.missing.length > 0 ? input.missing.join(',') : 'none';
+  return `context_pack{regime=${input.marketRegime};vol=${input.volatilityBucket};liq=${input.liquidityBucket};exec=${input.executionStatus};event=${input.eventKind};portfolio=${input.portfolioPosture};missing=${missing}}`;
 }
 
 export interface AutonomousConfig {
@@ -75,12 +127,12 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private limiter: DbSpendingLimitEnforcer;
   private logger: Logger;
   private thufirConfig: ThufirConfig;
+  private readonly schedulerNamespace: string;
 
   private isPaused = false;
   private pauseReason = '';
   private consecutiveLosses = 0;
-  private scanTimer: NodeJS.Timeout | null = null;
-  private reportTimer: NodeJS.Timeout | null = null;
+  private scheduler: SchedulerControlPlane | null = null;
 
   constructor(
     _llm: LlmClient,
@@ -96,6 +148,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.limiter = limiter;
     this.thufirConfig = thufirConfig;
     this.logger = logger ?? new Logger('info');
+    this.schedulerNamespace = this.buildSchedulerNamespace();
 
     // Load autonomous config with defaults
     this.config = {
@@ -120,21 +173,47 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       this.logger.info('Autonomous mode is disabled in config');
       return;
     }
+    if (this.scheduler) {
+      return;
+    }
 
     const scanInterval = this.thufirConfig.autonomy?.scanIntervalSeconds ?? 900;
+    const scheduler = new SchedulerControlPlane({
+      ownerId: `autonomous:${process.pid}`,
+      pollIntervalMs: 1_000,
+      defaultLeaseMs: Math.max(30_000, scanInterval * 2_000),
+    });
 
-    // Start periodic scanning
-    this.scanTimer = setInterval(async () => {
-      try {
-        await this.runScan();
-      } catch (error) {
-        this.logger.error('Autonomous scan failed', error);
-        this.emit('error', error instanceof Error ? error : new Error(String(error)));
+    scheduler.registerJob(
+      {
+        name: `${this.schedulerNamespace}:scan`,
+        schedule: { kind: 'interval', intervalMs: scanInterval * 1_000 },
+        leaseMs: Math.max(30_000, scanInterval * 2_000),
+      },
+      async () => {
+        try {
+          await this.runScan();
+        } catch (error) {
+          this.logger.error('Autonomous scan failed', error);
+          this.emit('error', error instanceof Error ? error : new Error(String(error)));
+          throw error;
+        }
       }
-    }, scanInterval * 1000);
+    );
 
-    // Schedule daily report
-    this.scheduleDailyReport();
+    scheduler.registerJob(
+      {
+        name: `${this.schedulerNamespace}:report`,
+        schedule: { kind: 'daily', time: this.config.dailyReportTime },
+        leaseMs: 60_000,
+      },
+      async () => {
+        await this.runDailyReportTick();
+      }
+    );
+
+    scheduler.start();
+    this.scheduler = scheduler;
 
     this.logger.info(`Autonomous mode started. Full auto: ${this.config.fullAuto}. Scan interval: ${scanInterval}s`);
   }
@@ -143,14 +222,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
    * Stop autonomous mode
    */
   stop(): void {
-    if (this.scanTimer) {
-      clearInterval(this.scanTimer);
-      this.scanTimer = null;
-    }
-    if (this.reportTimer) {
-      clearTimeout(this.reportTimer);
-      this.reportTimer = null;
-    }
+    this.scheduler?.stop();
+    this.scheduler = null;
     this.logger.info('Autonomous mode stopped');
   }
 
@@ -250,6 +323,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           const signalClass = classifySignalClass(expr);
           const volatilityBucket = cluster ? resolveVolatilityBucket(cluster) : 'medium';
           const liquidityBucket = cluster ? resolveLiquidityBucket(cluster) : 'normal';
+          const contextTrace = formatContextPackTrace({
+            marketRegime: expr.contextPack?.regime.marketRegime ?? regime,
+            volatilityBucket: expr.contextPack?.regime.volatilityBucket ?? volatilityBucket,
+            liquidityBucket: expr.contextPack?.regime.liquidityBucket ?? liquidityBucket,
+            executionStatus: expr.contextPack?.executionQuality.status ?? 'unknown',
+            eventKind: expr.contextPack?.event.kind ?? (expr.newsTrigger?.enabled ? 'news_event' : 'technical'),
+            portfolioPosture: expr.contextPack?.portfolioState.posture ?? 'unknown',
+            missing: expr.contextPack?.missing ?? ['contextPack.provider'],
+          });
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
@@ -263,7 +345,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               reduceOnly: false,
               markPrice: null,
               confidence: expr.confidence != null ? String(expr.confidence) : null,
-              reasoning: `Observation-only mode: would execute ${expr.side} ${symbol} (edge=${(expr.expectedEdge * 100).toFixed(2)}%)`,
+              reasoning: `Observation-only mode: would execute ${expr.side} ${symbol} (edge=${(expr.expectedEdge * 100).toFixed(2)}%) ${contextTrace}`,
               signalClass,
               marketRegime: regime,
               volatilityBucket,
@@ -290,8 +372,18 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         }
       }
       const lines = top.map(
-        (expr) =>
-          `- ${expr.symbol} ${expr.side} probe=${expr.probeSizeUsd.toFixed(2)} leverage=${expr.leverage} (${expr.expectedMove})`
+        (expr) => {
+          const contextTrace = formatContextPackTrace({
+            marketRegime: expr.contextPack?.regime.marketRegime ?? expr.marketRegime ?? 'choppy',
+            volatilityBucket: expr.contextPack?.regime.volatilityBucket ?? expr.volatilityBucket ?? 'medium',
+            liquidityBucket: expr.contextPack?.regime.liquidityBucket ?? expr.liquidityBucket ?? 'normal',
+            executionStatus: expr.contextPack?.executionQuality.status ?? 'unknown',
+            eventKind: expr.contextPack?.event.kind ?? (expr.newsTrigger?.enabled ? 'news_event' : 'technical'),
+            portfolioPosture: expr.contextPack?.portfolioState.posture ?? 'unknown',
+            missing: expr.contextPack?.missing ?? ['contextPack.provider'],
+          });
+          return `- ${expr.symbol} ${expr.side} probe=${expr.probeSizeUsd.toFixed(2)} leverage=${expr.leverage} (${expr.expectedMove}) ${contextTrace}`;
+        }
       );
       const header = observationActive
         ? `Discovery scan completed in observation-only mode (${policyState.reason ?? 'adaptive policy active'}).`
@@ -330,7 +422,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       if (expr.expectedEdge < adaptiveMinEdge) {
         return false;
       }
-      if (this.config.requireHighConfidence && expr.confidence < 0.7) {
+      const { sessionWeight } = resolveSessionWeightContext(new Date());
+      const weightedConfidence = clamp01(expr.confidence * sessionWeight);
+      if (this.config.requireHighConfidence && weightedConfidence < 0.7) {
         return false;
       }
       return true;
@@ -352,6 +446,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     for (const expr of toExecute) {
       const symbol = expr.symbol.includes('/') ? expr.symbol.split('/')[0]! : expr.symbol;
+      const sessionContext = resolveSessionWeightContext(new Date());
+      const confidenceRaw = clamp01(expr.confidence ?? 0);
+      const confidenceWeighted = clamp01(confidenceRaw * sessionContext.sessionWeight);
+      const sizingModifier = sessionContext.sessionWeight;
       const market = await this.marketClient.getMarket(symbol);
       const cluster = clusterBySymbol.get(expr.symbol);
       const regime = cluster ? classifyMarketRegime(cluster) : 'choppy';
@@ -387,13 +485,23 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         sampleCount: perf.sampleCount,
         maxFraction: Number((this.thufirConfig.autonomy as any)?.newsEntry?.maxKellyFraction ?? 0.25),
       });
-      const signalAdjustedUsd = desiredUsd * Math.max(0.25, kellyFraction * 4);
+      const signalAdjustedUsd = desiredUsd * Math.max(0.25, kellyFraction * 4) * sizingModifier;
       const newsSizeCapFraction = Number((this.thufirConfig.autonomy as any)?.newsEntry?.sizeCapFraction ?? 0.5);
       const cappedForNews =
         expr.newsTrigger?.enabled === true
           ? Math.min(signalAdjustedUsd, remainingDaily * clamp01(newsSizeCapFraction))
           : signalAdjustedUsd;
       const probeUsd = Math.min(Math.max(minOrderUsd, cappedForNews), remainingDaily);
+      this.logger.info('Session weighting applied to autonomous decision inputs', {
+        symbol,
+        session: sessionContext.session,
+        sessionWeight: Number(sessionContext.sessionWeight.toFixed(4)),
+        confidenceBefore: Number(confidenceRaw.toFixed(4)),
+        confidenceAfter: Number(confidenceWeighted.toFixed(4)),
+        sizingModifier: Number(sizingModifier.toFixed(4)),
+        sizeUsdBefore: Number(desiredUsd.toFixed(4)),
+        sizeUsdAfter: Number(signalAdjustedUsd.toFixed(4)),
+      });
       if (probeUsd <= 0) {
         outputs.push(`${symbol}: Skipped (insufficient daily budget)`);
         continue;
@@ -438,8 +546,22 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         orderType: expr.orderType,
         leverage: targetLeverage,
         reasoning: `${expr.expectedMove} | edge=${(expr.expectedEdge * 100).toFixed(2)}% confidence=${(
-          expr.confidence * 100
-        ).toFixed(1)}% regime=${regime} signal=${signalClass} kelly=${(kellyFraction * 100).toFixed(1)}%`,
+          confidenceWeighted * 100
+        ).toFixed(1)}% regime=${regime} signal=${signalClass} kelly=${(kellyFraction * 100).toFixed(
+          1
+        )}% session=${sessionContext.session} sessionWeight=${sessionContext.sessionWeight.toFixed(
+          2
+        )} confidenceRaw=${confidenceRaw.toFixed(3)} confidenceWeighted=${confidenceWeighted.toFixed(
+          3
+        )} sizingModifier=${sizingModifier.toFixed(2)} ${formatContextPackTrace({
+          marketRegime: expr.contextPack?.regime.marketRegime ?? regime,
+          volatilityBucket: expr.contextPack?.regime.volatilityBucket ?? volatilityBucket,
+          liquidityBucket: expr.contextPack?.regime.liquidityBucket ?? liquidityBucket,
+          executionStatus: expr.contextPack?.executionQuality.status ?? 'unknown',
+          eventKind: expr.contextPack?.event.kind ?? (expr.newsTrigger?.enabled ? 'news_event' : 'technical'),
+          portfolioPosture: expr.contextPack?.portfolioState.posture ?? 'unknown',
+          missing: expr.contextPack?.missing ?? ['contextPack.provider'],
+        })}`,
       };
 
       const tradeResult = await this.executor.execute(market, decision);
@@ -510,7 +632,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           orderType: expr.orderType ?? null,
           reduceOnly: false,
           markPrice: markPrice || null,
-          confidence: expr.confidence != null ? String(expr.confidence) : null,
+          confidence: String(confidenceWeighted),
           reasoning: decision.reasoning ?? null,
           signalClass,
           marketRegime: regime,
@@ -653,37 +775,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     return lines.join('\n');
   }
 
-  /**
-   * Schedule the daily report
-   */
-  private scheduleDailyReport(): void {
-    const scheduleNext = () => {
-      const now = new Date();
-      const timeParts = this.config.dailyReportTime.split(':').map(Number);
-      const hours = timeParts[0] ?? 20;
-      const minutes = timeParts[1] ?? 0;
-
-      const target = new Date(now);
-      target.setHours(hours, minutes, 0, 0);
-
-      if (target <= now) {
-        target.setDate(target.getDate() + 1);
-      }
-
-      const delay = target.getTime() - now.getTime();
-
-      this.reportTimer = setTimeout(async () => {
-        try {
-          const report = await this.generateDailyPnLReport();
-          this.emit('daily-report', report);
-        } catch (error) {
-          this.logger.error('Failed to generate daily report', error);
-        }
-        scheduleNext();
-      }, delay);
-    };
-
-    scheduleNext();
+  async runDailyReportTick(): Promise<void> {
+    try {
+      const report = await this.generateDailyPnLReport();
+      this.emit('daily-report', report);
+    } catch (error) {
+      this.logger.error('Failed to generate daily report', error);
+      throw error;
+    }
   }
 
   private calculateUnrealizedPnl(): number {
@@ -743,5 +842,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON autonomous_trades(timestamp);
       CREATE INDEX IF NOT EXISTS idx_trades_outcome ON autonomous_trades(outcome);
     `);
+  }
+
+  private buildSchedulerNamespace(): string {
+    const seed =
+      this.thufirConfig.memory?.sessionsPath ??
+      this.thufirConfig.memory?.dbPath ??
+      this.thufirConfig.agent?.workspace ??
+      'default';
+    const hash = Buffer.from(seed).toString('base64url').slice(0, 16);
+    return `autonomy:${hash}`;
   }
 }

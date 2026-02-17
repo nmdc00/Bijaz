@@ -1,5 +1,6 @@
 import type { Market } from '../execution/markets.js';
 import type { StoredIntel } from '../intel/store.js';
+import type { SessionContext } from './session-context.js';
 
 export interface MentatSignals {
   system: string;
@@ -58,6 +59,7 @@ export interface MentatFragilityCardInput {
 export interface MentatScanOutput {
   system: string;
   generatedAt: string;
+  sessionContext: SessionContext;
   signalsSummary: Record<string, unknown>;
   detectors: DetectorBundle;
   systemMap: SystemMap;

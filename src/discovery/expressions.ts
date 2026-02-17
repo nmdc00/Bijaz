@@ -1,5 +1,35 @@
 import type { ThufirConfig } from '../core/config.js';
-import type { ExpressionPlan, Hypothesis, SignalCluster } from './types.js';
+import type {
+  ExpressionContextPack,
+  ExpressionPlan,
+  Hypothesis,
+  SignalCluster,
+} from './types.js';
+
+type ContextPackValue<T> = T | null | undefined | Promise<T | null | undefined>;
+
+export interface ContextPackProviders {
+  regime?: (input: {
+    expression: ExpressionPlan;
+    cluster: SignalCluster;
+    hypothesis: Hypothesis;
+  }) => ContextPackValue<Partial<ExpressionContextPack['regime']>>;
+  executionQuality?: (input: {
+    expression: ExpressionPlan;
+    cluster: SignalCluster;
+    hypothesis: Hypothesis;
+  }) => ContextPackValue<Partial<ExpressionContextPack['executionQuality']>>;
+  event?: (input: {
+    expression: ExpressionPlan;
+    cluster: SignalCluster;
+    hypothesis: Hypothesis;
+  }) => ContextPackValue<Partial<ExpressionContextPack['event']>>;
+  portfolioState?: (input: {
+    expression: ExpressionPlan;
+    cluster: SignalCluster;
+    hypothesis: Hypothesis;
+  }) => ContextPackValue<Partial<ExpressionContextPack['portfolioState']>>;
+}
 
 export function mapExpressionPlan(
   config: ThufirConfig,
@@ -95,6 +125,167 @@ export function mapExpressionPlan(
           expiresAtMs: Date.now() + Math.max(10, newsTtlMinutes) * 60_000,
         }
       : null,
+  };
+}
+
+function isExecutionStatus(value: unknown): value is ExpressionContextPack['executionQuality']['status'] {
+  return value === 'good' || value === 'mixed' || value === 'poor' || value === 'unknown';
+}
+
+function isEventKind(value: unknown): value is ExpressionContextPack['event']['kind'] {
+  return value === 'news_event' || value === 'technical' || value === 'none';
+}
+
+function isPosture(value: unknown): value is ExpressionContextPack['portfolioState']['posture'] {
+  return value === 'risk_on' || value === 'risk_off' || value === 'neutral' || value === 'unknown';
+}
+
+function toOptionalNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function safeProviderResult<T>(
+  provider: (() => ContextPackValue<T>) | undefined
+): Promise<T | null> {
+  if (!provider) return null;
+  try {
+    const result = await provider();
+    return result ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultContextPack(input: {
+  expression: ExpressionPlan;
+  cluster: SignalCluster;
+  hypothesis: Hypothesis;
+}): ExpressionContextPack {
+  const { expression, cluster, hypothesis } = input;
+  const hasNewsTrigger = expression.newsTrigger?.enabled === true;
+  return {
+    regime: {
+      marketRegime: expression.marketRegime ?? 'choppy',
+      volatilityBucket: expression.volatilityBucket ?? 'medium',
+      liquidityBucket: expression.liquidityBucket ?? 'normal',
+      confidence: toOptionalNumber(cluster.confidence),
+      source: 'derived',
+    },
+    executionQuality: {
+      status: 'unknown',
+      score: null,
+      recentWinRate: null,
+      slippageBps: null,
+      notes: ['execution quality provider missing'],
+      source: 'default',
+    },
+    event: {
+      kind: hasNewsTrigger ? 'news_event' : 'technical',
+      subtype: expression.newsTrigger?.subtype ?? null,
+      catalyst: hypothesis.pressureSource ?? null,
+      confidence: toOptionalNumber(expression.newsTrigger?.noveltyScore),
+      expiresAtMs: toOptionalNumber(expression.newsTrigger?.expiresAtMs),
+      source: hasNewsTrigger ? 'derived' : 'default',
+    },
+    portfolioState: {
+      posture: 'unknown',
+      availableBalanceUsd: null,
+      netExposureUsd: null,
+      openPositions: null,
+      source: 'default',
+    },
+    missing: [],
+  };
+}
+
+export async function enrichExpressionContextPack(input: {
+  expression: ExpressionPlan;
+  cluster: SignalCluster;
+  hypothesis: Hypothesis;
+  providers?: ContextPackProviders;
+}): Promise<ExpressionPlan> {
+  const defaults = defaultContextPack(input);
+  const { providers, expression, cluster, hypothesis } = input;
+  const providerInput = { expression, cluster, hypothesis };
+
+  const [regimeRaw, executionRaw, eventRaw, portfolioRaw] = await Promise.all([
+    safeProviderResult(() => providers?.regime?.(providerInput)),
+    safeProviderResult(() => providers?.executionQuality?.(providerInput)),
+    safeProviderResult(() => providers?.event?.(providerInput)),
+    safeProviderResult(() => providers?.portfolioState?.(providerInput)),
+  ]);
+
+  const regime: ExpressionContextPack['regime'] = {
+    marketRegime:
+      regimeRaw?.marketRegime === 'trending' ||
+      regimeRaw?.marketRegime === 'choppy' ||
+      regimeRaw?.marketRegime === 'high_vol_expansion' ||
+      regimeRaw?.marketRegime === 'low_vol_compression'
+        ? regimeRaw.marketRegime
+        : defaults.regime.marketRegime,
+    volatilityBucket:
+      regimeRaw?.volatilityBucket === 'low' ||
+      regimeRaw?.volatilityBucket === 'medium' ||
+      regimeRaw?.volatilityBucket === 'high'
+        ? regimeRaw.volatilityBucket
+        : defaults.regime.volatilityBucket,
+    liquidityBucket:
+      regimeRaw?.liquidityBucket === 'thin' ||
+      regimeRaw?.liquidityBucket === 'normal' ||
+      regimeRaw?.liquidityBucket === 'deep'
+        ? regimeRaw.liquidityBucket
+        : defaults.regime.liquidityBucket,
+    confidence: toOptionalNumber(regimeRaw?.confidence) ?? defaults.regime.confidence,
+    source: regimeRaw ? 'provider' : defaults.regime.source,
+  };
+
+  const executionQuality: ExpressionContextPack['executionQuality'] = {
+    status: isExecutionStatus(executionRaw?.status) ? executionRaw.status : defaults.executionQuality.status,
+    score: toOptionalNumber(executionRaw?.score),
+    recentWinRate: toOptionalNumber(executionRaw?.recentWinRate),
+    slippageBps: toOptionalNumber(executionRaw?.slippageBps),
+    notes:
+      Array.isArray(executionRaw?.notes) && executionRaw.notes.length > 0
+        ? executionRaw.notes.map((note) => String(note))
+        : defaults.executionQuality.notes,
+    source: executionRaw ? 'provider' : defaults.executionQuality.source,
+  };
+
+  const event: ExpressionContextPack['event'] = {
+    kind: isEventKind(eventRaw?.kind) ? eventRaw.kind : defaults.event.kind,
+    subtype: typeof eventRaw?.subtype === 'string' ? eventRaw.subtype : defaults.event.subtype,
+    catalyst: typeof eventRaw?.catalyst === 'string' ? eventRaw.catalyst : defaults.event.catalyst,
+    confidence: toOptionalNumber(eventRaw?.confidence) ?? defaults.event.confidence,
+    expiresAtMs: toOptionalNumber(eventRaw?.expiresAtMs) ?? defaults.event.expiresAtMs,
+    source: eventRaw ? 'provider' : defaults.event.source,
+  };
+
+  const portfolioState: ExpressionContextPack['portfolioState'] = {
+    posture: isPosture(portfolioRaw?.posture) ? portfolioRaw.posture : defaults.portfolioState.posture,
+    availableBalanceUsd:
+      toOptionalNumber(portfolioRaw?.availableBalanceUsd) ?? defaults.portfolioState.availableBalanceUsd,
+    netExposureUsd:
+      toOptionalNumber(portfolioRaw?.netExposureUsd) ?? defaults.portfolioState.netExposureUsd,
+    openPositions: toOptionalNumber(portfolioRaw?.openPositions) ?? defaults.portfolioState.openPositions,
+    source: portfolioRaw ? 'provider' : defaults.portfolioState.source,
+  };
+
+  const missing: string[] = [];
+  if (!regimeRaw) missing.push('regime.provider');
+  if (!executionRaw) missing.push('executionQuality.provider');
+  if (!eventRaw && defaults.event.source === 'default') missing.push('event.provider');
+  if (!portfolioRaw) missing.push('portfolioState.provider');
+
+  return {
+    ...expression,
+    contextPack: {
+      regime,
+      executionQuality,
+      event,
+      portfolioState,
+      missing,
+    },
   };
 }
 

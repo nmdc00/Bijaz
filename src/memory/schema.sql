@@ -29,9 +29,21 @@ CREATE TABLE IF NOT EXISTS predictions (
 
     -- Metadata
     domain TEXT,
+    session_tag TEXT,
+    regime_tag TEXT,
+    strategy_class TEXT,
+    horizon_minutes INTEGER,
+    symbol TEXT,
     created_at TEXT DEFAULT (datetime('now')),
+    horizon_minutes INTEGER CHECK(horizon_minutes IS NULL OR horizon_minutes > 0),
+    expires_at TEXT,
+    context_tags TEXT, -- JSON array
 
     -- Outcome (filled when market resolves)
+    resolution_status TEXT NOT NULL DEFAULT 'open' CHECK(resolution_status IN ('open', 'resolved_true', 'resolved_false', 'unresolved_error')),
+    resolution_metadata TEXT, -- JSON object
+    resolution_error TEXT,
+    resolution_timestamp TEXT,
     outcome TEXT CHECK(outcome IS NULL OR outcome IN ('YES', 'NO')),
     outcome_timestamp TEXT,
     pnl REAL,
@@ -40,6 +52,11 @@ CREATE TABLE IF NOT EXISTS predictions (
 
 CREATE INDEX IF NOT EXISTS idx_predictions_market ON predictions(market_id);
 CREATE INDEX IF NOT EXISTS idx_predictions_domain ON predictions(domain);
+CREATE INDEX IF NOT EXISTS idx_predictions_session_tag ON predictions(session_tag);
+CREATE INDEX IF NOT EXISTS idx_predictions_regime_tag ON predictions(regime_tag);
+CREATE INDEX IF NOT EXISTS idx_predictions_strategy_class ON predictions(strategy_class);
+CREATE INDEX IF NOT EXISTS idx_predictions_horizon_minutes ON predictions(horizon_minutes);
+CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
 CREATE INDEX IF NOT EXISTS idx_predictions_created ON predictions(created_at);
 CREATE INDEX IF NOT EXISTS idx_predictions_outcome ON predictions(outcome);
 CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(outcome) WHERE outcome IS NULL;
@@ -541,6 +558,30 @@ CREATE TABLE IF NOT EXISTS agent_playbooks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_playbooks_updated ON agent_playbooks(updated_at);
+
+-- ============================================================================
+-- Scheduler Control Plane
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS scheduler_jobs (
+    name TEXT PRIMARY KEY,
+    schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('interval', 'daily')),
+    interval_ms INTEGER,
+    daily_time TEXT,
+    status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'running', 'success', 'failed')),
+    last_run_at TEXT,
+    next_run_at TEXT NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    lock_owner TEXT,
+    lock_expires_at TEXT,
+    lease_ms INTEGER NOT NULL DEFAULT 120000,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next_run ON scheduler_jobs(next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_lock_expires ON scheduler_jobs(lock_expires_at);
 
 -- ============================================================================
 -- Views
