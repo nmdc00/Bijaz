@@ -34,6 +34,9 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       decision.leverage ?? this.maxLeverage,
       this.maxLeverage
     );
+    const marketSlippageBps = Number.isFinite(decision.marketSlippageBps)
+      ? Math.max(0, Number(decision.marketSlippageBps))
+      : this.defaultSlippageBps;
     const orderType = decision.orderType ?? 'market';
     const price = decision.price ?? null;
     const reduceOnly = decision.reduceOnly ?? false;
@@ -70,7 +73,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         priceStr = formatDecimal(price, 8);
       } else {
         // For IOC-style market orders, pick a price from the live order book to ensure tick alignment.
-        priceStr = await this.getIocPriceStr(symbol, side);
+        priceStr = await this.getIocPriceStr(symbol, side, marketSlippageBps);
       }
       if (!priceStr || !Number.isFinite(Number(priceStr)) || Number(priceStr) <= 0) {
         return { executed: false, message: `Invalid decision: missing or invalid price (p=${priceStr}).` };
@@ -113,13 +116,17 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     }
   }
 
-  private async estimateMarketPrice(symbol: string, side: 'buy' | 'sell'): Promise<number> {
+  private async estimateMarketPrice(
+    symbol: string,
+    side: 'buy' | 'sell',
+    slippageBps = this.defaultSlippageBps
+  ): Promise<number> {
     const mids = await this.client.getAllMids();
     const mid = mids[symbol];
     if (typeof mid !== 'number' || !Number.isFinite(mid)) {
       throw new Error(`Missing mid price for ${symbol}.`);
     }
-    const slippage = this.defaultSlippageBps / 10000;
+    const slippage = slippageBps / 10000;
     return side === 'buy' ? mid * (1 + slippage) : mid * (1 - slippage);
   }
 
@@ -173,7 +180,11 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     });
   }
 
-  private async getIocPriceStr(symbol: string, side: 'buy' | 'sell'): Promise<string> {
+  private async getIocPriceStr(
+    symbol: string,
+    side: 'buy' | 'sell',
+    slippageBps = this.defaultSlippageBps
+  ): Promise<string> {
     // Prefer top-of-book prices for tick alignment.
     try {
       const book = await this.client.getL2Book(symbol);
@@ -182,6 +193,12 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       const asks = levels[1] ?? [];
       const best = side === 'buy' ? asks[0]?.px : bids[0]?.px;
       if (typeof best === 'string' && best.trim().length > 0) {
+        const base = Number(best.trim());
+        if (Number.isFinite(base) && base > 0) {
+          const slippage = Math.max(0, slippageBps) / 10000;
+          const aggressivePx = side === 'buy' ? base * (1 + slippage) : base * (1 - slippage);
+          return formatDecimal(aggressivePx, 8);
+        }
         return best.trim();
       }
     } catch {
@@ -206,7 +223,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     }
 
     // Last resort: mid + slippage (may be off-tick; better than nothing).
-    const px = await this.estimateMarketPrice(symbol, side);
+    const px = await this.estimateMarketPrice(symbol, side, slippageBps);
     return formatDecimal(px, 8);
   }
 }

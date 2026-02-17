@@ -61,6 +61,59 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('retries no-immediate-match failures with widened slippage and succeeds', async () => {
+    const slippageSeen: number[] = [];
+    let confirmCount = 0;
+    let releaseCount = 0;
+    const executor = {
+      execute: async (_market: unknown, decision: { marketSlippageBps?: number }) => {
+        slippageSeen.push(Number(decision.marketSlippageBps ?? -1));
+        if (slippageSeen.length < 3) {
+          return {
+            executed: false,
+            message:
+              'Hyperliquid trade failed: Order 0: Order could not immediately match against any resting orders. asset=0',
+          };
+        }
+        return { executed: true, message: 'Hyperliquid order filled (oid=1).' };
+      },
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {
+        confirmCount += 1;
+      },
+      release: () => {
+        releaseCount += 1;
+      },
+    };
+
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 1 },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          hyperliquid: { defaultSlippageBps: 10 },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+
+    expect(res.success).toBe(true);
+    expect(slippageSeen).toEqual([10, 35, 60]);
+    expect(confirmCount).toBe(1);
+    expect(releaseCount).toBe(0);
+    if (res.success) {
+      const data = res.data as { execution_attempts?: Array<{ attempt: number }> };
+      expect(data.execution_attempts?.length).toBe(3);
+    }
+  });
+
   it('perp_place_order blocks leverage above risk max', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),

@@ -504,17 +504,21 @@ function enforceTradeResponseContract(response: string, state: AgentState): stri
     return response;
   }
 
+  const deterministicAction = `Action: ${buildTradeActionSummary(state)}`;
   const hasContractShape =
     /\bAction:\s*/i.test(response) &&
     /\bBook State:\s*/i.test(response) &&
     /\bRisk:\s*/i.test(response) &&
     /\bNext Action:\s*/i.test(response);
   if (hasContractShape) {
-    return response;
+    return response
+      .split('\n')
+      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
+      .join('\n');
   }
 
   return [
-    `Action: ${buildTradeActionSummary(state)}`,
+    deterministicAction,
     `Book State: ${buildTradeBookState(state)}`,
     `Risk: ${buildTradeRiskSummary(state)}`,
     `Next Action: ${buildTradeNextActionSummary(state)}`,

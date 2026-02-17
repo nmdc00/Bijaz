@@ -1,7 +1,7 @@
 import type { ThufirConfig } from './config.js';
 import type { Market } from '../execution/markets.js';
 import type { MarketClient } from '../execution/market-client.js';
-import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
+import type { ExecutionAdapter, TradeDecision, TradeResult } from '../execution/executor.js';
 import type { LimitCheckResult } from '../execution/wallet/limits.js';
 import { ethers } from 'ethers';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -95,6 +95,59 @@ type PerpExitMode =
   | 'risk_reduction'
   | 'manual'
   | 'unknown';
+
+type PerpExecutionAttempt = {
+  attempt: number;
+  slippage_bps: number;
+  executed: boolean;
+  message: string;
+};
+
+function isNoImmediateMatchError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return /could not immediately match against any resting orders/i.test(message);
+}
+
+async function executePerpWithRetry(params: {
+  executor: ExecutionAdapter;
+  marketClient: MarketClient;
+  market: Market;
+  symbol: string;
+  decision: TradeDecision;
+  baseSlippageBps: number;
+}): Promise<{ result: TradeResult; attempts: PerpExecutionAttempt[] }> {
+  const slippageSequence = [params.baseSlippageBps, params.baseSlippageBps + 25, params.baseSlippageBps + 50]
+    .map((value) => Math.max(0, Math.min(300, value)));
+  const attempts: PerpExecutionAttempt[] = [];
+
+  for (let index = 0; index < slippageSequence.length; index += 1) {
+    const slippageBps = slippageSequence[index]!;
+    const market = index === 0 ? params.market : await params.marketClient.getMarket(params.symbol);
+    const attemptDecision: TradeDecision = {
+      ...params.decision,
+      marketSlippageBps: slippageBps,
+    };
+    const result = await params.executor.execute(market, attemptDecision);
+    attempts.push({
+      attempt: index + 1,
+      slippage_bps: slippageBps,
+      executed: result.executed,
+      message: result.message,
+    });
+
+    if (result.executed) {
+      return { result, attempts };
+    }
+    if (!isNoImmediateMatchError(result.message) || index === slippageSequence.length - 1) {
+      return { result, attempts };
+    }
+  }
+
+  return {
+    result: { executed: false, message: 'Execution failed before attempting order placement.' },
+    attempts,
+  };
+}
 
 function parseNewsSources(input: unknown): string[] | null {
   if (Array.isArray(input)) {
@@ -1093,9 +1146,24 @@ export async function executeToolCall(
           confidence: 'medium' as const,
         };
         const executionStartMs = Date.now();
-        const result = await ctx.executor.execute(market, decision);
+        const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
+        const execution = await executePerpWithRetry({
+          executor: ctx.executor,
+          marketClient: ctx.marketClient,
+          market,
+          symbol,
+          decision,
+          baseSlippageBps,
+        });
+        const result = execution.result;
         if (!result.executed) {
           ctx.limiter.release(size);
+          const retrySummary =
+            execution.attempts.length > 1
+              ? ` Retry attempts=${execution.attempts.length}; slippage_bps=[${execution.attempts
+                  .map((attempt) => String(attempt.slippage_bps))
+                  .join(',')}].`
+              : '';
           try {
             const tradeId = recordPerpTrade({
               hypothesisId,
@@ -1142,12 +1210,12 @@ export async function executeToolCall(
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
               outcome: 'failed',
-              error: result.message,
+              error: `${result.message}${retrySummary}`,
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
-          return { success: false, error: result.message };
+          return { success: false, error: `${result.message}${retrySummary}` };
         }
         ctx.limiter.confirm(size);
         const inferredOrderId = parseOrderIdFromResultMessage(result.message);
@@ -1274,6 +1342,7 @@ export async function executeToolCall(
               ...feeEstimate,
               ...realizedFee,
             },
+            execution_attempts: execution.attempts,
           },
         };
       }
