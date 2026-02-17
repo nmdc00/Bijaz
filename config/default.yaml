@@ -421,6 +421,31 @@ intel:
     model: text-embedding-3-small
     apiBaseUrl: https://api.openai.com
   retentionDays: 30
+  webSearch:
+    enabled: true
+    providers:
+      order: [brave, serpapi, duckduckgo] # brave | perplexity | serpapi | duckduckgo
+      brave:
+        enabled: true
+        apiKey: ${BRAVE_API_KEY}
+      perplexity:
+        enabled: false
+        apiKey: ${PERPLEXITY_API_KEY}
+      serpapi:
+        enabled: true
+        apiKey: ${SERPAPI_KEY}
+      duckduckgo:
+        enabled: true
+    cache:
+      enabled: true
+      ttlSeconds: 900
+      maxEntries: 5000
+    budgets:
+      maxQueriesPerDay: 500
+      perProviderDailyCaps: {}
+    circuitBreaker:
+      failureThreshold: 5
+      openSeconds: 300
 
   # Sources (configure API keys in environment)
   sources:
