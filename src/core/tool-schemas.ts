@@ -570,6 +570,11 @@ export const THUFIR_TOOLS: Tool[] = [
           description: 'List of source refs/urls/intel ids used for a news-triggered trade',
         },
         hypothesis_id: { type: 'string', description: 'Optional hypothesis id linking entry and exit' },
+        trade_archetype: {
+          type: 'string',
+          enum: ['scalp', 'intraday', 'swing'],
+          description: 'Execution archetype used for risk/exit contract validation',
+        },
         thesis_invalidation_hit: {
           type: 'boolean',
           description: 'For reduce-only exits: true if recorded invalidation condition was hit',

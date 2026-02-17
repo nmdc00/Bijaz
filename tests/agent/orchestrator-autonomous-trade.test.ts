@@ -247,6 +247,93 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect((placeOrderInputs[0]?.size as number) > 0).toBe(true);
   });
 
+  it('normalizes exit_mode aliases and defaults trade_archetype for perp_place_order', async () => {
+    const placeOrderInputs: Array<Record<string, unknown>> = [];
+
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Place trade directly',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: {
+                    symbol: 'BTC',
+                    side: 'BUY',
+                    size: '0.01',
+                    reduce_only: true,
+                    exit_mode: 'liquidity_probe',
+                  },
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'execute',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'done' };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        const payload = input as Record<string, unknown>;
+        if (name === 'perp_place_order') {
+          placeOrderInputs.push(payload);
+          return mkExecution(name, payload, { success: true, data: { order_id: 'o-3' } });
+        }
+        return mkExecution(name, payload, { success: false, error: 'unexpected' });
+      },
+    };
+
+    await runOrchestrator(
+      'Close BTC',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(placeOrderInputs.length).toBe(1);
+    expect(placeOrderInputs[0]?.exit_mode).toBe('risk_reduction');
+  });
+
   it('falls back to deterministic execution summary when critic disapproves without revision', async () => {
     const llm = {
       complete: async (messages: Array<{ role: string; content: string }>) => {

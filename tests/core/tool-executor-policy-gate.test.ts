@@ -47,7 +47,7 @@ describe('tool-executor policy gate', () => {
 
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 0.01, signal_class: 'mean_reversion' },
+      { symbol: 'BTC', side: 'buy', size: 0.01, signal_class: 'mean_reversion', trade_archetype: 'intraday' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
 
