@@ -2210,6 +2210,16 @@ program
     });
   });
 
+const worker = program.command('worker').description('Background worker services');
+
+worker
+  .command('alerts')
+  .description('Start autonomous alerts worker service')
+  .action(async () => {
+    const { runWorkerAlertsEntrypoint } = await import('../worker/alerts.js');
+    await runWorkerAlertsEntrypoint();
+  });
+
 // ============================================================================
 // Memory Commands
 // ============================================================================
