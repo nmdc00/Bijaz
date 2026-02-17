@@ -21,6 +21,51 @@ function ensureDirectory(path: string): void {
 function applySchema(db: Database.Database): void {
   const schemaSql = getSchemaSql();
   db.exec(schemaSql);
+  migratePredictionsForDelphiResolution(db);
+}
+
+function migratePredictionsForDelphiResolution(db: Database.Database): void {
+  const columns = db
+    .prepare("PRAGMA table_info('predictions')")
+    .all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  const addColumnIfMissing = (name: string, definition: string): void => {
+    if (columnNames.has(name)) {
+      return;
+    }
+    db.exec(`ALTER TABLE predictions ADD COLUMN ${definition}`);
+    columnNames.add(name);
+  };
+
+  addColumnIfMissing(
+    'horizon_minutes',
+    'horizon_minutes INTEGER CHECK(horizon_minutes IS NULL OR horizon_minutes > 0)'
+  );
+  addColumnIfMissing('expires_at', 'expires_at TEXT');
+  addColumnIfMissing('context_tags', 'context_tags TEXT');
+  addColumnIfMissing(
+    'resolution_status',
+    "resolution_status TEXT NOT NULL DEFAULT 'open' CHECK(resolution_status IN ('open', 'resolved_true', 'resolved_false', 'unresolved_error'))"
+  );
+  addColumnIfMissing('resolution_metadata', 'resolution_metadata TEXT');
+  addColumnIfMissing('resolution_error', 'resolution_error TEXT');
+  addColumnIfMissing('resolution_timestamp', 'resolution_timestamp TEXT');
+
+  db.exec(`
+    UPDATE predictions
+    SET resolution_status = 'open'
+    WHERE resolution_status IS NULL
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_predictions_resolution_status
+    ON predictions(resolution_status)
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_predictions_open_expiry
+    ON predictions(expires_at, created_at)
+    WHERE resolution_status = 'open' AND expires_at IS NOT NULL
+  `);
 }
 
 export function openDatabase(dbPath?: string): Database.Database {
