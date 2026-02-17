@@ -56,6 +56,32 @@ function buildRunAtIso(params: { day: 'today' | 'tomorrow'; hours: number; minut
   return target.toISOString();
 }
 
+function buildRunAtFromDelay(params: { delayMs: number; nowMs?: number }): string {
+  const base = params.nowMs ?? Date.now();
+  return new Date(base + Math.max(1_000, Math.floor(params.delayMs))).toISOString();
+}
+
+function parseDelayMs(input: string): number | null {
+  const normalized = input.trim().toLowerCase();
+  const compact = normalized.match(/^in\s+(\d+)\s*([smh])$/);
+  if (compact) {
+    const amount = Number(compact[1]);
+    const unit = compact[2];
+    if (!Number.isInteger(amount) || amount <= 0) return null;
+    if (unit === 's') return amount * 1000;
+    if (unit === 'm') return amount * 60 * 1000;
+    return amount * 60 * 60 * 1000;
+  }
+  const verbose = normalized.match(/^in\s+(\d+)\s*(seconds?|minutes?|hours?)$/);
+  if (!verbose) return null;
+  const amount = Number(verbose[1]);
+  const unit = verbose[2] ?? '';
+  if (!Number.isInteger(amount) || amount <= 0) return null;
+  if (unit.startsWith('second')) return amount * 1000;
+  if (unit.startsWith('minute')) return amount * 60 * 1000;
+  return amount * 60 * 60 * 1000;
+}
+
 function normalizeInstruction(input: string): string {
   return input.replace(/\s+/g, ' ').trim();
 }
@@ -79,6 +105,15 @@ function parseScheduleBodyWithInstruction(
     return {
       scheduleKind: 'interval',
       intervalMinutes,
+      instruction: instructionPart,
+    };
+  }
+
+  const delayMs = parseDelayMs(schedulePart);
+  if (delayMs != null) {
+    return {
+      scheduleKind: 'once',
+      runAtIso: buildRunAtFromDelay({ delayMs, nowMs }),
       instruction: instructionPart,
     };
   }
@@ -109,6 +144,25 @@ function parseNaturalScheduleInstruction(
   text: string,
   nowMs?: number
 ): Omit<Extract<ScheduledTaskAction, { kind: 'create' }>, 'kind' | 'source'> | null {
+  const rel = text.match(/\bin\s+(\d+)\s*(s|m|h|seconds?|minutes?|hours?)\b/i);
+  if (rel) {
+    const delayMs = parseDelayMs(`in ${rel[1]} ${rel[2]}`);
+    if (delayMs != null) {
+      const instruction = normalizeInstruction(
+        text
+          .replace(/\bin\s+\d+\s*(s|m|h|seconds?|minutes?|hours?)\b/gi, '')
+          .replace(/\b(at|on|for|please|my dude|i want|schedule|set|to run|from now)\b/gi, '')
+      );
+      if (instruction && instruction.length >= 5) {
+        return {
+          scheduleKind: 'once',
+          runAtIso: buildRunAtFromDelay({ delayMs, nowMs }),
+          instruction,
+        };
+      }
+    }
+  }
+
   const dayMatch = text.match(/\b(tomorrow|today)\b/i);
   const time = parseNaturalTime(text);
   if (!dayMatch || !time) return null;
@@ -175,7 +229,9 @@ export function parseScheduledTaskAction(input: string, nowMs?: number): Schedul
     };
   }
 
-  const hasTemporalCue = /\b(tomorrow|today)\b/i.test(text);
+  const hasTemporalCue =
+    /\b(tomorrow|today)\b/i.test(text) ||
+    /\bin\s+\d+\s*(s|m|h|seconds?|minutes?|hours?)\b/i.test(text);
   const hasSchedCue = /\b(at|schedule|remind|run|send|deliver|do)\b/i.test(text);
   if (!hasTemporalCue || !hasSchedCue) {
     return { kind: 'none' };
@@ -204,6 +260,7 @@ export function formatScheduledTaskHelp(): string {
     '',
     'Examples:',
     '- /schedule tomorrow 9:45am | send today\'s activity and full PnL + risk snapshot',
+    '- /schedule in 30s | send status',
     '- /schedule daily 09:45 | run status, check risk limits, and notify me of required actions',
     '',
     'Notes: times are interpreted in UTC by default.',

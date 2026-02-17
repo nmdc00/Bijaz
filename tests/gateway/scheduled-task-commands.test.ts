@@ -22,6 +22,13 @@ describe('scheduled task command parsing', () => {
 
     const interval = parseScheduledTaskAction('/schedule every 30m | monitor risk');
     expect(interval).toMatchObject({ kind: 'create', scheduleKind: 'interval', intervalMinutes: 30, instruction: 'monitor risk' });
+
+    const relative = parseScheduledTaskAction('/schedule in 30s | send status', Date.parse('2026-02-17T20:00:00.000Z'));
+    expect(relative.kind).toBe('create');
+    if (relative.kind !== 'create') return;
+    expect(relative.scheduleKind).toBe('once');
+    expect(relative.runAtIso).toBe('2026-02-17T20:00:30.000Z');
+    expect(relative.instruction).toBe('send status');
   });
 
   it('parses list and cancel commands', () => {
@@ -37,6 +44,11 @@ describe('scheduled task command parsing', () => {
     expect(action.source).toBe('natural');
     expect(action.runAtIso).toBe('2026-02-18T09:45:00.000Z');
     expect(action.instruction.toLowerCase()).toContain('send me');
+
+    const relative = parseScheduledTaskAction('in 30 seconds send me a status update', nowMs);
+    expect(relative.kind).toBe('create');
+    if (relative.kind !== 'create') return;
+    expect(relative.runAtIso).toBe('2026-02-17T20:00:30.000Z');
   });
 
   it('returns help for ambiguous scheduling requests', () => {
@@ -47,6 +59,7 @@ describe('scheduled task command parsing', () => {
   it('includes command usage in help text', () => {
     const help = formatScheduledTaskHelp();
     expect(help).toContain('/schedule tomorrow 9:45am | <task instruction>');
+    expect(help).toContain('/schedule in 30s | send status');
     expect(help).toContain('/scheduled_tasks');
     expect(help).toContain('/unschedule_task <id>');
   });

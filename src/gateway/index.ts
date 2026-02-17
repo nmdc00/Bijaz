@@ -281,7 +281,7 @@ async function maybeHandleScheduledTaskAction(message: {
             intervalMs:
               action.scheduleKind === 'interval'
                 ? Math.max(1, action.intervalMinutes ?? 30) * 60 * 1000
-                : 60 * 1000,
+                : 5 * 1000,
           };
 
     const rec = createScheduledTask({
@@ -376,7 +376,7 @@ for (const rec of listActiveScheduledTasks()) {
           intervalMs:
             rec.scheduleKind === 'interval'
               ? Math.max(1, rec.intervalMinutes ?? 30) * 60 * 1000
-              : 60 * 1000,
+              : 5 * 1000,
         };
   registerScheduledTaskJob({
     jobName: rec.schedulerJobName,
