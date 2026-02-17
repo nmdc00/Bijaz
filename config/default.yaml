@@ -76,9 +76,14 @@ agent:
     maxOutputChars: 12000
   trivial:
     enabled: true
-    maxTokens: 256
+    maxTokens: 128
     temperature: 0.2
-    timeoutMs: 30000
+    timeoutMs: 12000
+    localSoftTimeoutMs: 6000
+    fallbackTimeoutMs: 12000
+    keepWarmEnabled: true
+    keepWarmIntervalSeconds: 180
+    keepAlive: 30m
   # Global LLM budget (rolling hour)
   llmBudget:
     enabled: true

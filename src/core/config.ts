@@ -93,8 +93,16 @@ const ConfigSchema = z.object({
         // Default lowered to reduce CPU time on small boxes when using local trivial LLMs.
         maxTokens: z.number().default(128),
         temperature: z.number().default(0.2),
-        // Default raised because local LLM cold-starts can exceed 30s.
-        timeoutMs: z.number().default(120000),
+        // Keep this bounded so interactive handlers don't block on trivial calls.
+        timeoutMs: z.number().default(12000),
+        // Local trivial calls should fail fast and fall back when cold/stalled.
+        localSoftTimeoutMs: z.number().default(6000),
+        // Remote fallback for trivial tasks should also remain bounded.
+        fallbackTimeoutMs: z.number().default(12000),
+        // Keep local model warm to reduce cold-start latency.
+        keepWarmEnabled: z.boolean().default(true),
+        keepWarmIntervalSeconds: z.number().default(180),
+        keepAlive: z.string().default('30m'),
       })
       .default({}),
     llmBudget: z
@@ -581,6 +589,11 @@ const ConfigSchema = z.object({
                       maxTokens: z.number().optional(),
                       temperature: z.number().optional(),
                       timeoutMs: z.number().optional(),
+                      localSoftTimeoutMs: z.number().optional(),
+                      fallbackTimeoutMs: z.number().optional(),
+                      keepWarmEnabled: z.boolean().optional(),
+                      keepWarmIntervalSeconds: z.number().optional(),
+                      keepAlive: z.string().optional(),
                     })
                     .default({}),
                   llmBudget: z
