@@ -26,13 +26,6 @@ import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
-import {
-  createAlert,
-  markAlertSent,
-  recordAlertDelivery,
-  suppressAlert,
-} from '../memory/alerts.js';
-import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
 const config = loadConfig();
@@ -85,7 +78,7 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
     return;
   }
   const startedAt = Date.now();
-  const scanResult = await defaultAgent!.getAutonomous().runScan();
+  const scanResult = await defaultAgent.getAutonomous().runScan();
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );

@@ -287,7 +287,7 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
-  it('allows non-reduce-only orders without a trade archetype when contract enforcement is not enabled', async () => {
+  it('blocks non-reduce-only orders without a trade archetype', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
       getOpenOrders: async () => [],
@@ -303,7 +303,8 @@ describe('tool-executor perps', () => {
       { symbol: 'BTC', side: 'buy', size: 0.01 },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
-    expect(res.success).toBe(true);
+    expect(res.success).toBe(false);
+    expect(String((res as any).error)).toContain('trade_archetype');
   });
 
   it('blocks conflicting thesis invalidation fields for reduce-only exits', async () => {
