@@ -26,7 +26,11 @@ import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
 import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
-import { validateEntryTradeContract, validateReduceOnlyExitFsm } from './trade_contract.js';
+import {
+  hydrateEntryTradeContract,
+  validateEntryTradeContract,
+  validateReduceOnlyExitFsm,
+} from './trade_contract.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -925,21 +929,7 @@ export async function executeToolCall(
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
-        const contractValidation = validateEntryTradeContract({
-          enabled: Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled),
-          reduceOnly,
-          input: {
-            tradeArchetype,
-            invalidationType,
-            invalidationPrice,
-            timeStopAtMs,
-            takeProfitR,
-            trailMode,
-          },
-        });
-        if (!contractValidation.valid) {
-          return { success: false, error: contractValidation.error };
-        }
+        const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
         const exitFsmValidation = validateReduceOnlyExitFsm({
           enabled: Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm),
           reduceOnly,
@@ -952,16 +942,47 @@ export async function executeToolCall(
           return { success: false, error: exitFsmValidation.error };
         }
         const tradeContractJournalFields = {
-          tradeArchetype: tradeArchetype as 'scalp' | 'intraday' | 'swing' | null,
-          invalidationType: invalidationType as 'price_level' | 'structure_break' | null,
-          invalidationPrice,
-          timeStopAtMs,
-          takeProfitR,
-          trailMode: trailMode as 'none' | 'atr' | 'structure' | null,
+          tradeArchetype: null as 'scalp' | 'intraday' | 'swing' | null,
+          invalidationType: null as 'price_level' | 'structure_break' | null,
+          invalidationPrice: null as number | null,
+          timeStopAtMs: null as number | null,
+          takeProfitR: null as number | null,
+          trailMode: null as 'none' | 'atr' | 'structure' | null,
           emergencyOverride: emergencyOverride || null,
           emergencyReason,
         };
         const market = await ctx.marketClient.getMarket(symbol);
+        const hydratedContractInput = hydrateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          side: side as 'buy' | 'sell',
+          markPrice: market.markPrice ?? null,
+          input: {
+            tradeArchetype,
+            invalidationType,
+            invalidationPrice,
+            timeStopAtMs,
+            takeProfitR,
+            trailMode,
+          },
+        });
+        const contractValidation = validateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          input: hydratedContractInput,
+        });
+        if (!contractValidation.valid) {
+          return { success: false, error: contractValidation.error };
+        }
+        const resolvedContract = contractValidation.contract;
+        if (resolvedContract) {
+          tradeContractJournalFields.tradeArchetype = resolvedContract.tradeArchetype;
+          tradeContractJournalFields.invalidationType = resolvedContract.invalidationType;
+          tradeContractJournalFields.invalidationPrice = resolvedContract.invalidationPrice;
+          tradeContractJournalFields.timeStopAtMs = resolvedContract.timeStopAtMs;
+          tradeContractJournalFields.takeProfitR = resolvedContract.takeProfitR;
+          tradeContractJournalFields.trailMode = resolvedContract.trailMode;
+        }
         const feeEstimate = await estimatePerpOrderFee(ctx, {
           orderType,
           size: requestedSize,

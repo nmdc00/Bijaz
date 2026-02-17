@@ -61,7 +61,7 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
-  it('rejects entry orders missing contract fields when trade-contract enforcement is enabled', async () => {
+  it('autofills missing entry contract fields when trade-contract enforcement is enabled', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
       getOpenOrders: async () => [],
@@ -74,7 +74,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 1 },
+      { symbol: 'BTC', side: 'buy', size: 0.001 },
       {
         config: {
           execution: { provider: 'hyperliquid' },
@@ -85,8 +85,7 @@ describe('tool-executor perps', () => {
         limiter,
       }
     );
-    expect(res.success).toBe(false);
-    expect(String(res.error)).toMatch(/trade_archetype/i);
+    expect(res.success).toBe(true);
   });
 
   it('accepts entry orders with a valid contract when enforcement is enabled', async () => {
