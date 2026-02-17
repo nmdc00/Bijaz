@@ -5,6 +5,7 @@ import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { openDatabase } from '../memory/db.js';
 import { getAutonomyPolicyState, upsertAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
 import { summarizeSignalPerformance } from './signal_performance.js';
+import { getDailyPnLRollup } from './daily_pnl.js';
 
 export type MarketRegime = 'trending' | 'choppy' | 'high_vol_expansion' | 'low_vol_compression';
 export type SignalClass =
@@ -321,6 +322,26 @@ export function evaluateDailyTradeCap(params: {
   };
 }
 
+export function evaluateDailyDrawdownCap(params: {
+  dailyDrawdownCapUsdRaw: unknown;
+  totalPnl: number;
+}): { blocked: boolean; reason?: string } {
+  const raw = Number(params.dailyDrawdownCapUsdRaw);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return { blocked: false };
+  }
+
+  const cap = Math.max(0, raw);
+  if (params.totalPnl > -cap) {
+    return { blocked: false };
+  }
+
+  return {
+    blocked: true,
+    reason: `daily drawdown cap reached (total=${params.totalPnl.toFixed(2)}, cap=${cap.toFixed(2)})`,
+  };
+}
+
 export function shouldForceObservationMode(
   entries: PerpTradeJournalEntry[],
   params?: { window?: number; minFalse?: number }
@@ -365,6 +386,21 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
       allowed: false,
       reasonCode: 'policy.observation_only',
       reason: `observation-only mode active until ${new Date(policyState.observationOnlyUntilMs).toISOString()}`,
+      sizeMultiplier: 1,
+      policyState,
+    };
+  }
+
+  const rollup = getDailyPnLRollup();
+  const drawdownCap = evaluateDailyDrawdownCap({
+    dailyDrawdownCapUsdRaw: (config.autonomy as any)?.dailyDrawdownCapUsd,
+    totalPnl: Number(rollup.totalPnl ?? 0),
+  });
+  if (drawdownCap.blocked) {
+    return {
+      allowed: false,
+      reasonCode: 'policy.daily_drawdown_cap',
+      reason: drawdownCap.reason ?? 'daily drawdown cap reached',
       sizeMultiplier: 1,
       policyState,
     };
