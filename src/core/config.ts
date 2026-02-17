@@ -772,6 +772,32 @@ const ConfigSchema = z.object({
             .default([]),
         })
         .default({}),
+      escalation: z
+        .object({
+          enabled: z.boolean().default(false),
+          channels: z.array(z.string()).default([]),
+          actionableReasons: z
+            .array(
+              z.enum([
+                'risk_breach',
+                'stop_failure',
+                'abnormal_slippage',
+                'high_conviction_setup',
+              ])
+            )
+            .default(['risk_breach', 'stop_failure', 'abnormal_slippage', 'high_conviction_setup']),
+          dedupeWindowSeconds: z.number().default(300),
+          cooldownSeconds: z.number().default(900),
+          severityChannels: z
+            .object({
+              info: z.array(z.string()).default([]),
+              warning: z.array(z.string()).default([]),
+              high: z.array(z.string()).default([]),
+              critical: z.array(z.string()).default([]),
+            })
+            .default({}),
+        })
+        .default({}),
     })
     .default({}),
   qmd: z
