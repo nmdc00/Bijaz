@@ -246,9 +246,9 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       // fall through
     }
 
-    // Last resort: mid + slippage (may be off-tick; better than nothing).
+    // Last resort: mid + slippage, still formatted with perp tick rules.
     const px = await this.estimateMarketPrice(symbol, side, slippageBps);
-    return { priceStr: formatDecimal(px, 8), quoteTsMs: Date.now(), source: 'mid' };
+    return { priceStr: formatPerpPrice(px, szDecimals), quoteTsMs: Date.now(), source: 'mid' };
   }
 }
 
