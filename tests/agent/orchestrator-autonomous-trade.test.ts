@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runOrchestrator } from '../../src/agent/orchestrator/orchestrator.js';
 import type { ToolExecution } from '../../src/agent/tools/types.js';
@@ -19,6 +23,25 @@ function mkExecution(
 }
 
 describe('runOrchestrator autonomous trade contract', () => {
+  const originalDbPath = process.env.THUFIR_DB_PATH;
+
+  beforeEach(() => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'thufir-orchestrator-autonomous-'));
+    process.env.THUFIR_DB_PATH = join(tempDir, 'thufir.sqlite');
+  });
+
+  afterEach(() => {
+    if (process.env.THUFIR_DB_PATH) {
+      rmSync(process.env.THUFIR_DB_PATH, { force: true });
+      rmSync(dirname(process.env.THUFIR_DB_PATH), { recursive: true, force: true });
+    }
+    if (originalDbPath === undefined) {
+      delete process.env.THUFIR_DB_PATH;
+    } else {
+      process.env.THUFIR_DB_PATH = originalDbPath;
+    }
+  });
+
   it('injects and executes a terminal trade tool when planner omits it', async () => {
     const calls: string[] = [];
 
@@ -245,6 +268,11 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(placeOrderInputs[0]?.order_type).toBe('market');
     expect(typeof placeOrderInputs[0]?.size).toBe('number');
     expect((placeOrderInputs[0]?.size as number) > 0).toBe(true);
+    expect(placeOrderInputs[0]?.plan_context).toMatchObject({
+      current_step_id: '1',
+      plan_goal: 'Buy BTC now',
+      mode: 'trade',
+    });
   });
 
   it('normalizes exit_mode aliases and defaults trade_archetype for perp_place_order', async () => {
@@ -513,5 +541,380 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).toContain('Risk:');
     expect(result.response).toContain('Next Action:');
     expect(result.response).not.toContain('If you want');
+  });
+
+  it('overrides claimed Action line with deterministic failure summary when trade fails', async () => {
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Place trade',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: { symbol: 'BTC', side: 'buy', size: 0.01 },
+                },
+              ],
+              confidence: 0.7,
+              blockers: [],
+              reasoning: 'execute',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: [
+              'Action: I executed 2 perp order(s).',
+              'Book State: I am managing the book from the latest portfolio snapshot.',
+              'Risk: Execution risk is currently controlled.',
+              'Next Action: Continue.',
+            ].join('\n'),
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) =>
+        mkExecution(name, input as Record<string, unknown>, {
+          success: false,
+          error: 'Hyperliquid trade failed: Order could not immediately match against any resting orders.',
+        }),
+    };
+
+    const result = await runOrchestrator(
+      'Buy BTC now',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(result.response).toContain('Action: I did not execute a new perp order.');
+    expect(result.response).toContain('Book State:');
+    expect(result.response).toContain('Risk:');
+    expect(result.response).toContain('Next Action:');
+    expect(result.response).not.toContain('Action: I executed 2 perp order(s).');
+  });
+
+  it('skips redundant tools.list steps and continues with subsequent plan steps', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'List tools',
+                  requiresTool: true,
+                  toolName: 'tools.list',
+                  toolInput: {},
+                },
+                {
+                  id: '2',
+                  description: 'Fetch portfolio',
+                  requiresTool: true,
+                  toolName: 'get_portfolio',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'introspect then fetch',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: 'Action: done\nBook State: from portfolio\nRisk: low\nNext Action: continue',
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['tools.list', 'get_portfolio'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        if (name === 'get_portfolio') {
+          return mkExecution(name, input as Record<string, unknown>, {
+            success: true,
+            data: { available_balance: 100 },
+          });
+        }
+        if (name === 'tools.list') {
+          return mkExecution(name, input as Record<string, unknown>, {
+            success: true,
+            data: { count: 2, tools: ['tools.list', 'get_portfolio'] },
+          });
+        }
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: false,
+          error: `unexpected tool: ${name}`,
+        });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Review portfolio health',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(calls.includes('tools.list')).toBe(false);
+    expect(calls.filter((name) => name === 'get_portfolio').length).toBeGreaterThan(0);
+    const toolNames = result.state.toolExecutions.map((execution) => execution.toolName);
+    expect(toolNames).toContain('tools.list');
+    expect(toolNames).toContain('get_portfolio');
+    const toolsListExecution = result.state.toolExecutions.find(
+      (execution) => execution.toolName === 'tools.list'
+    );
+    expect(toolsListExecution?.cached).toBe(true);
+    expect((toolsListExecution?.result as { success: true; data: { skipped?: boolean } }).data.skipped).toBe(
+      true
+    );
+  });
+
+  it('runs independent read-only tool steps concurrently', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Fetch portfolio',
+                  requiresTool: true,
+                  toolName: 'get_portfolio',
+                  toolInput: {},
+                },
+                {
+                  id: '2',
+                  description: 'Fetch open orders',
+                  requiresTool: true,
+                  toolName: 'get_open_orders',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'parallel reads',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content: 'Action: done\nBook State: ok\nRisk: low\nNext Action: continue',
+          };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['get_portfolio', 'get_open_orders'],
+      getLlmSchemas: () => [],
+      get: (name: string) => ({ sideEffects: false, requiresConfirmation: false, name } as any),
+      execute: async (name: string, input: unknown) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        inFlight -= 1;
+        return mkExecution(name, input as Record<string, unknown>, { success: true, data: { ok: true } });
+      },
+    };
+
+    await runOrchestrator(
+      'Review my account',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(maxInFlight).toBeGreaterThan(1);
+  });
+
+  it('skips mutating trade tools for analysis-style requests without explicit execution intent', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Cancel order',
+                  requiresTool: true,
+                  toolName: 'perp_cancel_order',
+                  toolInput: { order_id: '123' },
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'attempt cancel',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content:
+              'Action: I cancelled an order.\nBook State: updated.\nRisk: low.\nNext Action: monitor.',
+          };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_cancel_order'],
+      getLlmSchemas: () => [],
+      get: (_name: string) => ({ sideEffects: true, requiresConfirmation: true } as any),
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, { success: true, data: { cancelled: true } });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Thoughts on this trade and what should I do next?',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(calls).toEqual([]);
+    const cancelExec = result.state.toolExecutions.find((execution) => execution.toolName === 'perp_cancel_order');
+    expect(cancelExec).toBeDefined();
+    expect((cancelExec?.result as { success: true; data: { skipped?: boolean } }).data.skipped).toBe(true);
+    expect(result.response).toContain('Action: I did not place a new perp order in this cycle.');
   });
 });

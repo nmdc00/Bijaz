@@ -2,6 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { EscalationPolicyEngine } from '../../src/gateway/escalation.js';
 
 describe('EscalationPolicyEngine', () => {
+  it('derives a stable dedupe key from source and reason when not provided', () => {
+    const policy = new EscalationPolicyEngine({
+      enabled: true,
+      channels: ['telegram'],
+      dedupeWindowSeconds: 30,
+      cooldownSeconds: 0,
+    });
+
+    const decision = policy.evaluate({
+      source: 'worker:hourly',
+      reason: 'risk_breach',
+      severity: 'warning',
+      summary: 'Drawdown nearing threshold',
+    });
+
+    expect(decision.shouldSend).toBe(true);
+    expect(decision.dedupeKey).toBe('worker:hourly:risk_breach');
+  });
+
   it('suppresses duplicate alerts within dedupe window', () => {
     let nowMs = 1_000;
     const policy = new EscalationPolicyEngine(
@@ -98,5 +117,74 @@ describe('EscalationPolicyEngine', () => {
     expect(decision.channels).toEqual(['telegram', 'whatsapp']);
     expect(decision.message).toContain('Severity: CRITICAL');
     expect(decision.message).toContain('Reason: high_conviction_setup');
+  });
+
+  it('simulates repeated incidents with one send and many suppressions across dedupe/cooldown', () => {
+    let nowMs = 0;
+    const policy = new EscalationPolicyEngine(
+      {
+        enabled: true,
+        channels: ['telegram'],
+        dedupeWindowSeconds: 15,
+        cooldownSeconds: 90,
+      },
+      () => nowMs
+    );
+
+    const incidents = [
+      { at: 0, summary: 'Fragility 90%' },
+      { at: 5_000, summary: 'Fragility 90%' },
+      { at: 20_000, summary: 'Fragility 92%' },
+      { at: 40_000, summary: 'Fragility 95%' },
+      { at: 80_000, summary: 'Fragility 97%' },
+    ];
+
+    const decisions = incidents.map((incident) => {
+      nowMs = incident.at;
+      return policy.evaluate({
+        source: 'mentat:default',
+        reason: 'high_conviction_setup',
+        severity: 'high',
+        dedupeKey: 'mentat:default',
+        summary: incident.summary,
+      });
+    });
+
+    const sentCount = decisions.filter((decision) => decision.shouldSend).length;
+    const suppressionReasons = decisions
+      .filter((decision) => !decision.shouldSend)
+      .map((decision) => decision.suppressionReason);
+
+    expect(sentCount).toBe(1);
+    expect(suppressionReasons).toEqual(['dedupe', 'cooldown', 'cooldown', 'cooldown']);
+  });
+
+  it('falls back to global channels when severity-specific channels are not configured', () => {
+    const policy = new EscalationPolicyEngine({
+      enabled: true,
+      channels: ['TELEGRAM', 'telegram', 'whatsapp'],
+      severityChannels: {
+        critical: ['pagerduty'],
+      },
+    });
+
+    const warningDecision = policy.evaluate({
+      source: 'worker:daily',
+      reason: 'abnormal_slippage',
+      severity: 'warning',
+      summary: 'Slippage exceeded target',
+    });
+    expect(warningDecision.shouldSend).toBe(true);
+    expect(warningDecision.channels).toEqual(['telegram', 'whatsapp']);
+
+    const criticalDecision = policy.evaluate({
+      source: 'worker:daily',
+      reason: 'abnormal_slippage',
+      severity: 'critical',
+      dedupeKey: 'worker:daily:critical',
+      summary: 'Critical slippage event',
+    });
+    expect(criticalDecision.shouldSend).toBe(true);
+    expect(criticalDecision.channels).toEqual(['pagerduty']);
   });
 });

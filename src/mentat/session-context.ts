@@ -1,6 +1,10 @@
 import type { Market } from '../execution/markets.js';
+import {
+  resolveSessionWeightContext,
+  type SessionBucket as MarketSession,
+} from '../core/session-weight.js';
 
-export type MarketSession = 'asia' | 'europe' | 'us' | 'offhours' | 'weekend';
+export type { MarketSession };
 export type LiquidityRegime = 'deep' | 'normal' | 'thin';
 
 export interface SessionContext {
@@ -13,44 +17,6 @@ export interface SessionContext {
 interface DeriveSessionContextOptions {
   at?: Date | string;
   markets?: Market[];
-}
-
-function clamp(value: number, min = 0, max = 1): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(Math.max(value, min), max);
-}
-
-function resolveUtcDate(at?: Date | string): Date {
-  if (!at) return new Date();
-  if (at instanceof Date) return Number.isNaN(at.getTime()) ? new Date() : at;
-  const parsed = new Date(at);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-}
-
-function resolveSession(date: Date): MarketSession {
-  const day = date.getUTCDay();
-  if (day === 0 || day === 6) return 'weekend';
-
-  const hour = date.getUTCHours();
-  if (hour >= 0 && hour < 8) return 'asia';
-  if (hour >= 8 && hour < 13) return 'europe';
-  if (hour >= 13 && hour < 21) return 'us';
-  return 'offhours';
-}
-
-function baselineWeight(session: MarketSession): number {
-  switch (session) {
-    case 'us':
-      return 1;
-    case 'europe':
-      return 0.9;
-    case 'asia':
-      return 0.8;
-    case 'offhours':
-      return 0.7;
-    case 'weekend':
-      return 0.6;
-  }
 }
 
 function inferLiquidityRegime(session: MarketSession, markets: Market[]): {
@@ -72,8 +38,6 @@ function inferLiquidityRegime(session: MarketSession, markets: Market[]): {
   }
 
   if (pairs.length === 0) {
-    if (session === 'us') return { regime: 'normal', hasMetadata: false };
-    if (session === 'offhours') return { regime: 'thin', hasMetadata: false };
     return { regime: 'normal', hasMetadata: false };
   }
 
@@ -90,17 +54,6 @@ function inferLiquidityRegime(session: MarketSession, markets: Market[]): {
   return { regime: 'normal', hasMetadata: true };
 }
 
-function liquidityModifier(regime: LiquidityRegime): number {
-  switch (regime) {
-    case 'deep':
-      return 0.05;
-    case 'normal':
-      return 0;
-    case 'thin':
-      return -0.12;
-  }
-}
-
 function buildQualityNotes(
   session: MarketSession,
   liquidityRegime: LiquidityRegime,
@@ -108,8 +61,11 @@ function buildQualityNotes(
 ): string[] {
   const notes: string[] = [];
   if (session === 'weekend') notes.push('Weekend session: broad crypto liquidity is typically reduced.');
-  if (session === 'us') notes.push('US session window: price discovery is generally strongest.');
-  if (session === 'offhours') notes.push('Off-hours session: spreads and slippage risk can increase.');
+  if (session === 'us_open') notes.push('US open session: price discovery is generally strongest.');
+  if (session === 'us_midday') notes.push('US midday session: mean-reversion and chop can increase.');
+  if (session === 'us_close') notes.push('US close session: late-day flow can become noisy.');
+  if (session === 'asia') notes.push('Asia session: follow-through can be thinner versus US open hours.');
+  if (session === 'europe_open') notes.push('Europe open session: trend discovery often improves from overnight baselines.');
   if (!hasMetadata) notes.push('Limited market volume/liquidity metadata; applied conservative defaults.');
   if (liquidityRegime === 'thin') notes.push('Detected thin liquidity regime from current market metadata.');
   if (liquidityRegime === 'deep') notes.push('Detected deep liquidity regime from current market metadata.');
@@ -118,17 +74,14 @@ function buildQualityNotes(
 }
 
 export function deriveSessionContext(options: DeriveSessionContextOptions = {}): SessionContext {
-  const date = resolveUtcDate(options.at);
-  const session = resolveSession(date);
   const markets = options.markets ?? [];
-  const liquidity = inferLiquidityRegime(session, markets);
-  const sessionWeight = clamp(baselineWeight(session) + liquidityModifier(liquidity.regime), 0.4, 1);
+  const sessionContext = resolveSessionWeightContext(options.at);
+  const liquidity = inferLiquidityRegime(sessionContext.session, markets);
 
   return {
-    session,
+    session: sessionContext.session,
     liquidityRegime: liquidity.regime,
-    qualityNotes: buildQualityNotes(session, liquidity.regime, liquidity.hasMetadata),
-    sessionWeight,
+    qualityNotes: buildQualityNotes(sessionContext.session, liquidity.regime, liquidity.hasMetadata),
+    sessionWeight: sessionContext.sessionWeight,
   };
 }
-

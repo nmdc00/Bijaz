@@ -89,7 +89,7 @@ export interface OrchestratorContext {
     ) => Promise<ToolExecution>;
     listNames: (options?: ListToolsOptions) => string[];
     getLlmSchemas: (options?: ListToolsOptions) => LlmToolSchema[];
-    get?: (name: string) => { requiresConfirmation?: boolean } | undefined;
+    get?: (name: string) => { requiresConfirmation?: boolean; sideEffects?: boolean } | undefined;
   };
 
   /** Agent identity */

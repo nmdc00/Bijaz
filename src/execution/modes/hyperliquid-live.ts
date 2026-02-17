@@ -2,6 +2,7 @@ import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../exe
 import type { Market } from '../markets.js';
 import type { ThufirConfig } from '../../core/config.js';
 import { HyperliquidClient } from '../hyperliquid/client.js';
+import { formatPrice } from '@nktkas/hyperliquid/utils';
 
 export interface HyperliquidLiveExecutorOptions {
   config: ThufirConfig;
@@ -36,6 +37,9 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       decision.leverage ?? this.maxLeverage,
       this.maxLeverage
     );
+    const marketSlippageBps = Number.isFinite(decision.marketSlippageBps)
+      ? Math.max(0, Number(decision.marketSlippageBps))
+      : this.defaultSlippageBps;
     const orderType = decision.orderType ?? 'market';
     const price = decision.price ?? null;
     const reduceOnly = decision.reduceOnly ?? false;
@@ -68,8 +72,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         if (!price || price <= 0) {
           return { executed: false, message: 'Invalid decision: missing or invalid price.' };
         }
-        // Best effort: format the provided price; HL may reject prices not aligned to tick size.
-        priceStr = formatDecimal(price, 8);
+        priceStr = formatPerpPrice(price, marketMeta.szDecimals ?? 6);
       } else {
         // For IOC-style market orders, pick a fresh tick-aligned quote.
         const quote = await this.getIocQuote(symbol, side);
@@ -123,13 +126,17 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     }
   }
 
-  private async estimateMarketPrice(symbol: string, side: 'buy' | 'sell'): Promise<number> {
+  private async estimateMarketPrice(
+    symbol: string,
+    side: 'buy' | 'sell',
+    slippageBps = this.defaultSlippageBps
+  ): Promise<number> {
     const mids = await this.client.getAllMids();
     const mid = mids[symbol];
     if (typeof mid !== 'number' || !Number.isFinite(mid)) {
       throw new Error(`Missing mid price for ${symbol}.`);
     }
-    const slippage = this.defaultSlippageBps / 10000;
+    const slippage = slippageBps / 10000;
     return side === 'buy' ? mid * (1 + slippage) : mid * (1 - slippage);
   }
 

@@ -398,6 +398,64 @@ const ConfigSchema = z.object({
             .default({ enabled: false }),
         })
         .default({}),
+      webSearch: z
+        .object({
+          enabled: z.boolean().default(true),
+          providers: z
+            .object({
+              order: z
+                .array(z.enum(['brave', 'perplexity', 'serpapi', 'duckduckgo']))
+                .default(['brave', 'serpapi', 'duckduckgo']),
+              brave: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  apiKey: z.string().optional(),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              perplexity: z
+                .object({
+                  enabled: z.boolean().default(false),
+                  apiKey: z.string().optional(),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              serpapi: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  apiKey: z.string().optional(),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              duckduckgo: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+            })
+            .default({}),
+          cache: z
+            .object({
+              enabled: z.boolean().default(true),
+              ttlSeconds: z.number().default(900),
+              maxEntries: z.number().default(5000),
+            })
+            .default({}),
+          budgets: z
+            .object({
+              maxQueriesPerDay: z.number().default(500),
+              perProviderDailyCaps: z.record(z.number()).default({}),
+            })
+            .default({}),
+          circuitBreaker: z
+            .object({
+              failureThreshold: z.number().default(5),
+              openSeconds: z.number().default(300),
+            })
+            .default({}),
+        })
+        .default({}),
       roaming: z
         .object({
           enabled: z.boolean().default(true),
@@ -868,6 +926,15 @@ const ConfigSchema = z.object({
               warning: z.array(z.string()).default([]),
               high: z.array(z.string()).default([]),
               critical: z.array(z.string()).default([]),
+            })
+            .default({}),
+          llmEnrichment: z
+            .object({
+              enabled: z.boolean().default(false),
+              timeoutMs: z.number().default(2500),
+              maxTokens: z.number().default(140),
+              temperature: z.number().default(0.1),
+              maxChars: z.number().default(420),
             })
             .default({}),
         })

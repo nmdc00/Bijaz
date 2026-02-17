@@ -210,6 +210,15 @@ autonomy:
   pauseOnLossStreak: 3         # Pause after N consecutive losses
   dailyReportTime: "20:00"     # Time to send daily P&L report
   maxTradesPerScan: 3          # Max trades per scan cycle
+  tradeContract:
+    enabled: false             # Enforce entry trade contract (archetype/invalidation/time stop)
+    enforceExitFsm: false      # Require reason-coded reduce-only exits (manual needs emergency override)
+  tradeQuality:
+    enabled: false             # Segment gate from rolling decision component quality
+    minSamples: 12
+    blockBelowScore: 0.45
+    downweightBelowScore: 0.60
+    downweightMultiplier: 0.60
   discoverySelection:
     enabled: true
     fullUniverseWhenSymbolsEmpty: true  # If hyperliquid.symbols is [], rank full perp universe
@@ -391,6 +400,12 @@ notifications:
       warning: []
       high: []
       critical: []
+    llmEnrichment:
+      enabled: false
+      timeoutMs: 2500
+      maxTokens: 140
+      temperature: 0.1
+      maxChars: 420
 
 # QMD local knowledge search
 # QMD provides hybrid search (BM25 + vector + LLM reranking) for local knowledge
@@ -421,6 +436,31 @@ intel:
     model: text-embedding-3-small
     apiBaseUrl: https://api.openai.com
   retentionDays: 30
+  webSearch:
+    enabled: true
+    providers:
+      order: [brave, serpapi, duckduckgo] # brave | perplexity | serpapi | duckduckgo
+      brave:
+        enabled: true
+        apiKey: ${BRAVE_API_KEY}
+      perplexity:
+        enabled: false
+        apiKey: ${PERPLEXITY_API_KEY}
+      serpapi:
+        enabled: true
+        apiKey: ${SERPAPI_KEY}
+      duckduckgo:
+        enabled: true
+    cache:
+      enabled: true
+      ttlSeconds: 900
+      maxEntries: 5000
+    budgets:
+      maxQueriesPerDay: 500
+      perProviderDailyCaps: {}
+    circuitBreaker:
+      failureThreshold: 5
+      openSeconds: 300
 
   # Sources (configure API keys in environment)
   sources:

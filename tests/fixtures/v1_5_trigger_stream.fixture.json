@@ -1,0 +1,35 @@
+{
+  "symbol": "BTC",
+  "side": "long",
+  "size": 1,
+  "frames": [
+    {
+      "iso": "2026-02-17T12:00:00.000Z",
+      "mid": 100,
+      "roePct": 1.0,
+      "liquidationPrice": 90,
+      "expectedTriggers": []
+    },
+    {
+      "iso": "2026-02-17T12:00:30.000Z",
+      "mid": 100,
+      "roePct": 3.0,
+      "liquidationPrice": 90,
+      "expectedTriggers": ["pnl_shift"]
+    },
+    {
+      "iso": "2026-02-17T12:01:00.000Z",
+      "mid": 103,
+      "roePct": 3.0,
+      "liquidationPrice": 90,
+      "expectedTriggers": ["volatility_spike", "time_ceiling"]
+    },
+    {
+      "iso": "2026-02-17T12:01:30.000Z",
+      "mid": 103,
+      "roePct": 3.0,
+      "liquidationPrice": 98,
+      "expectedTriggers": ["liquidation_proximity"]
+    }
+  ]
+}

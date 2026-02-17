@@ -1,7 +1,7 @@
 import type { ThufirConfig } from './config.js';
 import type { Market } from '../execution/markets.js';
 import type { MarketClient } from '../execution/market-client.js';
-import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
+import type { ExecutionAdapter, TradeDecision, TradeResult } from '../execution/executor.js';
 import type { LimitCheckResult } from '../execution/wallet/limits.js';
 import { ethers } from 'ethers';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -24,6 +24,14 @@ import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
+import { resilientWebSearch } from '../intel/web_search_resilience.js';
+import { computeClosedTradeComponentScores } from './decision_component_scores.js';
+import {
+  hydrateEntryTradeContract,
+  normalizeReduceOnlyExitFsmInput,
+  validateEntryTradeContract,
+  validateReduceOnlyExitFsm,
+} from './trade_contract.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -109,6 +117,69 @@ function parseNewsSources(input: unknown): string[] | null {
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0);
     return values.length > 0 ? values : null;
+  }
+  return null;
+}
+
+function parsePlanContext(input: unknown): Record<string, unknown> | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return null;
+  }
+  return input as Record<string, unknown>;
+}
+
+function toFiniteNumberOrNull(input: unknown): number | null {
+  const value = Number(input);
+  return Number.isFinite(value) ? value : null;
+}
+
+type ReduceOnlyPositionSnapshot = {
+  side: 'long' | 'short';
+  size: number;
+};
+
+async function getReduceOnlyPositionSnapshot(
+  config: ThufirConfig,
+  symbol: string
+): Promise<ReduceOnlyPositionSnapshot | null> {
+  const client = new HyperliquidClient(config);
+  const state = (await client.getClearinghouseState()) as {
+    assetPositions?: Array<{ position?: Record<string, unknown> }>;
+  };
+  const target = symbol.trim().toUpperCase();
+  for (const entry of state.assetPositions ?? []) {
+    const position = entry?.position ?? {};
+    const coin = String((position as { coin?: unknown }).coin ?? '')
+      .trim()
+      .toUpperCase();
+    if (!coin || coin !== target) {
+      continue;
+    }
+    const rawSize = Number((position as { szi?: unknown }).szi ?? NaN);
+    if (!Number.isFinite(rawSize) || rawSize === 0) {
+      return null;
+    }
+    return {
+      side: rawSize > 0 ? 'long' : 'short',
+      size: Math.abs(rawSize),
+    };
+  }
+  return null;
+}
+
+function resolveClosedTradeReference(params: {
+  entries: ReturnType<typeof listPerpTradeJournals>;
+  symbol: string;
+  hypothesisId: string | null;
+  closeSide: 'buy' | 'sell';
+}) {
+  for (const entry of params.entries) {
+    if (entry.symbol !== params.symbol) continue;
+    if (entry.reduceOnly === true) continue;
+    if (entry.outcome !== 'executed') continue;
+    if (params.hypothesisId && entry.hypothesisId !== params.hypothesisId) continue;
+    if (!params.hypothesisId && entry.side && entry.side === params.closeSide) continue;
+    return entry;
   }
   return null;
 }
@@ -901,7 +972,7 @@ export async function executeToolCall(
           Number.isFinite(Number(toolInput.thesis_expires_at_ms))
             ? Number(toolInput.thesis_expires_at_ms)
             : null;
-        const thesisInvalidationHit =
+        let thesisInvalidationHit =
           typeof toolInput.thesis_invalidation_hit === 'boolean'
             ? toolInput.thesis_invalidation_hit
             : null;
@@ -944,7 +1015,106 @@ export async function executeToolCall(
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
+        let size = requestedSize;
+        let reduceOnlyPreflightNote: string | null = null;
+        if (reduceOnly && ctx.config.execution?.provider === 'hyperliquid') {
+          try {
+            const position = await getReduceOnlyPositionSnapshot(ctx.config, symbol);
+            if (!position) {
+              return {
+                success: false,
+                error: `Reduce-only preflight blocked: no open ${symbol} position to reduce.`,
+              };
+            }
+            const wouldIncreaseLong = position.side === 'long' && side === 'buy';
+            const wouldIncreaseShort = position.side === 'short' && side === 'sell';
+            if (wouldIncreaseLong || wouldIncreaseShort) {
+              return {
+                success: false,
+                error:
+                  `Reduce-only preflight blocked: ${side} would increase current ` +
+                  `${position.side} ${symbol} position (size=${position.size}).`,
+              };
+            }
+            if (size > position.size) {
+              reduceOnlyPreflightNote =
+                `reduce_only size capped from ${size} to live position size ${position.size}`;
+              size = position.size;
+            }
+          } catch (error) {
+            // Best-effort preflight. If exchange state lookup fails, let exchange validation decide.
+            const detail = error instanceof Error ? error.message : String(error);
+            console.warn(`Reduce-only preflight lookup failed for ${symbol}: ${detail}`);
+          }
+        }
+        const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
+        const exitFsmEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm);
+        const normalizedReduceOnlyExit = normalizeReduceOnlyExitFsmInput({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+        });
+        exitMode = normalizedReduceOnlyExit.exitMode;
+        thesisInvalidationHit = normalizedReduceOnlyExit.thesisInvalidationHit;
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
+        const exitFsmValidation = validateReduceOnlyExitFsm({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+          emergencyOverride,
+          emergencyReason,
+        });
+        if (!exitFsmValidation.valid) {
+          return { success: false, error: exitFsmValidation.error };
+        }
+        const tradeContractJournalFields = {
+          tradeArchetype: null as 'scalp' | 'intraday' | 'swing' | null,
+          invalidationType: null as 'price_level' | 'structure_break' | null,
+          invalidationPrice: null as number | null,
+          timeStopAtMs: null as number | null,
+          takeProfitR: null as number | null,
+          trailMode: null as 'none' | 'atr' | 'structure' | null,
+          emergencyOverride: emergencyOverride || null,
+          emergencyReason,
+        };
         const market = await ctx.marketClient.getMarket(symbol);
+        const hydratedContractInput = hydrateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          side: side as 'buy' | 'sell',
+          markPrice: market.markPrice ?? null,
+          input: {
+            tradeArchetype,
+            invalidationType,
+            invalidationPrice,
+            timeStopAtMs,
+            takeProfitR,
+            trailMode,
+          },
+        });
+        const contractValidation = validateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          input: hydratedContractInput,
+        });
+        if (!contractValidation.valid) {
+          return { success: false, error: contractValidation.error };
+        }
+        const resolvedContract = contractValidation.contract;
+        if (resolvedContract) {
+          tradeContractJournalFields.tradeArchetype = resolvedContract.tradeArchetype;
+          tradeContractJournalFields.invalidationType = resolvedContract.invalidationType;
+          tradeContractJournalFields.invalidationPrice = resolvedContract.invalidationPrice;
+          tradeContractJournalFields.timeStopAtMs = resolvedContract.timeStopAtMs;
+          tradeContractJournalFields.takeProfitR = resolvedContract.takeProfitR;
+          tradeContractJournalFields.trailMode = resolvedContract.trailMode;
+        }
         const feeEstimate = await estimatePerpOrderFee(ctx, {
           orderType,
           size: requestedSize,
@@ -985,6 +1155,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -993,6 +1164,7 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              planContext,
               outcome: 'blocked',
               error: policyGate.reason ?? 'policy constraints active',
             });
@@ -1001,13 +1173,17 @@ export async function executeToolCall(
           }
           return { success: false, error: policyGate.reason ?? 'policy constraints active' };
         }
-        let size = requestedSize;
         let policyReasoning: string | null = null;
         if (!reduceOnly && policyGate.sizeMultiplier < 1) {
           size = Math.max(0.00000001, requestedSize * policyGate.sizeMultiplier);
           policyReasoning =
             `Policy applied (${policyGate.reasonCode ?? 'policy.size_adjust'}): ` +
             `${policyGate.reason ?? 'size multiplier enforced'}; requested_size=${requestedSize}, effective_size=${size}`;
+        }
+        if (reduceOnlyPreflightNote) {
+          policyReasoning = policyReasoning
+            ? `${policyReasoning} | ${reduceOnlyPreflightNote}`
+            : reduceOnlyPreflightNote;
         }
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
@@ -1055,10 +1231,12 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              planContext,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
             });
@@ -1104,10 +1282,12 @@ export async function executeToolCall(
                 noveltyScore,
                 marketConfirmationScore,
                 thesisExpiresAtMs,
+                ...tradeContractJournalFields,
                 thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
                 exitMode: exitAssessment.exitMode,
                 emotionalExitFlag: exitAssessment.emotionalExitFlag,
                 thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+                planContext,
                 outcome: 'blocked',
                 error: limitCheck.reason ?? 'limit exceeded',
               });
@@ -1129,9 +1309,24 @@ export async function executeToolCall(
           confidence: 'medium' as const,
         };
         const executionStartMs = Date.now();
-        const result = await ctx.executor.execute(market, decision);
+        const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
+        const execution = await executePerpWithRetry({
+          executor: ctx.executor,
+          marketClient: ctx.marketClient,
+          market,
+          symbol,
+          decision,
+          baseSlippageBps,
+        });
+        const result = execution.result;
         if (!result.executed) {
           ctx.limiter.release(size);
+          const retrySummary =
+            execution.attempts.length > 1
+              ? ` Retry attempts=${execution.attempts.length}; slippage_bps=[${execution.attempts
+                  .map((attempt) => String(attempt.slippage_bps))
+                  .join(',')}].`
+              : '';
           try {
             const tradeId = recordPerpTrade({
               hypothesisId,
@@ -1172,18 +1367,20 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisCorrect: exitAssessment.thesisCorrect,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              planContext,
               outcome: 'failed',
-              error: result.message,
+              error: `${result.message}${retrySummary}`,
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
-          return { success: false, error: result.message };
+          return { success: false, error: `${result.message}${retrySummary}` };
         }
         ctx.limiter.confirm(size);
         const inferredOrderId = parseOrderIdFromResultMessage(result.message);
@@ -1193,6 +1390,54 @@ export async function executeToolCall(
           orderId: inferredOrderId,
           startTimeMs: Math.max(0, executionStartMs - 10_000),
         });
+        let componentScores:
+          | {
+              directionScore: number;
+              timingScore: number;
+              sizingScore: number;
+              exitScore: number;
+              capturedR: number | null;
+              leftOnTableR: number | null;
+              wouldHit2R: boolean | null;
+              wouldHit3R: boolean | null;
+            }
+          | null = null;
+        if (reduceOnly) {
+          try {
+            const history = listPerpTradeJournals({ symbol, limit: 200 });
+            const reference = resolveClosedTradeReference({
+              entries: history,
+              symbol,
+              hypothesisId,
+              closeSide: side as 'buy' | 'sell',
+            });
+            const entrySide =
+              reference?.side ?? ((side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy');
+            componentScores = computeClosedTradeComponentScores({
+              entrySide,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              size: reference?.size ?? size,
+              expectedEdge: reference?.expectedEdge ?? expectedEdge,
+              entryPrice: closeEntryPriceOverride ?? reference?.markPrice ?? null,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              invalidationPrice: reference?.invalidationPrice ?? invalidationPrice,
+            });
+          } catch {
+            componentScores = computeClosedTradeComponentScores({
+              entrySide: (side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy',
+              thesisCorrect: exitAssessment.thesisCorrect,
+              size,
+              expectedEdge,
+              entryPrice: closeEntryPriceOverride,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              invalidationPrice,
+            });
+          }
+        }
         try {
           const tradeId = recordPerpTrade({
             hypothesisId,
@@ -1233,17 +1478,35 @@ export async function executeToolCall(
             noveltyScore,
             marketConfirmationScore,
             thesisExpiresAtMs,
+            ...tradeContractJournalFields,
             thesisCorrect: exitAssessment.thesisCorrect,
             thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
             exitMode: exitAssessment.exitMode,
             emotionalExitFlag: exitAssessment.emotionalExitFlag,
             thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+            directionScore: componentScores?.directionScore ?? null,
+            timingScore: componentScores?.timingScore ?? null,
+            sizingScore: componentScores?.sizingScore ?? null,
+            exitScore: componentScores?.exitScore ?? null,
+            capturedR: componentScores?.capturedR ?? null,
+            leftOnTableR: componentScores?.leftOnTableR ?? null,
+            wouldHit2R: componentScores?.wouldHit2R ?? null,
+            wouldHit3R: componentScores?.wouldHit3R ?? null,
+            direction_score: componentScores?.directionScore ?? null,
+            timing_score: componentScores?.timingScore ?? null,
+            sizing_score: componentScores?.sizingScore ?? null,
+            exit_score: componentScores?.exitScore ?? null,
+            captured_r: componentScores?.capturedR ?? null,
+            left_on_table_r: componentScores?.leftOnTableR ?? null,
+            would_hit_2r: componentScores?.wouldHit2R ?? null,
+            would_hit_3r: componentScores?.wouldHit3R ?? null,
             realizedFeeUsd: realizedFee.realized_fee_usd,
             realizedFeeToken: realizedFee.realized_fee_token,
             realizedFillCount: realizedFee.realized_fill_count,
             realizedOrderId: realizedFee.realized_order_id,
             realizedFillTimeMs: realizedFee.realized_fill_time_ms,
             feeObservationError: realizedFee.error ?? null,
+            planContext,
             outcome: 'executed',
             message: result.message,
           });
@@ -1265,6 +1528,7 @@ export async function executeToolCall(
               ...feeEstimate,
               ...realizedFee,
             },
+            execution_attempts: execution.attempts,
           },
         };
       }
@@ -1740,36 +2004,14 @@ export async function executeToolCall(
           return { success: false, error: 'Missing query' };
         }
 
-        const serpResult = await searchWebViaSerpApi(query, limit);
-        if (serpResult.success) {
-          // Auto-index to QMD if enabled (fire-and-forget)
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, serpResult.data, ctx).catch(() => {});
-          }
-          return serpResult;
+        const searchResult = await resilientWebSearch(query, limit, ctx.config);
+        if (!searchResult.success) {
+          return searchResult;
         }
-
-        const braveResult = await searchWebViaBrave(query, limit);
-        if (braveResult.success) {
-          // Auto-index to QMD if enabled (fire-and-forget)
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, braveResult.data, ctx).catch(() => {});
-          }
-          return braveResult;
+        if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
+          autoIndexWebSearchResults(query, searchResult.data, ctx).catch(() => {});
         }
-
-        const ddgResult = await searchWebViaDuckDuckGo(query, limit);
-        if (ddgResult.success) {
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, ddgResult.data, ctx).catch(() => {});
-          }
-          return ddgResult;
-        }
-
-        return {
-          success: false,
-          error: `Web search failed: SerpAPI: ${serpResult.error}. Brave: ${braveResult.error}. DuckDuckGo: ${ddgResult.error}`,
-        };
+        return searchResult;
       }
 
       case 'get_portfolio': {
@@ -2940,199 +3182,6 @@ async function searchTwitterViaSerpApi(
     }));
 
     return { success: true, data: tweets };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-async function searchWebViaSerpApi(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  const apiKey = process.env.SERPAPI_KEY;
-  if (!apiKey) {
-    return { success: false, error: 'SerpAPI key not configured' };
-  }
-
-  try {
-    const url = new URL('https://serpapi.com/search.json');
-    url.searchParams.set('engine', 'google');
-    url.searchParams.set('q', query);
-    url.searchParams.set('num', String(limit));
-    url.searchParams.set('api_key', apiKey);
-
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-      return { success: false, error: `SerpAPI: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      organic_results?: Array<{
-        title?: string;
-        link?: string;
-        snippet?: string;
-        date?: string;
-        source?: string;
-      }>;
-    };
-
-    const results = (data.organic_results ?? []).slice(0, limit).map((item) => ({
-      title: item.title ?? '',
-      url: item.link ?? '',
-      snippet: item.snippet ?? '',
-      date: item.date ?? null,
-      source: item.source ?? null,
-    }));
-
-    return { success: true, data: { query, provider: 'serpapi', results } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-async function searchWebViaBrave(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  const apiKey = process.env.BRAVE_API_KEY;
-  if (!apiKey) {
-    return { success: false, error: 'Brave API key not configured' };
-  }
-
-  try {
-    const url = new URL('https://api.search.brave.com/res/v1/web/search');
-    url.searchParams.set('q', query);
-    url.searchParams.set('count', String(limit));
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-        'X-Subscription-Token': apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      return { success: false, error: `Brave: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      web?: {
-        results?: Array<{
-          title?: string;
-          url?: string;
-          description?: string;
-          age?: string;
-        }>;
-      };
-    };
-
-    const results = (data.web?.results ?? []).slice(0, limit).map((item) => ({
-      title: item.title ?? '',
-      url: item.url ?? '',
-      snippet: item.description ?? '',
-      date: item.age ?? null,
-    }));
-
-    return { success: true, data: { query, provider: 'brave', results } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-type DuckDuckGoTopic = {
-  Text?: string;
-  FirstURL?: string;
-  Result?: string;
-  Name?: string;
-  Topics?: DuckDuckGoTopic[];
-};
-
-function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[]): DuckDuckGoTopic[] {
-  const result: DuckDuckGoTopic[] = [];
-  for (const topic of topics) {
-    if (Array.isArray(topic.Topics) && topic.Topics.length > 0) {
-      result.push(...flattenDuckDuckGoTopics(topic.Topics));
-      continue;
-    }
-    result.push(topic);
-  }
-  return result;
-}
-
-async function searchWebViaDuckDuckGo(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  try {
-    const url = new URL('https://api.duckduckgo.com/');
-    url.searchParams.set('q', query);
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('no_redirect', '1');
-    url.searchParams.set('no_html', '1');
-    url.searchParams.set('skip_disambig', '1');
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-      },
-    });
-    if (!response.ok) {
-      return { success: false, error: `DuckDuckGo: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      AbstractText?: string;
-      AbstractURL?: string;
-      Heading?: string;
-      RelatedTopics?: DuckDuckGoTopic[];
-    };
-
-    const results: Array<{
-      title: string;
-      url: string;
-      snippet: string;
-      date: null;
-      source: string;
-    }> = [];
-
-    if (data.AbstractURL && data.AbstractText) {
-      results.push({
-        title: data.Heading?.trim() || query,
-        url: data.AbstractURL,
-        snippet: data.AbstractText,
-        date: null,
-        source: 'duckduckgo',
-      });
-    }
-
-    const flat = flattenDuckDuckGoTopics(data.RelatedTopics ?? []);
-    for (const topic of flat) {
-      if (results.length >= limit) {
-        break;
-      }
-      const text = (topic.Text ?? '').trim();
-      const link = (topic.FirstURL ?? '').trim();
-      if (!text || !link) {
-        continue;
-      }
-      const title = text.split(' - ')[0]?.trim() || text.slice(0, 80);
-      results.push({
-        title,
-        url: link,
-        snippet: text,
-        date: null,
-        source: 'duckduckgo',
-      });
-    }
-
-    const trimmed = results.slice(0, limit);
-    if (trimmed.length === 0) {
-      return { success: false, error: 'DuckDuckGo returned no results' };
-    }
-    return { success: true, data: { query, provider: 'duckduckgo', results: trimmed } };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: message };

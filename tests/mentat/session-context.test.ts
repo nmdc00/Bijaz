@@ -20,41 +20,52 @@ describe('deriveSessionContext', () => {
   it.each([
     {
       at: '2026-02-13T23:59:59Z',
-      expectedSession: 'offhours',
-      expectedRegime: 'thin',
+      expectedSession: 'asia',
+      expectedRegime: 'normal',
+      expectedWeight: 0.9,
     },
     {
       at: '2026-02-14T00:00:00Z',
       expectedSession: 'weekend',
       expectedRegime: 'thin',
-    },
-    {
-      at: '2026-02-15T12:00:00Z',
-      expectedSession: 'weekend',
-      expectedRegime: 'thin',
+      expectedWeight: 0.65,
     },
     {
       at: '2026-02-16T00:00:00Z',
       expectedSession: 'asia',
       expectedRegime: 'normal',
+      expectedWeight: 0.9,
     },
     {
       at: '2026-02-16T08:00:00Z',
-      expectedSession: 'europe',
+      expectedSession: 'europe_open',
       expectedRegime: 'normal',
+      expectedWeight: 1,
     },
     {
       at: '2026-02-16T13:00:00Z',
-      expectedSession: 'us',
+      expectedSession: 'us_open',
       expectedRegime: 'normal',
+      expectedWeight: 1.15,
     },
-  ])('classifies UTC session boundaries ($at)', ({ at, expectedSession, expectedRegime }) => {
+    {
+      at: '2026-02-16T18:00:00Z',
+      expectedSession: 'us_midday',
+      expectedRegime: 'normal',
+      expectedWeight: 0.95,
+    },
+    {
+      at: '2026-02-16T21:00:00Z',
+      expectedSession: 'us_close',
+      expectedRegime: 'normal',
+      expectedWeight: 1.05,
+    },
+  ])('classifies UTC session boundaries ($at)', ({ at, expectedSession, expectedRegime, expectedWeight }) => {
     const context = deriveSessionContext({ at, markets: [] });
     expect(context.session).toBe(expectedSession);
     expect(context.liquidityRegime).toBe(expectedRegime);
     expect(context.qualityNotes.length).toBeGreaterThan(0);
-    expect(context.sessionWeight).toBeGreaterThanOrEqual(0.4);
-    expect(context.sessionWeight).toBeLessThanOrEqual(1);
+    expect(context.sessionWeight).toBeCloseTo(expectedWeight, 6);
   });
 
   it('uses market metadata to classify deep regime during liquid weekday conditions', () => {
@@ -66,9 +77,9 @@ describe('deriveSessionContext', () => {
       ],
     });
 
-    expect(context.session).toBe('us');
+    expect(context.session).toBe('us_open');
     expect(context.liquidityRegime).toBe('deep');
-    expect(context.sessionWeight).toBe(1);
+    expect(context.sessionWeight).toBe(1.15);
   });
 
   it('uses market metadata to classify thin regime during weekday conditions', () => {
@@ -80,9 +91,9 @@ describe('deriveSessionContext', () => {
       ],
     });
 
-    expect(context.session).toBe('europe');
+    expect(context.session).toBe('europe_open');
     expect(context.liquidityRegime).toBe('thin');
-    expect(context.sessionWeight).toBeLessThan(0.9);
+    expect(context.sessionWeight).toBe(1);
   });
 
   it('forces weekend session to thin regardless of market metadata', () => {

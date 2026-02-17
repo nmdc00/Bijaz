@@ -117,6 +117,23 @@ const onIncoming = async (
     threadId?: string;
   }
 ) => {
+  let lastProgressMessage = '';
+  let lastProgressAt = 0;
+  const sendProgress = async (text: string): Promise<void> => {
+    if (!text || text.trim().length === 0) return;
+    if (message.channel !== 'telegram' || !telegram) return;
+    const now = Date.now();
+    if (text === lastProgressMessage) return;
+    if (now - lastProgressAt < 3_000) return;
+    lastProgressMessage = text;
+    lastProgressAt = now;
+    try {
+      await telegram.sendMessage(message.senderId, text);
+      logger.info(`Telegram progress sent to ${message.senderId}: ${text}`);
+    } catch (error) {
+      logger.warn(`Telegram progress failed for ${message.senderId}`, error);
+    }
+  };
   const { agentId, agent: activeAgent } = agentRegistry.resolveAgent(message);
   const sessionKey = buildAgentPeerSessionKey({
     agentId,
@@ -131,7 +148,7 @@ const onIncoming = async (
     baseSessionKey: sessionKey,
     threadId: message.threadId,
   }).sessionKey;
-  const replyRaw = await activeAgent.handleMessage(session, message.text);
+  const replyRaw = await activeAgent.handleMessage(session, message.text, sendProgress);
   const reply = stripIdentityIntro(replyRaw);
   if (!reply || reply.trim().length === 0) {
     logger.warn(`Empty reply for ${message.channel}:${message.senderId}`);
@@ -476,14 +493,24 @@ if (mentatConfig?.enabled) {
   const mentatMarketClient = createMarketClient(config);
   const escalationConfig = config.notifications?.escalation;
 
-  const sendMentatMessage = async (channels: string[], message: string): Promise<void> => {
+  const sendMentatMessage = async (
+    channels: string[],
+    message: string
+  ): Promise<Array<{ channel: string; status: 'sent' | 'failed'; error?: string }>> => {
+    const outcomes: Array<{ channel: string; status: 'sent' | 'failed'; error?: string }> = [];
     if (channels.includes('telegram') && telegram) {
       for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
         try {
           await telegram.sendMessage(String(chatId), message);
           logger.info(`Telegram mentat alert sent to ${chatId}`);
+          outcomes.push({ channel: 'telegram', status: 'sent' });
         } catch (error) {
           logger.error(`Telegram mentat alert failed for ${chatId}`, error);
+          outcomes.push({
+            channel: 'telegram',
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
@@ -492,11 +519,18 @@ if (mentatConfig?.enabled) {
         try {
           await whatsapp.sendMessage(number, message);
           logger.info(`WhatsApp mentat alert sent to ${number}`);
+          outcomes.push({ channel: 'whatsapp', status: 'sent' });
         } catch (error) {
           logger.error(`WhatsApp mentat alert failed for ${number}`, error);
+          outcomes.push({
+            channel: 'whatsapp',
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
+    return outcomes;
   };
 
   if (!mentatMarketClient.isAvailable()) {
@@ -590,6 +624,25 @@ if (mentatConfig?.enabled) {
           ? schedule.channels
           : (mentatConfig.channels ?? []);
 
+      const enrichAlert = async (baseMessage: string, severity: 'high' | 'critical') =>
+        enrichEscalationMessage({
+          llm,
+          baseMessage,
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          config: escalationConfig?.llmEnrichment,
+          onFallback: (error) => {
+            logger.warn('Alert LLM enrichment failed; sending mechanical fallback', {
+              source: `mentat:${scheduleId}`,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
+
       if (escalationConfig?.enabled) {
         const severity =
           fragilityScore >= Math.max(minOverallScore + 0.1, 0.9) ||
@@ -606,16 +659,64 @@ if (mentatConfig?.enabled) {
             `and max delta ${(maxDelta * 100).toFixed(1)}%`,
           message,
         });
+        const alertId = createAlert({
+          dedupeKey: decision.dedupeKey,
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          message: decision.message,
+          metadata: {
+            scheduleId,
+            fragilityScore,
+            maxDelta,
+          },
+        });
         if (decision.shouldSend) {
-          await sendMentatMessage(decision.channels, decision.message);
+          const enrichedMessage = await enrichAlert(decision.message, severity);
+          const outcomes = await sendMentatMessage(decision.channels, enrichedMessage);
+          let hasSent = false;
+          for (const outcome of outcomes) {
+            recordAlertDelivery({
+              alertId,
+              channel: outcome.channel,
+              status: outcome.status,
+              error: outcome.error ?? null,
+            });
+            if (outcome.status === 'sent') {
+              hasSent = true;
+            }
+          }
+          if (hasSent) {
+            markAlertSent({
+              alertId,
+              reasonCode: 'delivery_success',
+              metadata: { channels: decision.channels },
+            });
+          }
         } else {
+          suppressAlert({
+            alertId,
+            reasonCode: decision.suppressionReason ?? 'unknown',
+            metadata: {
+              channels: decision.channels,
+            },
+          });
           logger.info(`Escalation suppressed (${decision.suppressionReason ?? 'unknown'})`, {
             dedupeKey: decision.dedupeKey,
             source: `mentat:${scheduleId}`,
           });
         }
       } else {
-        await sendMentatMessage(channels, message);
+        const severity =
+          fragilityScore >= Math.max(minOverallScore + 0.1, 0.9) ||
+          maxDelta >= Math.max(minDeltaScore + 0.15, 0.3)
+            ? 'critical'
+            : 'high';
+        const enrichedMessage = await enrichAlert(message, severity);
+        await sendMentatMessage(channels, enrichedMessage);
       }
 
       lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());

@@ -20,7 +20,13 @@ import type {
 } from './types.js';
 
 import { detectMode, getModeConfig, getAllowedTools } from '../modes/registry.js';
-import { createPlan, revisePlan, getNextStep, completeStep, failStep } from '../planning/planner.js';
+import {
+  createPlan,
+  revisePlan,
+  getReadySteps,
+  completeStep,
+  failStep,
+} from '../planning/planner.js';
 import { reflect, createReflectionState, applyReflection } from '../reflection/reflector.js';
 import { runCritic, shouldRunCritic } from '../critic/critic.js';
 import { buildIdentityPrompt, buildMinimalIdentityPrompt } from '../identity/identity.js';
@@ -54,6 +60,8 @@ import {
 } from './state.js';
 
 const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
+const MAX_PARALLEL_READ_STEPS = 3;
+const MUTATING_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
 const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
 
 function isNoTradeDecisionStep(step: PlanStep): boolean {
@@ -307,6 +315,82 @@ function debugLog(message: string, meta?: Record<string, unknown>): void {
   console.debug(`[orchestrator] ${message}`);
 }
 
+function isToolsListToolName(toolName: string | undefined): boolean {
+  return toolName === 'tools_list' || toolName === 'tools.list';
+}
+
+function hasUnknownToolFailure(state: AgentState): boolean {
+  return state.toolExecutions.some((execution) => {
+    if (execution.result.success) return false;
+    const error = (execution.result as { error?: string }).error ?? '';
+    return /Unknown tool:/i.test(error);
+  });
+}
+
+function goalRequestsToolsList(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  return (
+    normalized.includes('tools.list') ||
+    normalized.includes('tools_list') ||
+    normalized.includes('tool list') ||
+    normalized.includes('list tools') ||
+    normalized.includes('available tools')
+  );
+}
+
+function shouldSkipRedundantToolsList(state: AgentState, step: PlanStep): boolean {
+  if (!isToolsListToolName(step.toolName)) return false;
+  if (goalRequestsToolsList(state.goal)) return false;
+  if (hasUnknownToolFailure(state)) return false;
+  return true;
+}
+
+function goalRequestsTradeMutation(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  if (normalized.includes('perp_place_order') || normalized.includes('perp_cancel_order')) return true;
+  if (/\b(buy|sell|long|short)\b/.test(normalized)) return true;
+  if (/\b(go\s+long|go\s+short)\b/.test(normalized)) return true;
+  return (
+    /\b(place|execute|open|close|cancel|reduce|increase|enter|exit|flatten|hedge|de-?risk)\b/.test(normalized) &&
+    /\b(order|position|trade)\b/.test(normalized)
+  );
+}
+
+function goalIsAnalysisStyle(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  return /\b(thoughts?|review|analy[sz]e|analysis|explain|diagnose|why|how|what should)\b/.test(
+    normalized
+  );
+}
+
+function shouldSkipMutatingTradeToolForAnalysis(state: AgentState, step: PlanStep): boolean {
+  if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return false;
+  if (!goalIsAnalysisStyle(state.goal)) return false;
+  return !goalRequestsTradeMutation(state.goal);
+}
+
+function isReadOnlyStep(step: PlanStep, ctx: OrchestratorContext): boolean {
+  if (!step.requiresTool || !step.toolName) return false;
+  const toolDef = ctx.toolRegistry.get?.(step.toolName);
+  return !toolDef?.sideEffects && !toolDef?.requiresConfirmation;
+}
+
+function buildParallelReadBatch(
+  readySteps: PlanStep[],
+  state: AgentState,
+  ctx: OrchestratorContext
+): PlanStep[] {
+  const batch: PlanStep[] = [];
+  for (const step of readySteps) {
+    if (batch.length >= MAX_PARALLEL_READ_STEPS) break;
+    if (!isReadOnlyStep(step, ctx)) break;
+    if (shouldSkipRedundantToolsList(state, step)) continue;
+    if (shouldSkipMutatingTradeToolForAnalysis(state, step)) continue;
+    batch.push(step);
+  }
+  return batch;
+}
+
 function enforceIdentityMarker(identity: { marker: string }, prompt: string): void {
   if (!isDebugEnabled()) {
     return;
@@ -505,17 +589,21 @@ function enforceTradeResponseContract(response: string, state: AgentState): stri
     return response;
   }
 
+  const deterministicAction = `Action: ${buildTradeActionSummary(state)}`;
   const hasContractShape =
     /\bAction:\s*/i.test(response) &&
     /\bBook State:\s*/i.test(response) &&
     /\bRisk:\s*/i.test(response) &&
     /\bNext Action:\s*/i.test(response);
   if (hasContractShape) {
-    return response;
+    return response
+      .split('\n')
+      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
+      .join('\n');
   }
 
   return [
-    `Action: ${buildTradeActionSummary(state)}`,
+    deterministicAction,
     `Book State: ${buildTradeBookState(state)}`,
     `Risk: ${buildTradeRiskSummary(state)}`,
     `Next Action: ${buildTradeNextActionSummary(state)}`,
@@ -665,12 +753,136 @@ export async function runOrchestrator(
   let tradeFragilityScan: QuickFragilityScan | null = null;
   let consecutiveNonTerminalTradeToolSteps = 0;
 
+  const processToolExecution = async (
+    step: PlanStep,
+    execution: ToolExecution,
+    options?: { allowRevision?: boolean }
+  ): Promise<void> => {
+    state = addToolExecution(state, execution);
+
+    const stepBlockers = execution.result.success ? [] : detectBlockers(execution);
+
+    if (!execution.result.success) {
+      const failed = execution.result as { success: false; error: string };
+      const primaryKind: AgentBlockerKind =
+        (stepBlockers[0]?.kind as AgentBlockerKind | undefined) ?? 'unknown';
+      recordAgentIncident({
+        goal,
+        mode: state.mode,
+        toolName: execution.toolName,
+        error: failed.error,
+        blockerKind: primaryKind,
+        details: {
+          stepId: step.id,
+          planId: state.plan?.id ?? null,
+          detectedBlockers: stepBlockers.map((b) => ({
+            kind: b.kind,
+            summary: b.summary,
+            evidence: b.evidence,
+            suggestedNextSteps: b.suggestedNextSteps,
+            playbookKey: b.playbookKey ?? null,
+          })),
+        },
+      });
+
+      for (const b of stepBlockers) {
+        state = addWarning(state, `Detected blocker: ${b.kind} (${b.summary})`);
+        if (state.plan && !state.plan.blockers.includes(b.summary)) {
+          state = setPlan(state, {
+            ...state.plan,
+            blockers: [...state.plan.blockers, b.summary],
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
+        if (b.playbookKey) {
+          const existing = getPlaybook(b.playbookKey);
+          if (!existing) {
+            const seed = seedPlaybookForBlocker(b.kind);
+            if (seed) {
+              upsertPlaybook(seed);
+            }
+          }
+        }
+      }
+    }
+
+    if (execution.result.success) {
+      state = setPlan(state, completeStep(state.plan!, step.id, execution.result));
+    } else {
+      const failedResult = execution.result as { success: false; error: string };
+      if (state.plan && stepBlockers.length > 0) {
+        const injected = injectRemediationAndRetry({
+          plan: state.plan,
+          failedStep: step,
+          blockers: stepBlockers,
+          toolRegistry: ctx.toolRegistry,
+        });
+        if (injected.injected) {
+          state = setPlan(state, injected.updated);
+          state = addWarning(
+            state,
+            `Injected ${injected.injectedCount} remediation step(s) after tool failure`
+          );
+        } else {
+          state = setPlan(state, failStep(state.plan!, step.id, failedResult.error));
+        }
+      } else {
+        state = setPlan(state, failStep(state.plan!, step.id, failedResult.error));
+      }
+    }
+
+    const toolContext = toToolExecutionContext(execution);
+    reflectionState = {
+      ...reflectionState,
+      hypotheses: state.hypotheses,
+      assumptions: state.assumptions,
+      confidence: state.confidence,
+      toolExecutions: [...reflectionState.toolExecutions, toolContext],
+    };
+
+    try {
+      const reflection = await reflect(ctx.llm, reflectionState, toolContext);
+      state = applyReflectionToState(state, reflection);
+      reflectionState = applyReflection(reflectionState, reflection, toolContext);
+
+      if (
+        options?.allowRevision !== false &&
+        shouldReviseAfterReflection(reflection, execution) &&
+        state.plan &&
+        state.plan.revisionCount < 3
+      ) {
+        const revisionResult = await revisePlan(ctx.llm, {
+          plan: state.plan,
+          reason: 'tool_result_unexpected',
+          context: reflection.revisionReason,
+          toolResult: execution.result,
+          triggerStepId: step.id,
+        });
+
+        state = setPlan(state, revisionResult.plan);
+        state = enforceTradeTerminalContract(state, ctx, 'plan_revision');
+        for (const change of revisionResult.changes) {
+          state = addWarning(state, `Plan revised: ${change}`);
+        }
+      }
+    } catch (error) {
+      state = addWarning(
+        state,
+        `Reflection failed: ${error instanceof Error ? error.message : 'Unknown'}`
+      );
+    }
+
+    ctx.onUpdate?.(state);
+  };
+
   while (shouldContinue(state).continue && state.iteration < maxIterations) {
     state = incrementIteration(state);
     ctx.onUpdate?.(state);
 
     // Get next step from plan
-    const nextStep = state.plan ? getNextStep(state.plan) : null;
+    const readySteps = state.plan ? getReadySteps(state.plan) : [];
+    const nextStep = readySteps[0] ?? null;
 
     if (!nextStep) {
       // No more steps - plan is complete or no plan
@@ -722,6 +934,62 @@ export async function runOrchestrator(
 
     // Execute tool if step requires it
     if (nextStep.requiresTool && nextStep.toolName) {
+      if (shouldSkipRedundantToolsList(state, nextStep)) {
+        const skippedExecution: ToolExecution = {
+          toolName: nextStep.toolName,
+          input: nextStep.toolInput ?? {},
+          result: {
+            success: true,
+            data: {
+              skipped: true,
+              reason: 'Redundant tools.list skipped: registry already available in orchestrator context.',
+            },
+          },
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          cached: true,
+        };
+        state = addToolExecution(state, skippedExecution);
+        state = setPlan(state, completeStep(state.plan!, nextStep.id, skippedExecution.result));
+        ctx.onUpdate?.(state);
+        continue;
+      }
+      if (shouldSkipMutatingTradeToolForAnalysis(state, nextStep)) {
+        const skippedExecution: ToolExecution = {
+          toolName: nextStep.toolName,
+          input: nextStep.toolInput ?? {},
+          result: {
+            success: true,
+            data: {
+              skipped: true,
+              reason:
+                'Mutating trade action skipped: request appears analytical and did not explicitly request execution.',
+            },
+          },
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          cached: true,
+        };
+        state = addToolExecution(state, skippedExecution);
+        state = setPlan(state, completeStep(state.plan!, nextStep.id, skippedExecution.result));
+        ctx.onUpdate?.(state);
+        continue;
+      }
+
+      const readBatch = buildParallelReadBatch(readySteps, state, ctx);
+      if (readBatch.length > 1) {
+        const executions = await Promise.all(
+          readBatch.map((step) => executeToolStep(step, state, ctx))
+        );
+        for (let index = 0; index < readBatch.length; index += 1) {
+          await processToolExecution(readBatch[index]!, executions[index]!, { allowRevision: false });
+        }
+        if (state.plan?.complete) {
+          break;
+        }
+        continue;
+      }
+
       // Run fragility scan before trade tools
       const isTradeToolStep = nextStep.toolName === 'perp_place_order';
       if (isTradeToolStep && !tradeFragilityScan) {
@@ -1152,7 +1420,84 @@ function hasPlaceholderInputs(input: Record<string, unknown>): boolean {
   return false;
 }
 
-function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
+const VALID_EXIT_MODES = new Set([
+  'thesis_invalidation',
+  'take_profit',
+  'time_exit',
+  'risk_reduction',
+  'manual',
+  'unknown',
+]);
+const VALID_MARKET_REGIMES = new Set([
+  'trending',
+  'choppy',
+  'high_vol_expansion',
+  'low_vol_compression',
+]);
+const VALID_ENTRY_TRIGGERS = new Set(['news', 'technical', 'hybrid']);
+
+function mapExitModeAlias(raw: string): string {
+  if (
+    raw.includes('thesis') ||
+    raw.includes('invalid') ||
+    raw.includes('stop') ||
+    raw.includes('cut')
+  ) {
+    return 'thesis_invalidation';
+  }
+  if (raw === 'tp' || raw.includes('profit')) {
+    return 'take_profit';
+  }
+  if (raw.includes('time')) {
+    return 'time_exit';
+  }
+  if (
+    raw.includes('liquid') ||
+    raw.includes('probe') ||
+    raw.includes('de-risk') ||
+    raw.includes('risk') ||
+    raw.includes('emergency')
+  ) {
+    return 'risk_reduction';
+  }
+  if (raw.includes('manual') || raw.includes('discretion')) {
+    return 'manual';
+  }
+  if (raw.includes('unknown')) {
+    return 'unknown';
+  }
+  return 'risk_reduction';
+}
+
+function normalizeAliasToken(value: string): string {
+  return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
+function mapMarketRegimeAlias(raw: string): string | null {
+  if (VALID_MARKET_REGIMES.has(raw)) return raw;
+  if (raw === 'balanced_up' || raw === 'uptrend' || raw === 'trend_up') return 'trending';
+  if (raw === 'balanced_down' || raw === 'downtrend' || raw === 'trend_down') return 'trending';
+  if (raw === 'range' || raw === 'ranging' || raw === 'sideways' || raw === 'range_bound') return 'choppy';
+  if (raw === 'high_vol' || raw === 'vol_expansion' || raw === 'high_volatility') return 'high_vol_expansion';
+  if (raw === 'low_vol' || raw === 'vol_compression' || raw === 'low_volatility') return 'low_vol_compression';
+  return null;
+}
+
+function mapEntryTriggerAlias(raw: string): string | null {
+  if (VALID_ENTRY_TRIGGERS.has(raw)) return raw;
+  if (raw.includes('imbalance') || raw.includes('orderflow') || raw.includes('breakout') || raw.includes('momentum')) {
+    return 'technical';
+  }
+  if (raw.includes('news') || raw.includes('headline') || raw.includes('catalyst')) {
+    return 'news';
+  }
+  if (raw.includes('hybrid') || (raw.includes('news') && raw.includes('technical'))) {
+    return 'hybrid';
+  }
+  return null;
+}
+
+export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
   const normalized = { ...input };
   const normalizeEnum = (
     raw: unknown,
@@ -1170,6 +1515,22 @@ function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<st
   }
   if (typeof normalized.order_type === 'string') {
     normalized.order_type = normalized.order_type.toLowerCase().trim();
+  }
+  if (typeof normalized.market_regime === 'string') {
+    const canonical = mapMarketRegimeAlias(normalizeAliasToken(normalized.market_regime));
+    if (canonical) {
+      normalized.market_regime = canonical;
+    } else {
+      delete normalized.market_regime;
+    }
+  }
+  if (typeof normalized.entry_trigger === 'string') {
+    const canonical = mapEntryTriggerAlias(normalizeAliasToken(normalized.entry_trigger));
+    if (canonical) {
+      normalized.entry_trigger = canonical;
+    } else {
+      delete normalized.entry_trigger;
+    }
   }
 
   // Coerce numeric fields that often arrive as strings from planner/revision LLM output.
@@ -1190,6 +1551,16 @@ function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<st
     if (!Number.isNaN(parsed)) {
       normalized.leverage = parsed;
     }
+  }
+  if (typeof normalized.reduce_only === 'string') {
+    const value = normalized.reduce_only.toLowerCase().trim();
+    if (value === 'true') normalized.reduce_only = true;
+    if (value === 'false') normalized.reduce_only = false;
+  }
+  if (typeof normalized.thesis_invalidation_hit === 'string') {
+    const value = normalized.thesis_invalidation_hit.toLowerCase().trim();
+    if (value === 'true') normalized.thesis_invalidation_hit = true;
+    if (value === 'false') normalized.thesis_invalidation_hit = false;
   }
 
   if (typeof normalized.thesis_invalidation_hit === 'string') {
@@ -1251,6 +1622,17 @@ function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<st
   normalized.order_type = 'market';
   delete normalized.price;
 
+  const reduceOnly = normalized.reduce_only === true;
+  if (typeof normalized.exit_mode === 'string') {
+    const candidate = normalized.exit_mode.toLowerCase().trim();
+    normalized.exit_mode = VALID_EXIT_MODES.has(candidate) ? candidate : mapExitModeAlias(candidate);
+  } else if (normalized.exit_mode != null) {
+    delete normalized.exit_mode;
+  }
+  if (reduceOnly && normalized.exit_mode === 'thesis_invalidation') {
+    normalized.thesis_invalidation_hit = true;
+  }
+
   if (normalized.side !== 'buy' && normalized.side !== 'sell') {
     normalized.side = 'buy';
   }
@@ -1275,6 +1657,18 @@ function buildCriticFailureFallbackResponse(state: AgentState, originalResponse:
       lines.push(
         `Partial failures: ${failedTrades.length} additional attempt(s) failed${lastErr ? ` (last error: ${lastErr})` : ''}.`
       );
+      lines.push('Failed attempts detail:');
+      for (const attempt of failedTrades.slice(0, 3)) {
+        const input = (attempt.input ?? {}) as Record<string, unknown>;
+        const symbol = typeof input.symbol === 'string' ? input.symbol : '?';
+        const side = typeof input.side === 'string' ? input.side : '?';
+        const size = Number(input.size);
+        const reduceOnly = Boolean(input.reduce_only ?? false);
+        const err = ((attempt.result as { error?: string } | undefined)?.error ?? 'unknown error').trim();
+        lines.push(
+          `- symbol=${symbol} side=${side} size=${Number.isFinite(size) ? size : '?'} reduce_only=${reduceOnly}: ${err}`
+        );
+      }
     }
     return lines.join('\n');
   }
@@ -1310,6 +1704,27 @@ function buildCompletedStepContext(state: AgentState): string {
     }
   }
   return lines.join('\n');
+}
+
+function buildPerpPlanContext(state: AgentState, step: PlanStep): Record<string, unknown> | null {
+  if (!state.plan) return null;
+  const pendingStepIds = state.plan.steps
+    .filter((candidate) => candidate.status === 'pending')
+    .map((candidate) => candidate.id)
+    .slice(0, 5);
+
+  return {
+    plan_id: state.plan.id,
+    plan_goal: state.plan.goal,
+    plan_revision_count: state.plan.revisionCount,
+    plan_created_at: state.plan.createdAt,
+    plan_updated_at: state.plan.updatedAt,
+    current_step_id: step.id,
+    current_step_description: step.description,
+    pending_step_ids: pendingStepIds,
+    iteration: state.iteration,
+    mode: state.mode,
+  };
 }
 
 /**
@@ -1433,6 +1848,10 @@ async function executeToolStep(
   }
 
   if (toolName === 'perp_place_order') {
+    const planContext = buildPerpPlanContext(state, step);
+    if (planContext) {
+      (input as Record<string, unknown>).plan_context = planContext;
+    }
     input = normalizePerpPlaceOrderInput(input as Record<string, unknown>);
   }
 

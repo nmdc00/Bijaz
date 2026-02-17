@@ -453,6 +453,25 @@ export function getNextStep(plan: AgentPlan): PlanStep | null {
 }
 
 /**
+ * Get all pending steps that are dependency-ready.
+ */
+export function getReadySteps(plan: AgentPlan): PlanStep[] {
+  const ready: PlanStep[] = [];
+  for (const step of plan.steps) {
+    if (step.status !== 'pending') continue;
+    if (step.dependsOn && step.dependsOn.length > 0) {
+      const allDepsComplete = step.dependsOn.every((depId) => {
+        const depStep = plan.steps.find((s) => s.id === depId);
+        return depStep?.status === 'complete';
+      });
+      if (!allDepsComplete) continue;
+    }
+    ready.push(step);
+  }
+  return ready;
+}
+
+/**
  * Mark a step as complete.
  */
 export function completeStep(plan: AgentPlan, stepId: string, result?: unknown): AgentPlan {

@@ -583,6 +583,65 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next_run ON scheduler_jobs(next_ru
 CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_lock_expires ON scheduler_jobs(lock_expires_at);
 
 -- ============================================================================
+-- Alert Incident Lifecycle
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id TEXT PRIMARY KEY,
+    dedupe_key TEXT NOT NULL,
+    source TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'high', 'critical')),
+    summary TEXT NOT NULL,
+    message TEXT,
+    state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'suppressed', 'sent', 'resolved')),
+    metadata_json TEXT,
+    occurred_at TEXT,
+    acknowledged_at TEXT,
+    acknowledged_by TEXT,
+    suppressed_at TEXT,
+    sent_at TEXT,
+    resolved_at TEXT,
+    last_error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_state ON alerts(state);
+CREATE INDEX IF NOT EXISTS idx_alerts_dedupe_key ON alerts(dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN ('open', 'suppressed', 'sent', 'resolved', 'acknowledged', 'delivery')),
+    from_state TEXT,
+    to_state TEXT,
+    reason_code TEXT,
+    payload_json TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_alert_id ON alert_events(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_events_created ON alert_events(created_at);
+
+CREATE TABLE IF NOT EXISTS alert_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('retrying', 'sent', 'failed')),
+    attempt INTEGER NOT NULL DEFAULT 1,
+    provider_message_id TEXT,
+    error TEXT,
+    metadata_json TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_alert_id ON alert_deliveries(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_status ON alert_deliveries(status);
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_created ON alert_deliveries(created_at);
+
+-- ============================================================================
 -- Views
 -- ============================================================================
 

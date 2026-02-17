@@ -1,0 +1,32 @@
+{
+  "symbol": "BTC",
+  "horizon": "24h",
+  "referencePrice": 50000,
+  "signalWeights": {
+    "technical": 0.5,
+    "news": 0.3,
+    "onChain": 0.2
+  },
+  "variants": [
+    {
+      "id": "bullish_breakout",
+      "technicalScore": 0.82,
+      "newsScore": 0.55,
+      "onChainScore": 0.33,
+      "signalConfidence": 0.84,
+      "expectedDirection": "above"
+    },
+    {
+      "id": "bearish_fade",
+      "technicalScore": -0.34,
+      "newsScore": -0.18,
+      "onChainScore": -0.12,
+      "signalConfidence": 0.58,
+      "expectedDirection": "below"
+    }
+  ],
+  "expectations": {
+    "targetOrder": ["bullish_breakout", "bearish_fade"],
+    "minConfidenceDelta": 0.1
+  }
+}
