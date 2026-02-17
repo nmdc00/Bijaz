@@ -185,6 +185,21 @@ export const discoveryRunTool: ToolDefinition = {
   ...READ_TOOL_META,
 };
 
+export const discoverySelectMarketsTool: ToolDefinition = {
+  name: 'discovery_select_markets',
+  description: 'Deterministically preselect/rank markets for low-latency discovery (no LLM calls).',
+  category: 'intel',
+  schema: z.object({
+    limit: z.number().optional(),
+    min_open_interest_usd: z.number().optional(),
+    min_day_volume_usd: z.number().optional(),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('discovery_select_markets', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  ...READ_TOOL_META,
+};
+
 export const perpAnalyzeTool: ToolDefinition = {
   name: 'perp_analyze',
   description: 'Analyze a perp market and return directional probabilities, key risks, and signals.',
@@ -273,5 +288,6 @@ export const discoveryTools: ToolDefinition[] = [
   signalCrossAssetDivergenceTool,
   signalHyperliquidFundingOISkewTool,
   signalHyperliquidOrderflowImbalanceTool,
+  discoverySelectMarketsTool,
   discoveryRunTool,
 ];

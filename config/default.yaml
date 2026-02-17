@@ -200,6 +200,12 @@ autonomy:
   pauseOnLossStreak: 3         # Pause after N consecutive losses
   dailyReportTime: "20:00"     # Time to send daily P&L report
   maxTradesPerScan: 3          # Max trades per scan cycle
+  discoverySelection:
+    enabled: true
+    fullUniverseWhenSymbolsEmpty: true  # If hyperliquid.symbols is [], rank full perp universe
+    preselectLimit: 24                  # Expensive signal stack only runs on these top-ranked symbols
+    minOpenInterestUsd: 5000000
+    minDayVolumeUsd: 20000000
 
 # v1.2: Position heartbeat (risk management loop)
 heartbeat:
@@ -462,4 +468,4 @@ hyperliquid:
   privateKey: ""
   maxLeverage: 5
   defaultSlippageBps: 10
-  symbols: ["BTC", "ETH"]
+  symbols: ["BTC", "ETH"]  # Set to [] to allow full-universe discovery preselection

@@ -887,4 +887,24 @@ export const THUFIR_TOOLS: Tool[] = [
       required: [],
     },
   },
+  {
+    name: 'discovery_select_markets',
+    description:
+      'Deterministically preselect/rank markets for low-latency discovery (no LLM calls).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Maximum number of symbols to return' },
+        min_open_interest_usd: {
+          type: 'number',
+          description: 'Minimum open interest in USD for eligibility',
+        },
+        min_day_volume_usd: {
+          type: 'number',
+          description: 'Minimum 24h notional volume in USD for eligibility',
+        },
+      },
+      required: [],
+    },
+  },
 ];
