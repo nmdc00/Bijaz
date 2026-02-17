@@ -1,31 +1,101 @@
-# Thufir Hawat
+# Thufir - Autonomous Crypto Trading Agent
 
-Thufir is an autonomous market discovery and trading assistant focused on crypto/perps workflows (with Hyperliquid live support), persistent memory, calibration analytics, and multi-channel operation (CLI, Telegram, WhatsApp).
+Thufir is an autonomous trading and market-discovery agent for crypto/perps, with Hyperliquid live execution support, persistent memory, policy-gated automation, and multi-channel operation.
 
-## Current State
+Named after the Mentat of House Atreides: a strategist that synthesizes noisy information into actionable decisions.
 
-- Primary use case: market discovery, trade decision support, and controlled autonomous execution
-- Execution modes: `paper`, `webhook`, `live` (Hyperliquid)
-- Channels: CLI, Telegram, WhatsApp
-- Agent stack: conversational chat, orchestrator mode, mentat fragility scans, delphi prediction workflows
-- Proactive capabilities: scheduled proactive search + time-sensitive proactive refresh gate in chat
+Built on a Clawdbot-inspired multi-channel architecture. Written in TypeScript. Operates via CLI, Telegram, and WhatsApp.
 
-## Key Features
+## What Makes Thufir Different
 
-- Autonomous scan loop with configurable safety/risk limits
-- Hyperliquid live trading support with guardrails
-- Persistent memory (chat, trades, journals, incidents, playbooks)
-- Calibration statistics and Delphi calibration reporting
-- Intel ingestion and search (RSS/NewsAPI/Google News/Twitter where configured)
-- Scheduler control plane + notification hooks (briefing, intel fetch/alerts, heartbeat, mentat)
-- Session-aware and context-enriched discovery pipeline
+Most systems are either:
 
-## Requirements
+- Fully mechanical: disciplined but blind to narrative/context shifts
+- Fully discretionary LLM: flexible but prone to rationalization and risk drift
+
+Thufir separates responsibilities:
+
+- LLM/reasoning layer: thesis formation, market context synthesis, and opportunity selection
+- Policy/execution layer: deterministic risk gates, sizing constraints, and enforcement controls
+
+This design keeps adaptive reasoning while preserving hard risk discipline.
+
+## Core Architecture
+
+```text
+┌──────────────────────────────────────────────────┐
+│               TELEGRAM / WHATSAPP / CLI          │
+└────────────────────┬─────────────────────────────┘
+                     │
+┌────────────────────▼─────────────────────────────┐
+│                    GATEWAY                        │
+│         Sessions │ Routing │ Schedules │ Auth     │
+└────────────────────┬─────────────────────────────┘
+                     │
+┌────────────────────▼─────────────────────────────┐
+│                  AGENT CORE                       │
+│   LLM Reasoning │ Autonomy Policy │ Trade Mgmt    │
+└────────┬───────────┬──────────────┬──────────────┘
+         │           │              │
+    ┌────▼────┐ ┌────▼─────┐ ┌─────▼──────┐
+    │  INTEL  │ │  MEMORY  │ │ EXECUTION  │
+    │─────────│ │──────────│ │────────────│
+    │ RSS     │ │ Journal  │ │ Hyperliquid│
+    │ NewsAPI │ │ Signals  │ │ Perps      │
+    │ Google  │ │ Policy   │ │ Risk Gates │
+    │ Twitter │ │ State    │ │ TP/SL Mgmt │
+    └─────────┘ └──────────┘ └────────────┘
+```
+
+## Key Systems
+
+### 1) Autonomy Policy Engine
+
+Deterministic gates for execution quality and risk:
+
+- Regime-aware policy filtering
+- Signal performance thresholds (`minSharpe`, `minSamples`)
+- Calibration-aware downweight/block controls
+- Trade caps per scan/day
+- Pause-on-loss-streak logic
+
+### 2) Trade Management
+
+Mechanical position supervision with exchange-native and polling controls:
+
+- Configurable TP/SL/time-stop defaults
+- Active monitoring cadence when positions are open
+- Liquidation guardrails
+- Journaled outcomes and post-trade metadata
+
+Note: behavior is policy-constrained; full autonomy must be explicitly enabled.
+
+### 3) Intel + Proactive Search
+
+- RSS/NewsAPI/Google News/Twitter (when configured)
+- Stored intel search and alerting
+- Iterative proactive search with learned query ranking
+- Optional proactive refresh gate for time-sensitive answers (`as_of` + source attribution)
+
+### 4) Learning Loop
+
+Persistent SQLite-backed artifacts:
+
+- Trade journals and execution metadata
+- Calibration summaries and reports
+- Incidents/playbooks/policy state
+- Session memory for conversational context continuity
+
+## Quick Start
+
+### Prerequisites
 
 - Node.js `22.0.0`
 - `pnpm` `9.x`
+- Anthropic or OpenAI API key
+- Hyperliquid private key (live mode only)
 
-## Quick Start
+### Install
 
 ```bash
 git clone git@github.com:nmdc00/Thufir-Hawat.git
@@ -34,145 +104,143 @@ pnpm install
 cp config/default.yaml ~/.thufir/config.yaml
 ```
 
-Set required env vars (example):
+### Set Environment
 
 ```bash
 export ANTHROPIC_API_KEY="..."
-# or when using OpenAI provider
+# or
 export OPENAI_API_KEY="..."
+
+# live mode only
+export HYPERLIQUID_PRIVATE_KEY="0x..."
 ```
 
-Run gateway:
+### Run
 
 ```bash
+# verify live connectivity (read-only)
+pnpm thufir env verify-live --symbol BTC
+
+# start gateway
 pnpm gateway
-```
 
-Run CLI:
-
-```bash
+# CLI help
 pnpm thufir --help
 ```
 
-## Configuration
+## Configuration Reference
 
-Main config path:
+Primary file: `~/.thufir/config.yaml` (from `config/default.yaml`)
 
-- `~/.thufir/config.yaml`
-- Base template: `config/default.yaml`
+### Execution
 
-Important sections:
+```yaml
+execution:
+  mode: paper      # paper | webhook | live
+  provider: hyperliquid
+```
 
-- `agent`: model/provider/tooling/orchestrator settings
-- `execution`: `paper|webhook|live`
-- `autonomy`: scan cadence, strategy limits, full-auto toggle
-- `wallet`: spending/risk limits
-- `notifications`: schedulers and alerting
-- `intel`: source + embeddings config
+### Hyperliquid
 
-### Proactive Refresh Gate (time-sensitive answers)
+```yaml
+hyperliquid:
+  maxLeverage: 5
+  defaultSlippageBps: 10
+  symbols: [BTC, ETH]
+```
+
+### Trade Management
+
+```yaml
+tradeManagement:
+  enabled: false
+  defaults:
+    stopLossPct: 3.0
+    takeProfitPct: 5.0
+    maxHoldHours: 72
+  monitorIntervalSeconds: 900
+  activeMonitorIntervalSeconds: 60
+  useExchangeStops: true
+  liquidationGuardDistanceBps: 800
+```
+
+### Autonomy
+
+```yaml
+autonomy:
+  enabled: true
+  fullAuto: false
+  scanIntervalSeconds: 900
+  maxTradesPerScan: 3
+  maxTradesPerDay: 25
+  minEdge: 0.05
+  pauseOnLossStreak: 3
+  signalPerformance:
+    minSharpe: 0.8
+    minSamples: 8
+```
+
+### Proactive Refresh Gate
 
 ```yaml
 agent:
   proactiveRefresh:
     enabled: false
-    intentMode: time_sensitive  # off | time_sensitive | always
+    intentMode: time_sensitive   # off | time_sensitive | always
     ttlSeconds: 900
     maxLatencyMs: 4500
-    marketLimit: 20
-    intelLimit: 5
-    webLimit: 5
     strictFailClosed: true
     fundingSymbols: [BTC, ETH]
 ```
 
-When enabled, time-sensitive prompts trigger a pre-answer refresh and responses include `as_of` and source attribution.
+## Command Surface
 
-## Core CLI Commands
-
-### Environment
+### CLI
 
 ```bash
+# environment
 thufir env init
 thufir env check
 thufir env verify-live --symbol BTC
-```
 
-### Wallet
-
-```bash
+# wallet + risk limits
 thufir wallet create
 thufir wallet import
 thufir wallet status
 thufir wallet limits show
-thufir wallet limits set --daily 100 --per-trade 25 --confirmation-threshold 10
-```
 
-### Markets and Portfolio
-
-```bash
+# markets + portfolio
 thufir markets list
 thufir markets show BTC
 thufir markets sync --limit 200
-thufir markets watch BTC
-thufir markets watchlist
 thufir portfolio
-```
 
-### Intel
-
-```bash
+# intel
 thufir intel status
-thufir intel search "btc etf"
+thufir intel search "btc funding"
 thufir intel recent --limit 20
-thufir intel alerts --limit 20
 thufir intel fetch
 thufir intel proactive --max-queries 8 --iterations 2
-thufir intel proactive-stats --limit 20
-```
 
-### Agent / Analysis
-
-```bash
+# analysis + agentic
 thufir chat
-thufir agent run --mode trade "Evaluate BTC setup and propose action"
 thufir analyze BTC
-thufir ask "macro risks this week"
+thufir ask "macro setup this week"
 thufir top10
-thufir briefing
-thufir mentat scan --system Hyperliquid --market-limit 20
-thufir mentat report --system Hyperliquid --market-limit 20
-```
-
-### Delphi / Calibration / PnL
-
-```bash
-thufir delphi help
+thufir mentat scan --system Hyperliquid
 thufir delphi run --symbol BTC --horizon-hours 24 --count 3
-thufir calibration show
-thufir calibration report
-thufir pnl
-thufir eval
-```
 
-### Autonomy
-
-```bash
+# autonomy controls
 thufir auto status
 thufir auto on
 thufir auto off
 thufir auto report
-```
 
-### Gateway
-
-```bash
+# gateway
 thufir gateway
 ```
 
-## Telegram / WhatsApp Runtime Commands
-
-Main in-chat commands:
+### Telegram / WhatsApp Commands
 
 - `/help`
 - `/status`
@@ -192,17 +260,24 @@ Main in-chat commands:
 - `/profile`
 - `/setpref key=value`
 
-## Development
+## Deployment
+
+### Hetzner / Ubuntu (scripted)
 
 ```bash
-pnpm test
-pnpm typecheck
-pnpm lint
-pnpm test:v1.4:acceptance
-./scripts/v1.4-smoke.sh
+bash scripts/install_hetzner.sh
 ```
 
-## Project Layout
+### Manual VPS
+
+```bash
+pnpm install
+cp config/default.yaml ~/.thufir/config.yaml
+# edit config + set env vars
+pnpm gateway
+```
+
+## Project Structure
 
 ```text
 src/
@@ -218,22 +293,32 @@ src/
   trade-management/
 config/
 release/
-tests/
 scripts/
+tests/
+workspace/
 ```
 
-## Security Notes
+## Security
 
-- Use dedicated low-balance wallets for live trading
-- Keep `THUFIR_WALLET_PASSWORD` and API keys out of git
-- Validate risk limits before enabling full auto
-- Prefer paper mode for strategy validation first
+- Keep private keys in environment variables, never in committed config
+- Use conservative daily/per-trade limits before enabling `fullAuto`
+- Prefer paper mode for strategy validation
+- Monitor policy blocks and trade journal outcomes continuously
 
-## Related Docs
+## Development
 
-- `docs/ARCHITECTURE.md`
-- `docs/WALLET_SECURITY.md`
-- `docs/INTEL_SOURCES.md`
-- `docs/CALIBRATION.md`
-- `release/v1.4.md`
-- `release/v1.5.md`
+```bash
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm test:v1.4:acceptance
+./scripts/v1.4-smoke.sh
+```
+
+## License
+
+MIT - see `LICENSE`
+
+## Disclaimer
+
+Trading perpetual futures carries significant risk, including total loss of capital. This project is for research and engineering use. Nothing here is financial advice.
