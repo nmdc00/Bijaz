@@ -155,6 +155,8 @@ async function executePerpWithRetry(params: {
   };
 }
 
+type TradeArchetype = 'scalp' | 'intraday' | 'swing';
+
 function parseNewsSources(input: unknown): string[] | null {
   if (Array.isArray(input)) {
     const values = input
@@ -247,6 +249,48 @@ export function normalizeExitMode(input: unknown): PerpExitMode | null {
     value === 'unknown'
   ) {
     return value;
+  }
+  return null;
+}
+
+function normalizeTradeArchetype(input: unknown): TradeArchetype | null {
+  if (typeof input !== 'string') return null;
+  const value = input.trim();
+  if (value === 'scalp' || value === 'intraday' || value === 'swing') {
+    return value;
+  }
+  return null;
+}
+
+function validatePerpOrderContract(input: {
+  reduceOnly: boolean;
+  thesisInvalidationHit: boolean | null;
+  exitMode: PerpExitMode | null;
+  tradeArchetype: TradeArchetype | null;
+}): string | null {
+  const { reduceOnly, thesisInvalidationHit, exitMode, tradeArchetype } = input;
+
+  if (!reduceOnly) {
+    if (thesisInvalidationHit === true) {
+      return 'thesis_invalidation_hit=true conflicts with non-reduce-only order';
+    }
+    if (exitMode != null && exitMode !== 'unknown') {
+      return 'non-reduce-only order must not set exit_mode';
+    }
+    if (!tradeArchetype) {
+      return 'Missing/invalid trade_archetype (scalp|intraday|swing)';
+    }
+    return null;
+  }
+
+  if (thesisInvalidationHit === true && exitMode != null && exitMode !== 'thesis_invalidation') {
+    return 'thesis_invalidation_hit=true conflicts with non-invalidation exit_mode';
+  }
+  if (thesisInvalidationHit === false && exitMode === 'thesis_invalidation') {
+    return 'thesis_invalidation exit_mode requires thesis_invalidation_hit=true';
+  }
+  if (thesisInvalidationHit !== true && exitMode == null) {
+    return 'reduce-only exit requires exit_mode (thesis_invalidation|take_profit|time_exit|risk_reduction|manual|unknown)';
   }
   return null;
 }
@@ -985,12 +1029,20 @@ export async function executeToolCall(
           typeof toolInput.thesis_invalidation_hit === 'boolean'
             ? toolInput.thesis_invalidation_hit
             : null;
-        let exitMode = normalizeExitMode(toolInput.exit_mode);
+        const inputExitMode = normalizeExitMode(toolInput.exit_mode);
+        let exitMode: PerpExitMode | null =
+          inputExitMode ??
+          (reduceOnly
+            ? thesisInvalidationHit === true
+              ? 'thesis_invalidation'
+              : thesisInvalidationHit === false
+                ? 'unknown'
+                : null
+            : null);
         const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
         const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
         const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
-        const tradeArchetype =
-          typeof toolInput.trade_archetype === 'string' ? toolInput.trade_archetype.trim() : null;
+        const tradeArchetype = normalizeTradeArchetype(toolInput.trade_archetype);
         const invalidationType =
           typeof toolInput.invalidation_type === 'string' ? toolInput.invalidation_type.trim() : null;
         const invalidationPrice = toFiniteNumberOrNull(toolInput.invalidation_price);
@@ -1008,6 +1060,20 @@ export async function executeToolCall(
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
         const planContext = parsePlanContext(toolInput.plan_context);
+        const contractError = validatePerpOrderContract({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+          tradeArchetype,
+        });
+        if (contractError) {
+          return { success: false, error: contractError };
+        }
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
         const marketRegimeRaw =
           typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
         const marketRegime =
