@@ -47,6 +47,14 @@ import type { ToolExecutorContext } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
 import { Logger } from './logger.js';
 import { withExecutionContext } from './llm_infra.js';
+import {
+  appendProactiveAttribution,
+  buildFailClosedMessage,
+  runProactiveRefresh,
+  type CachedProactiveSnapshot,
+  type ProactiveRefreshSettings,
+  type ProactiveRefreshSnapshot,
+} from './proactive_refresh.js';
 
 export interface ConversationContext {
   userId: string;
@@ -237,6 +245,7 @@ export class ConversationHandler {
   private orchestratorRegistry?: AgentToolRegistry;
   private orchestratorIdentity?: AgentIdentity;
   private liveAccountSnapshotCache = new Map<string, { ts: number; text: string }>();
+  private proactiveSnapshotCache = new Map<string, CachedProactiveSnapshot>();
 
   constructor(
     llm: LlmClient,
@@ -315,13 +324,18 @@ export class ConversationHandler {
 
         const timeContext = await this.buildCurrentTimeContext();
         const liveAccountSnapshot = await this.buildLiveAccountSnapshot(userId);
+        const proactive = await this.prepareProactiveRefresh(userId, message);
+        if (proactive.failClosed) {
+          return buildFailClosedMessage(proactive.failReason ?? 'fresh data unavailable');
+        }
+        const proactiveContext = proactive.contextText;
+        const proactiveSnapshot = proactive.snapshot;
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
           const memorySystem = {
             getRelevantContext: async (query: string) => {
               const base = await this.getMemoryContextForOrchestrator(userId, query);
-              if (!timeContext) return base;
-              return [base, timeContext, liveAccountSnapshot].filter(Boolean).join('\n\n');
+              return [base, timeContext, liveAccountSnapshot, proactiveContext].filter(Boolean).join('\n\n');
             },
           };
 
@@ -384,6 +398,7 @@ export class ConversationHandler {
           if (!response || response.trim() === '') {
             response = await this.buildCooldownSafeFallbackResponse();
           }
+          response = appendProactiveAttribution(response, proactiveSnapshot ?? null);
 
           this.sessions.appendEntry(userId, {
             type: 'message',
@@ -422,7 +437,7 @@ export class ConversationHandler {
           return response;
         }
 
-        const toolFirstContext = await this.runToolFirstGuard(message);
+        const toolFirstContext = proactiveContext ? '' : await this.runToolFirstGuard(message);
         const summary = this.sessions.getSummary(userId);
         const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
         const compactAfterTokens = this.config.memory?.compactAfterTokens ?? 12000;
@@ -449,6 +464,7 @@ export class ConversationHandler {
           userContext,
           timeContext,
           liveAccountSnapshot,
+          proactiveContext,
           toolFirstContext,
           summary ? `## Conversation Summary\n${summary}` : '',
           intelContext,
@@ -517,6 +533,7 @@ export class ConversationHandler {
         });
 
         let reply = response.content;
+        reply = appendProactiveAttribution(reply, proactiveSnapshot ?? null);
         const prompt = this.maybePromptIntelAlerts(userId);
         if (prompt) {
           reply = `${reply}\n\n${prompt}`;
@@ -525,6 +542,57 @@ export class ConversationHandler {
         return reply;
       }
     );
+  }
+
+  private getProactiveRefreshSettings(): ProactiveRefreshSettings {
+    const configured = this.config.agent?.proactiveRefresh;
+    const fundingSymbols = Array.isArray(configured?.fundingSymbols)
+      ? configured.fundingSymbols.filter((symbol) => typeof symbol === 'string' && symbol.trim().length > 0)
+      : [];
+    return {
+      enabled: configured?.enabled ?? false,
+      intentMode: configured?.intentMode ?? 'time_sensitive',
+      ttlSeconds: Math.max(0, configured?.ttlSeconds ?? 900),
+      maxLatencyMs: Math.max(250, configured?.maxLatencyMs ?? 4500),
+      marketLimit: Math.min(200, Math.max(1, configured?.marketLimit ?? 20)),
+      intelLimit: Math.min(20, Math.max(1, configured?.intelLimit ?? 5)),
+      webLimit: Math.min(10, Math.max(1, configured?.webLimit ?? 5)),
+      strictFailClosed: configured?.strictFailClosed ?? true,
+      fundingSymbols:
+        fundingSymbols.length > 0
+          ? fundingSymbols
+          : this.config.hyperliquid?.symbols?.slice(0, 2) ?? ['BTC', 'ETH'],
+    };
+  }
+
+  private async prepareProactiveRefresh(
+    userId: string,
+    message: string
+  ): Promise<{
+    failClosed: boolean;
+    failReason?: string;
+    contextText: string;
+    snapshot?: ProactiveRefreshSnapshot;
+  }> {
+    const settings = this.getProactiveRefreshSettings();
+    const cached = this.proactiveSnapshotCache.get(userId);
+    const outcome = await runProactiveRefresh({
+      message,
+      settings,
+      cached,
+      executeTool: (toolName, input) => executeToolCall(toolName, input, this.toolContext),
+    });
+
+    if (outcome.snapshot) {
+      this.proactiveSnapshotCache.set(userId, { ts: Date.now(), snapshot: outcome.snapshot });
+    }
+
+    return {
+      failClosed: outcome.failClosed,
+      failReason: outcome.failReason,
+      contextText: outcome.contextText,
+      snapshot: outcome.snapshot,
+    };
   }
 
   private async buildCurrentTimeContext(): Promise<string> {

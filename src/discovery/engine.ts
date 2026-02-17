@@ -10,6 +10,7 @@ import {
 } from './signals.js';
 import { generateHypotheses } from './hypotheses.js';
 import { enrichExpressionContextPack, mapExpressionPlan, type ContextPackProviders } from './expressions.js';
+import { selectDiscoveryMarkets } from './market_selector.js';
 
 function clusterSignals(symbol: string, signals: Array<SignalPrimitive | null>): SignalCluster {
   const flat = signals.filter((s): s is NonNullable<typeof s> => !!s);
@@ -29,13 +30,28 @@ function clusterSignals(symbol: string, signals: Array<SignalPrimitive | null>):
 
 export async function runDiscovery(
   config: ThufirConfig,
-  options?: { contextPackProviders?: ContextPackProviders }
+  options?: { contextPackProviders?: ContextPackProviders; preselectLimit?: number }
 ): Promise<{
   clusters: SignalCluster[];
   hypotheses: ReturnType<typeof generateHypotheses>;
   expressions: ReturnType<typeof mapExpressionPlan>[];
+  selector: {
+    source: 'configured' | 'full_universe';
+    symbols: string[];
+  };
 }> {
-  const symbols = config.hyperliquid?.symbols ?? ['BTC', 'ETH'];
+  const selectorEnabled = config.autonomy?.discoverySelection?.enabled ?? true;
+  const selected = selectorEnabled
+    ? await selectDiscoveryMarkets(config, {
+        limit:
+          options?.preselectLimit && Number.isFinite(options.preselectLimit)
+            ? Math.max(1, Math.floor(options.preselectLimit))
+            : undefined,
+      })
+    : null;
+  const symbols = selected
+    ? selected.candidates.map((item) => item.symbol)
+    : (config.hyperliquid?.symbols?.length ? config.hyperliquid.symbols : ['BTC', 'ETH']);
   const formatted = symbols.map((s) => `${s}/USDT`);
 
   const priceSignals = await Promise.all(formatted.map((symbol) => signalPriceVolRegime(config, symbol)));
@@ -104,5 +120,13 @@ export async function runDiscovery(
     });
   }
 
-  return { clusters, hypotheses, expressions };
+  return {
+    clusters,
+    hypotheses,
+    expressions,
+    selector: {
+      source: selected?.source ?? 'configured',
+      symbols,
+    },
+  };
 }

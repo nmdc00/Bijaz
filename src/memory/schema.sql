@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS predictions (
     session_tag TEXT,
     regime_tag TEXT,
     strategy_class TEXT,
-    horizon_minutes INTEGER,
     symbol TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     horizon_minutes INTEGER CHECK(horizon_minutes IS NULL OR horizon_minutes > 0),

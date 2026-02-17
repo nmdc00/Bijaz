@@ -18,6 +18,7 @@ const MENTAT_TOOLS = [
   'perp_analyze',
   'position_analysis',
   'discovery_report',
+  'discovery_select_markets',
   'trade_review',
 
   // Intel tools

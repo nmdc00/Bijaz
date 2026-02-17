@@ -34,6 +34,19 @@ const ConfigSchema = z.object({
     persistPlans: z.boolean().default(true),
     allowFallbackNonCritical: z.boolean().default(true),
     alwaysIncludeTime: z.boolean().default(false),
+    proactiveRefresh: z
+      .object({
+        enabled: z.boolean().default(false),
+        intentMode: z.enum(['off', 'time_sensitive', 'always']).default('time_sensitive'),
+        ttlSeconds: z.number().default(900),
+        maxLatencyMs: z.number().default(4500),
+        marketLimit: z.number().default(20),
+        intelLimit: z.number().default(5),
+        webLimit: z.number().default(5),
+        strictFailClosed: z.boolean().default(true),
+        fundingSymbols: z.array(z.string()).default(['BTC', 'ETH']),
+      })
+      .default({}),
     identityPromptMode: z.enum(['full', 'minimal', 'none']).default('full'),
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
     identityBootstrapMaxChars: z.number().default(20000),
@@ -452,6 +465,19 @@ const ConfigSchema = z.object({
                   workspace: z.string().optional(),
                   useProxy: z.boolean().optional(),
                   proxyBaseUrl: z.string().optional(),
+                  proactiveRefresh: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      intentMode: z.enum(['off', 'time_sensitive', 'always']).optional(),
+                      ttlSeconds: z.number().optional(),
+                      maxLatencyMs: z.number().optional(),
+                      marketLimit: z.number().optional(),
+                      intelLimit: z.number().optional(),
+                      webLimit: z.number().optional(),
+                      strictFailClosed: z.boolean().optional(),
+                      fundingSymbols: z.array(z.string()).optional(),
+                    })
+                    .default({}),
                   trivialTaskProvider: z.enum(['local', 'openai', 'anthropic']).optional(),
                   trivialTaskModel: z.string().optional(),
                   systemTools: z
@@ -583,6 +609,15 @@ const ConfigSchema = z.object({
       maxTradesPerScan: z.number().default(3),
       maxTradesPerDay: z.number().default(25),
       tradeCapBypassMinEdge: z.number().default(0.12),
+      discoverySelection: z
+        .object({
+          enabled: z.boolean().default(true),
+          fullUniverseWhenSymbolsEmpty: z.boolean().default(true),
+          preselectLimit: z.number().default(24),
+          minOpenInterestUsd: z.number().default(5_000_000),
+          minDayVolumeUsd: z.number().default(20_000_000),
+        })
+        .default({}),
       signalPerformance: z
         .object({
           minSharpe: z.number().default(0.8),

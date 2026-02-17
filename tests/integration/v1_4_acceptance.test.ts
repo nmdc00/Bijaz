@@ -154,6 +154,7 @@ describe('v1.4 acceptance harness', () => {
           predictedOutcome: spec.predictedOutcome as 'YES' | 'NO',
           predictedProbability: spec.predictedProbability,
           domain: lifecycle.domain,
+          expiresAt: '2026-01-01T00:00:00.000Z',
         })
       );
     }
