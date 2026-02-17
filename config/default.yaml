@@ -391,6 +391,12 @@ notifications:
       warning: []
       high: []
       critical: []
+    llmEnrichment:
+      enabled: false
+      timeoutMs: 2500
+      maxTokens: 140
+      temperature: 0.1
+      maxChars: 420
 
 # QMD local knowledge search
 # QMD provides hybrid search (BM25 + vector + LLM reranking) for local knowledge

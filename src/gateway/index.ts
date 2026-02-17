@@ -32,6 +32,7 @@ import {
   recordAlertDelivery,
   suppressAlert,
 } from '../memory/alerts.js';
+import { enrichEscalationMessage } from './alert_enrichment.js';
 
 const config = loadConfig();
 try {
@@ -590,6 +591,25 @@ if (mentatConfig?.enabled) {
           ? schedule.channels
           : (mentatConfig.channels ?? []);
 
+      const enrichAlert = async (baseMessage: string, severity: 'high' | 'critical') =>
+        enrichEscalationMessage({
+          llm,
+          baseMessage,
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          config: escalationConfig?.llmEnrichment,
+          onFallback: (error) => {
+            logger.warn('Alert LLM enrichment failed; sending mechanical fallback', {
+              source: `mentat:${scheduleId}`,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
+
       if (escalationConfig?.enabled) {
         const severity =
           fragilityScore >= Math.max(minOverallScore + 0.1, 0.9) ||
@@ -622,7 +642,8 @@ if (mentatConfig?.enabled) {
           },
         });
         if (decision.shouldSend) {
-          const outcomes = await sendMentatMessage(decision.channels, decision.message);
+          const enrichedMessage = await enrichAlert(decision.message, severity);
+          const outcomes = await sendMentatMessage(decision.channels, enrichedMessage);
           let hasSent = false;
           for (const outcome of outcomes) {
             recordAlertDelivery({
@@ -656,7 +677,13 @@ if (mentatConfig?.enabled) {
           });
         }
       } else {
-        await sendMentatMessage(channels, message);
+        const severity =
+          fragilityScore >= Math.max(minOverallScore + 0.1, 0.9) ||
+          maxDelta >= Math.max(minDeltaScore + 0.15, 0.3)
+            ? 'critical'
+            : 'high';
+        const enrichedMessage = await enrichAlert(message, severity);
+        await sendMentatMessage(channels, enrichedMessage);
       }
 
       lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());

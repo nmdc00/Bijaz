@@ -853,6 +853,15 @@ const ConfigSchema = z.object({
               critical: z.array(z.string()).default([]),
             })
             .default({}),
+          llmEnrichment: z
+            .object({
+              enabled: z.boolean().default(false),
+              timeoutMs: z.number().default(2500),
+              maxTokens: z.number().default(140),
+              temperature: z.number().default(0.1),
+              maxChars: z.number().default(420),
+            })
+            .default({}),
         })
         .default({}),
     })
