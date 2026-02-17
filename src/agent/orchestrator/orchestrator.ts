@@ -410,10 +410,24 @@ function goalIsAnalysisStyle(goal: string): boolean {
   );
 }
 
-function shouldSkipMutatingTradeToolForAnalysis(state: AgentState, step: PlanStep): boolean {
-  if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return false;
-  if (!goalIsAnalysisStyle(state.goal)) return false;
-  return !goalRequestsTradeMutation(state.goal);
+function getMutatingTradeSkipReason(
+  state: AgentState,
+  step: PlanStep,
+  options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
+): string | null {
+  if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return null;
+
+  // Chat-origin calls are analysis-only by default; trading must come from autonomous loop
+  // or an explicit manual override path.
+  if (options?.executionOrigin === 'chat' && options?.allowTradeMutations !== true) {
+    return 'Mutating trade action skipped: chat-origin requests are analysis-only.';
+  }
+
+  if (goalIsAnalysisStyle(state.goal) && !goalRequestsTradeMutation(state.goal)) {
+    return 'Mutating trade action skipped: request appears analytical and did not explicitly request execution.';
+  }
+
+  return null;
 }
 
 function isReadOnlyStep(step: PlanStep, ctx: OrchestratorContext): boolean {
@@ -425,14 +439,15 @@ function isReadOnlyStep(step: PlanStep, ctx: OrchestratorContext): boolean {
 function buildParallelReadBatch(
   readySteps: PlanStep[],
   state: AgentState,
-  ctx: OrchestratorContext
+  ctx: OrchestratorContext,
+  options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): PlanStep[] {
   const batch: PlanStep[] = [];
   for (const step of readySteps) {
     if (batch.length >= MAX_PARALLEL_READ_STEPS) break;
     if (!isReadOnlyStep(step, ctx)) break;
     if (shouldSkipRedundantToolsList(state, step)) continue;
-    if (shouldSkipMutatingTradeToolForAnalysis(state, step)) continue;
+    if (getMutatingTradeSkipReason(state, step, options)) continue;
     batch.push(step);
   }
   return batch;
@@ -1041,7 +1056,8 @@ export async function runOrchestrator(
         ctx.onUpdate?.(state);
         continue;
       }
-      if (shouldSkipMutatingTradeToolForAnalysis(state, nextStep)) {
+      const mutatingTradeSkipReason = getMutatingTradeSkipReason(state, nextStep, options);
+      if (mutatingTradeSkipReason) {
         const skippedExecution: ToolExecution = {
           toolName: nextStep.toolName,
           input: nextStep.toolInput ?? {},
@@ -1049,8 +1065,7 @@ export async function runOrchestrator(
             success: true,
             data: {
               skipped: true,
-              reason:
-                'Mutating trade action skipped: request appears analytical and did not explicitly request execution.',
+              reason: mutatingTradeSkipReason,
             },
           },
           timestamp: new Date().toISOString(),
@@ -1063,10 +1078,10 @@ export async function runOrchestrator(
         continue;
       }
 
-      const readBatch = buildParallelReadBatch(readySteps, state, ctx);
+      const readBatch = buildParallelReadBatch(readySteps, state, ctx, options);
       if (readBatch.length > 1) {
         const executions = await Promise.all(
-          readBatch.map((step) => executeToolStep(step, state, ctx))
+          readBatch.map((step) => executeToolStep(step, state, ctx, options))
         );
         for (let index = 0; index < readBatch.length; index += 1) {
           await processToolExecution(readBatch[index]!, executions[index]!, { allowRevision: false });
@@ -1090,7 +1105,7 @@ export async function runOrchestrator(
         }
       }
 
-      const execution = await executeToolStep(nextStep, state, ctx);
+      const execution = await executeToolStep(nextStep, state, ctx, options);
       await processToolExecution(nextStep, execution);
     } else {
       // Non-tool step - mark as complete
@@ -1665,7 +1680,11 @@ function buildCompletedStepContext(state: AgentState): string {
   return lines.join('\n');
 }
 
-function buildPerpPlanContext(state: AgentState, step: PlanStep): Record<string, unknown> | null {
+function buildPerpPlanContext(
+  state: AgentState,
+  step: PlanStep,
+  executionOrigin: 'chat' | 'autonomous' | 'manual_override' | 'system'
+): Record<string, unknown> | null {
   if (!state.plan) return null;
   const pendingStepIds = state.plan.steps
     .filter((candidate) => candidate.status === 'pending')
@@ -1683,6 +1702,7 @@ function buildPerpPlanContext(state: AgentState, step: PlanStep): Record<string,
     pending_step_ids: pendingStepIds,
     iteration: state.iteration,
     mode: state.mode,
+    execution_origin: executionOrigin,
   };
 }
 
@@ -1760,7 +1780,8 @@ To close a short position, use side="buy". To close a long, use side="sell".`;
 async function executeToolStep(
   step: PlanStep,
   state: AgentState,
-  ctx: OrchestratorContext
+  ctx: OrchestratorContext,
+  options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): Promise<ToolExecution> {
   const toolName = step.toolName!;
   let input = (step.toolInput ?? {}) as Record<string, unknown>;
@@ -1807,7 +1828,8 @@ async function executeToolStep(
   }
 
   if (toolName === 'perp_place_order') {
-    const planContext = buildPerpPlanContext(state, step);
+    const executionOrigin = options?.executionOrigin ?? 'system';
+    const planContext = buildPerpPlanContext(state, step, executionOrigin);
     if (planContext) {
       (input as Record<string, unknown>).plan_context = planContext;
     }

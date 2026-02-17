@@ -336,6 +336,18 @@ export class ConversationHandler {
         const proactiveSnapshot = proactive.snapshot;
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
+          const manualTradeOverridePrefix = /^\s*\/trade\s+confirm\b[:\s-]*/i;
+          const manualTradeOverride = manualTradeOverridePrefix.exec(message);
+          const orchestratorMessage = manualTradeOverride
+            ? message.slice(manualTradeOverride[0].length).trim()
+            : message;
+          const allowTradeMutations = Boolean(
+            manualTradeOverride && orchestratorMessage.length > 0
+          );
+          if (manualTradeOverride && orchestratorMessage.length === 0) {
+            return 'Manual override requires a concrete instruction after `/trade confirm`, e.g. `/trade confirm buy BTC 0.001 market`.';
+          }
+
           const memorySystem = {
             getRelevantContext: async (query: string) => {
               const base = await this.getMemoryContextForOrchestrator(userId, query);
@@ -358,7 +370,7 @@ export class ConversationHandler {
           const autoApproveFunding = Boolean(
             this.config.autonomy?.fullAuto && this.config.autonomy?.allowFundingActions
           );
-          const resumePlan = this.shouldResumePlan(message);
+          const resumePlan = this.shouldResumePlan(orchestratorMessage);
           const priorPlan = resumePlan ? this.sessions.getPlan(userId) : null;
 
           let lastProgressKey = '';
@@ -375,7 +387,7 @@ export class ConversationHandler {
           };
 
           let lastToolCount = 0;
-          const result = await runOrchestrator(message, {
+          const result = await runOrchestrator(orchestratorMessage, {
             llm: this.llm,
             toolRegistry: this.orchestratorRegistry,
             identity: this.orchestratorIdentity,
@@ -386,7 +398,7 @@ export class ConversationHandler {
             memorySystem,
             onConfirmation: async (_prompt, toolName) => {
               if (tradeToolNames.has(toolName)) {
-                return autoApproveTrades;
+                return allowTradeMutations || autoApproveTrades;
               }
               if (fundingToolNames.has(toolName)) {
                 return autoApproveFunding;
@@ -418,6 +430,8 @@ export class ConversationHandler {
           }, {
             initialPlan: priorPlan ?? undefined,
             resumePlan,
+            executionOrigin: allowTradeMutations ? 'manual_override' : 'chat',
+            allowTradeMutations,
           });
 
           if (result.state.plan && !result.state.plan.complete) {
