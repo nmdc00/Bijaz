@@ -29,9 +29,20 @@ CREATE TABLE IF NOT EXISTS predictions (
 
     -- Metadata
     domain TEXT,
+    session_tag TEXT,
+    regime_tag TEXT,
+    strategy_class TEXT,
+    symbol TEXT,
     created_at TEXT DEFAULT (datetime('now')),
+    horizon_minutes INTEGER CHECK(horizon_minutes IS NULL OR horizon_minutes > 0),
+    expires_at TEXT,
+    context_tags TEXT, -- JSON array
 
     -- Outcome (filled when market resolves)
+    resolution_status TEXT NOT NULL DEFAULT 'open' CHECK(resolution_status IN ('open', 'resolved_true', 'resolved_false', 'unresolved_error')),
+    resolution_metadata TEXT, -- JSON object
+    resolution_error TEXT,
+    resolution_timestamp TEXT,
     outcome TEXT CHECK(outcome IS NULL OR outcome IN ('YES', 'NO')),
     outcome_timestamp TEXT,
     pnl REAL,
@@ -40,6 +51,11 @@ CREATE TABLE IF NOT EXISTS predictions (
 
 CREATE INDEX IF NOT EXISTS idx_predictions_market ON predictions(market_id);
 CREATE INDEX IF NOT EXISTS idx_predictions_domain ON predictions(domain);
+CREATE INDEX IF NOT EXISTS idx_predictions_session_tag ON predictions(session_tag);
+CREATE INDEX IF NOT EXISTS idx_predictions_regime_tag ON predictions(regime_tag);
+CREATE INDEX IF NOT EXISTS idx_predictions_strategy_class ON predictions(strategy_class);
+CREATE INDEX IF NOT EXISTS idx_predictions_horizon_minutes ON predictions(horizon_minutes);
+CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
 CREATE INDEX IF NOT EXISTS idx_predictions_created ON predictions(created_at);
 CREATE INDEX IF NOT EXISTS idx_predictions_outcome ON predictions(outcome);
 CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(outcome) WHERE outcome IS NULL;
@@ -73,6 +89,17 @@ CREATE TABLE IF NOT EXISTS user_context (
     risk_tolerance TEXT CHECK(risk_tolerance IN ('conservative', 'moderate', 'aggressive')),
     notification_settings TEXT, -- JSON
     conversation_summary TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- ============================================================================
+-- Trade Management State
+-- ============================================================================
+
+-- Minimal durable state for exchange-native risk controls (TP/SL, expiry, etc.).
+CREATE TABLE IF NOT EXISTS trade_management_state (
+    symbol TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -530,6 +557,89 @@ CREATE TABLE IF NOT EXISTS agent_playbooks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_playbooks_updated ON agent_playbooks(updated_at);
+
+-- ============================================================================
+-- Scheduler Control Plane
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS scheduler_jobs (
+    name TEXT PRIMARY KEY,
+    schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('interval', 'daily')),
+    interval_ms INTEGER,
+    daily_time TEXT,
+    status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'running', 'success', 'failed')),
+    last_run_at TEXT,
+    next_run_at TEXT NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    lock_owner TEXT,
+    lock_expires_at TEXT,
+    lease_ms INTEGER NOT NULL DEFAULT 120000,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next_run ON scheduler_jobs(next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_lock_expires ON scheduler_jobs(lock_expires_at);
+
+-- ============================================================================
+-- Alert Incident Lifecycle
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id TEXT PRIMARY KEY,
+    dedupe_key TEXT NOT NULL,
+    source TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'high', 'critical')),
+    summary TEXT NOT NULL,
+    message TEXT,
+    state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'suppressed', 'sent', 'resolved')),
+    metadata_json TEXT,
+    occurred_at TEXT,
+    acknowledged_at TEXT,
+    acknowledged_by TEXT,
+    suppressed_at TEXT,
+    sent_at TEXT,
+    resolved_at TEXT,
+    last_error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_state ON alerts(state);
+CREATE INDEX IF NOT EXISTS idx_alerts_dedupe_key ON alerts(dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN ('open', 'suppressed', 'sent', 'resolved', 'acknowledged', 'delivery')),
+    from_state TEXT,
+    to_state TEXT,
+    reason_code TEXT,
+    payload_json TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_alert_id ON alert_events(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_events_created ON alert_events(created_at);
+
+CREATE TABLE IF NOT EXISTS alert_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('retrying', 'sent', 'failed')),
+    attempt INTEGER NOT NULL DEFAULT 1,
+    provider_message_id TEXT,
+    error TEXT,
+    metadata_json TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_alert_id ON alert_deliveries(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_status ON alert_deliveries(status);
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_created ON alert_deliveries(created_at);
 
 -- ============================================================================
 -- Views

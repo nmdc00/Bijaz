@@ -1,7 +1,7 @@
 import type { ThufirConfig } from './config.js';
 import type { Market } from '../execution/markets.js';
 import type { MarketClient } from '../execution/market-client.js';
-import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
+import type { ExecutionAdapter, TradeDecision, TradeResult } from '../execution/executor.js';
 import type { LimitCheckResult } from '../execution/wallet/limits.js';
 import { ethers } from 'ethers';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -23,6 +23,15 @@ import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbook
 import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains.js';
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
+import { evaluateGlobalTradeGate } from './autonomy_policy.js';
+import { resilientWebSearch } from '../intel/web_search_resilience.js';
+import { computeClosedTradeComponentScores } from './decision_component_scores.js';
+import {
+  hydrateEntryTradeContract,
+  normalizeReduceOnlyExitFsmInput,
+  validateEntryTradeContract,
+  validateReduceOnlyExitFsm,
+} from './trade_contract.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -68,6 +77,221 @@ export interface ToolExecutorContext {
 export type ToolResult =
   | { success: true; data: unknown }
   | { success: false; error: string };
+
+type PerpOrderFeeEstimate = {
+  estimated_notional_usd: number | null;
+  estimated_fee_rate: number | null;
+  estimated_fee_type: 'taker' | 'maker';
+  estimated_fee_usd: number | null;
+};
+
+type PerpOrderRealizedFee = {
+  realized_fee_usd: number | null;
+  realized_fee_token: string | null;
+  realized_fill_count: number;
+  realized_order_id: number | null;
+  realized_fill_time_ms: number | null;
+  error?: string | null;
+};
+
+type PerpExitMode =
+  | 'thesis_invalidation'
+  | 'take_profit'
+  | 'time_exit'
+  | 'risk_reduction'
+  | 'manual'
+  | 'unknown';
+
+type PerpExecutionAttempt = {
+  attempt: number;
+  slippage_bps: number;
+  executed: boolean;
+  message: string;
+};
+
+function isNoImmediateMatchError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return /could not immediately match against any resting orders/i.test(message);
+}
+
+async function executePerpWithRetry(params: {
+  executor: ExecutionAdapter;
+  marketClient: MarketClient;
+  market: Market;
+  symbol: string;
+  decision: TradeDecision;
+  baseSlippageBps: number;
+}): Promise<{ result: TradeResult; attempts: PerpExecutionAttempt[] }> {
+  const slippageSequence = [params.baseSlippageBps, params.baseSlippageBps + 25, params.baseSlippageBps + 50]
+    .map((value) => Math.max(0, Math.min(300, value)));
+  const attempts: PerpExecutionAttempt[] = [];
+
+  for (let index = 0; index < slippageSequence.length; index += 1) {
+    const slippageBps = slippageSequence[index]!;
+    const market = index === 0 ? params.market : await params.marketClient.getMarket(params.symbol);
+    const attemptDecision: TradeDecision = {
+      ...params.decision,
+      marketSlippageBps: slippageBps,
+    };
+    const result = await params.executor.execute(market, attemptDecision);
+    attempts.push({
+      attempt: index + 1,
+      slippage_bps: slippageBps,
+      executed: result.executed,
+      message: result.message,
+    });
+
+    if (result.executed) {
+      return { result, attempts };
+    }
+    if (!isNoImmediateMatchError(result.message) || index === slippageSequence.length - 1) {
+      return { result, attempts };
+    }
+  }
+
+  return {
+    result: { executed: false, message: 'Execution failed before attempting order placement.' },
+    attempts,
+  };
+}
+
+function parseNewsSources(input: unknown): string[] | null {
+  if (Array.isArray(input)) {
+    const values = input
+      .map((entry) => String(entry ?? '').trim())
+      .filter((entry) => entry.length > 0);
+    return values.length > 0 ? values : null;
+  }
+  if (typeof input === 'string') {
+    const values = input
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return values.length > 0 ? values : null;
+  }
+  return null;
+}
+
+function toFiniteNumberOrNull(input: unknown): number | null {
+  const value = Number(input);
+  return Number.isFinite(value) ? value : null;
+}
+
+function resolveClosedTradeReference(params: {
+  entries: ReturnType<typeof listPerpTradeJournals>;
+  symbol: string;
+  hypothesisId: string | null;
+  closeSide: 'buy' | 'sell';
+}) {
+  for (const entry of params.entries) {
+    if (entry.symbol !== params.symbol) continue;
+    if (entry.reduceOnly === true) continue;
+    if (entry.outcome !== 'executed') continue;
+    if (params.hypothesisId && entry.hypothesisId !== params.hypothesisId) continue;
+    if (!params.hypothesisId && entry.side && entry.side === params.closeSide) continue;
+    return entry;
+  }
+  return null;
+}
+
+export function normalizeExitMode(input: unknown): PerpExitMode | null {
+  if (typeof input !== 'string') return null;
+  const value = input.trim();
+  if (
+    value === 'thesis_invalidation' ||
+    value === 'take_profit' ||
+    value === 'time_exit' ||
+    value === 'risk_reduction' ||
+    value === 'manual' ||
+    value === 'unknown'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+export function evaluateReduceOnlyExitAssessment(params: {
+  reduceOnly: boolean;
+  thesisInvalidationHit: boolean | null;
+  exitMode: PerpExitMode | null;
+}): {
+  thesisCorrect: boolean | null;
+  thesisInvalidationHit: boolean | null;
+  exitMode: PerpExitMode | null;
+  emotionalExitFlag: boolean | null;
+  thesisEvaluationReason: string | null;
+} {
+  if (!params.reduceOnly) {
+    return {
+      thesisCorrect: null,
+      thesisInvalidationHit: null,
+      exitMode: null,
+      emotionalExitFlag: null,
+      thesisEvaluationReason: null,
+    };
+  }
+
+  const normalizedExitMode =
+    params.exitMode ?? (params.thesisInvalidationHit === true ? 'thesis_invalidation' : null);
+  const invalidationHit =
+    params.thesisInvalidationHit ??
+    (normalizedExitMode === 'thesis_invalidation' ? true : null);
+
+  if (invalidationHit === true) {
+    return {
+      thesisCorrect: false,
+      thesisInvalidationHit: true,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: false,
+      thesisEvaluationReason: 'Exit aligned with explicit thesis invalidation condition.',
+    };
+  }
+
+  if (invalidationHit === false) {
+    const emotional = normalizedExitMode === 'manual' || normalizedExitMode === 'unknown';
+    return {
+      thesisCorrect: emotional ? false : true,
+      thesisInvalidationHit: false,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: emotional,
+      thesisEvaluationReason: emotional
+        ? 'Exited before invalidation via discretionary/manual action.'
+        : 'Exited without invalidation via planned management rule.',
+    };
+  }
+
+  if (normalizedExitMode === 'manual' || normalizedExitMode === 'unknown') {
+    return {
+      thesisCorrect: false,
+      thesisInvalidationHit: null,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: true,
+      thesisEvaluationReason: 'Reduce-only exit lacked invalidation proof and appears discretionary.',
+    };
+  }
+
+  if (
+    normalizedExitMode === 'take_profit' ||
+    normalizedExitMode === 'time_exit' ||
+    normalizedExitMode === 'risk_reduction'
+  ) {
+    return {
+      thesisCorrect: true,
+      thesisInvalidationHit: false,
+      exitMode: normalizedExitMode,
+      emotionalExitFlag: false,
+      thesisEvaluationReason: 'Reduce-only exit matched a deterministic management rule.',
+    };
+  }
+
+  return {
+    thesisCorrect: null,
+    thesisInvalidationHit: null,
+    exitMode: normalizedExitMode,
+    emotionalExitFlag: null,
+    thesisEvaluationReason: null,
+  };
+}
 
 function getSystemToolPolicy(config: ThufirConfig): SystemToolPolicy {
   const settings = config.agent?.systemTools;
@@ -374,7 +598,7 @@ export async function executeToolCall(
 
         const formatDecimal = (value: number, decimals: number): string => {
           const fixed = value.toFixed(decimals);
-          return fixed.replace(/\\.?0+$/, '');
+          return fixed.replace(/\.?0+$/, '');
         };
 
         const sizeStr = formatDecimal(size, marketMeta.szDecimals ?? 6);
@@ -431,6 +655,39 @@ export async function executeToolCall(
             oid: String(oid),
             cancelled: true,
             stillOpen,
+          },
+        };
+      }
+
+      case 'hyperliquid_usd_class_transfer': {
+        const amountUsdc = Number(toolInput.amount_usdc ?? 0);
+        const to = String(toolInput.to ?? '').trim().toLowerCase();
+        if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
+          return { success: false, error: 'Invalid amount_usdc' };
+        }
+        if (to !== 'perp' && to !== 'spot') {
+          return { success: false, error: 'Invalid to (use perp|spot)' };
+        }
+
+        const formatDecimal = (value: number, decimals: number): string => {
+          const fixed = value.toFixed(decimals);
+          return fixed.replace(/\.?0+$/, '');
+        };
+
+        const client = new HyperliquidClient(ctx.config);
+        const exchange = client.getExchangeClient();
+        const amountStr = formatDecimal(amountUsdc, 6);
+        const toPerp = to === 'perp';
+
+        // Hyperliquid Exchange: usdClassTransfer({ amount: "1", toPerp: true })
+        const result = await (exchange as any).usdClassTransfer({ amount: amountStr, toPerp });
+
+        return {
+          success: true,
+          data: {
+            amount_usdc: Number(amountStr),
+            to,
+            result,
           },
         };
       }
@@ -629,16 +886,231 @@ export async function executeToolCall(
         }
         const symbol = String(toolInput.symbol ?? '');
         const side = String(toolInput.side ?? '').toLowerCase();
-        const size = Number(toolInput.size ?? 0);
+        const requestedSize = Number(toolInput.size ?? 0);
         const orderTypeRaw = String(toolInput.order_type ?? 'market').toLowerCase();
         const orderType: 'market' | 'limit' = orderTypeRaw === 'limit' ? 'limit' : 'market';
         const price = toolInput.price !== undefined ? Number(toolInput.price) : undefined;
         const leverage = toolInput.leverage !== undefined ? Number(toolInput.leverage) : undefined;
         const reduceOnly = Boolean(toolInput.reduce_only ?? false);
-        if (!symbol || !size || (side !== 'buy' && side !== 'sell')) {
+        const hypothesisId =
+          typeof toolInput.hypothesis_id === 'string' && toolInput.hypothesis_id.trim().length > 0
+            ? toolInput.hypothesis_id.trim()
+            : null;
+        const signalClass =
+          typeof toolInput.signal_class === 'string' && toolInput.signal_class.trim().length > 0
+            ? toolInput.signal_class.trim()
+            : null;
+        const volatilityBucketRaw =
+          typeof toolInput.volatility_bucket === 'string' ? toolInput.volatility_bucket.trim() : '';
+        const volatilityBucket =
+          volatilityBucketRaw === 'low' || volatilityBucketRaw === 'medium' || volatilityBucketRaw === 'high'
+            ? volatilityBucketRaw
+            : null;
+        const liquidityBucketRaw =
+          typeof toolInput.liquidity_bucket === 'string' ? toolInput.liquidity_bucket.trim() : '';
+        const liquidityBucket =
+          liquidityBucketRaw === 'thin' || liquidityBucketRaw === 'normal' || liquidityBucketRaw === 'deep'
+            ? liquidityBucketRaw
+            : null;
+        const expectedEdge =
+          toolInput.expected_edge != null && Number.isFinite(Number(toolInput.expected_edge))
+            ? Number(toolInput.expected_edge)
+            : null;
+        const entryTriggerRaw =
+          typeof toolInput.entry_trigger === 'string' ? toolInput.entry_trigger.trim() : '';
+        const entryTrigger =
+          entryTriggerRaw === 'news' || entryTriggerRaw === 'technical' || entryTriggerRaw === 'hybrid'
+            ? entryTriggerRaw
+            : null;
+        const newsSubtype =
+          typeof toolInput.news_subtype === 'string' && toolInput.news_subtype.trim().length > 0
+            ? toolInput.news_subtype.trim()
+            : null;
+        const noveltyScore =
+          toolInput.novelty_score != null && Number.isFinite(Number(toolInput.novelty_score))
+            ? Number(toolInput.novelty_score)
+            : null;
+        const marketConfirmationScore =
+          toolInput.market_confirmation_score != null &&
+          Number.isFinite(Number(toolInput.market_confirmation_score))
+            ? Number(toolInput.market_confirmation_score)
+            : null;
+        const thesisExpiresAtMs =
+          toolInput.thesis_expires_at_ms != null &&
+          Number.isFinite(Number(toolInput.thesis_expires_at_ms))
+            ? Number(toolInput.thesis_expires_at_ms)
+            : null;
+        let thesisInvalidationHit =
+          typeof toolInput.thesis_invalidation_hit === 'boolean'
+            ? toolInput.thesis_invalidation_hit
+            : null;
+        let exitMode = normalizeExitMode(toolInput.exit_mode);
+        const closeEntryPriceOverride = toFiniteNumberOrNull(toolInput.entry_price);
+        const closePathHigh = toFiniteNumberOrNull(toolInput.price_path_high);
+        const closePathLow = toFiniteNumberOrNull(toolInput.price_path_low);
+        const tradeArchetype =
+          typeof toolInput.trade_archetype === 'string' ? toolInput.trade_archetype.trim() : null;
+        const invalidationType =
+          typeof toolInput.invalidation_type === 'string' ? toolInput.invalidation_type.trim() : null;
+        const invalidationPrice = toFiniteNumberOrNull(toolInput.invalidation_price);
+        const timeStopAtMs =
+          toolInput.time_stop_at_ms != null && Number.isFinite(Number(toolInput.time_stop_at_ms))
+            ? Number(toolInput.time_stop_at_ms)
+            : null;
+        const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
+        const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
+        const emergencyOverride = Boolean(toolInput.emergency_override ?? false);
+        const emergencyReason =
+          typeof toolInput.emergency_reason === 'string' && toolInput.emergency_reason.trim().length > 0
+            ? toolInput.emergency_reason.trim()
+            : null;
+        const newsSources = parseNewsSources(toolInput.news_sources);
+        const newsSourceCount = newsSources?.length ?? null;
+        const marketRegimeRaw =
+          typeof toolInput.market_regime === 'string' ? toolInput.market_regime.trim() : '';
+        const marketRegime =
+          marketRegimeRaw === 'trending' ||
+          marketRegimeRaw === 'choppy' ||
+          marketRegimeRaw === 'high_vol_expansion' ||
+          marketRegimeRaw === 'low_vol_compression'
+            ? marketRegimeRaw
+            : null;
+        if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
+        const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
+        const exitFsmEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm);
+        const normalizedReduceOnlyExit = normalizeReduceOnlyExitFsmInput({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+        });
+        exitMode = normalizedReduceOnlyExit.exitMode;
+        thesisInvalidationHit = normalizedReduceOnlyExit.thesisInvalidationHit;
+        const exitAssessment = evaluateReduceOnlyExitAssessment({
+          reduceOnly,
+          thesisInvalidationHit,
+          exitMode,
+        });
+        const exitFsmValidation = validateReduceOnlyExitFsm({
+          enabled: exitFsmEnabled,
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+          emergencyOverride,
+          emergencyReason,
+        });
+        if (!exitFsmValidation.valid) {
+          return { success: false, error: exitFsmValidation.error };
+        }
+        const tradeContractJournalFields = {
+          tradeArchetype: null as 'scalp' | 'intraday' | 'swing' | null,
+          invalidationType: null as 'price_level' | 'structure_break' | null,
+          invalidationPrice: null as number | null,
+          timeStopAtMs: null as number | null,
+          takeProfitR: null as number | null,
+          trailMode: null as 'none' | 'atr' | 'structure' | null,
+          emergencyOverride: emergencyOverride || null,
+          emergencyReason,
+        };
         const market = await ctx.marketClient.getMarket(symbol);
+        const hydratedContractInput = hydrateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          side: side as 'buy' | 'sell',
+          markPrice: market.markPrice ?? null,
+          input: {
+            tradeArchetype,
+            invalidationType,
+            invalidationPrice,
+            timeStopAtMs,
+            takeProfitR,
+            trailMode,
+          },
+        });
+        const contractValidation = validateEntryTradeContract({
+          enabled: tradeContractEnabled,
+          reduceOnly,
+          input: hydratedContractInput,
+        });
+        if (!contractValidation.valid) {
+          return { success: false, error: contractValidation.error };
+        }
+        const resolvedContract = contractValidation.contract;
+        if (resolvedContract) {
+          tradeContractJournalFields.tradeArchetype = resolvedContract.tradeArchetype;
+          tradeContractJournalFields.invalidationType = resolvedContract.invalidationType;
+          tradeContractJournalFields.invalidationPrice = resolvedContract.invalidationPrice;
+          tradeContractJournalFields.timeStopAtMs = resolvedContract.timeStopAtMs;
+          tradeContractJournalFields.takeProfitR = resolvedContract.takeProfitR;
+          tradeContractJournalFields.trailMode = resolvedContract.trailMode;
+        }
+        const feeEstimate = await estimatePerpOrderFee(ctx, {
+          orderType,
+          size: requestedSize,
+          inputPrice: price,
+          markPrice: market.markPrice ?? null,
+        });
+        const policyGate = evaluateGlobalTradeGate(ctx.config, {
+          signalClass,
+          marketRegime,
+          volatilityBucket,
+          liquidityBucket,
+          expectedEdge,
+        });
+        if (!policyGate.allowed) {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              tradeId: null,
+              hypothesisId,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size: requestedSize,
+              leverage: leverage ?? null,
+              orderType,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              confidence: null,
+              reasoning: `Policy gate blocked: ${policyGate.reason ?? 'policy constraints active'}`,
+              signalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              newsSources,
+              newsSourceCount,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
+              ...tradeContractJournalFields,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              emotionalExitFlag: exitAssessment.emotionalExitFlag,
+              thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              estimatedFeeRate: feeEstimate.estimated_fee_rate,
+              estimatedFeeType: feeEstimate.estimated_fee_type,
+              estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              outcome: 'blocked',
+              error: policyGate.reason ?? 'policy constraints active',
+            });
+          } catch {
+            // Best-effort journaling: never block trading due to local DB issues.
+          }
+          return { success: false, error: policyGate.reason ?? 'policy constraints active' };
+        }
+        let size = requestedSize;
+        let policyReasoning: string | null = null;
+        if (!reduceOnly && policyGate.sizeMultiplier < 1) {
+          size = Math.max(0.00000001, requestedSize * policyGate.sizeMultiplier);
+          policyReasoning =
+            `Policy applied (${policyGate.reasonCode ?? 'policy.size_adjust'}): ` +
+            `${policyGate.reason ?? 'size multiplier enforced'}; requested_size=${requestedSize}, effective_size=${size}`;
+        }
         const riskCheck = await checkPerpRiskLimits({
           config: ctx.config,
           symbol,
@@ -657,7 +1129,7 @@ export async function executeToolCall(
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               tradeId: null,
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -666,7 +1138,30 @@ export async function executeToolCall(
               reduceOnly,
               markPrice: market.markPrice ?? null,
               confidence: null,
-              reasoning: `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}`,
+              reasoning:
+                `Risk check blocked: ${riskCheck.reason ?? 'perp risk limits exceeded'}` +
+                (policyReasoning ? ` | ${policyReasoning}` : ''),
+              estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              estimatedFeeRate: feeEstimate.estimated_fee_rate,
+              estimatedFeeType: feeEstimate.estimated_fee_type,
+              estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              signalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              newsSources,
+              newsSourceCount,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
+              ...tradeContractJournalFields,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              emotionalExitFlag: exitAssessment.emotionalExitFlag,
+              thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
             });
@@ -675,29 +1170,56 @@ export async function executeToolCall(
           }
           return { success: false, error: riskCheck.reason ?? 'perp risk limits exceeded' };
         }
-        const limitCheck = await ctx.limiter.checkAndReserve(size);
-        if (!limitCheck.allowed) {
-          try {
-            recordPerpTradeJournal({
-              kind: 'perp_trade_journal',
-              tradeId: null,
-              hypothesisId: null,
-              symbol,
-              side: side as 'buy' | 'sell',
-              size,
-              leverage: leverage ?? null,
-              orderType,
-              reduceOnly,
-              markPrice: market.markPrice ?? null,
-              confidence: null,
-              reasoning: `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}`,
-              outcome: 'blocked',
-              error: limitCheck.reason ?? 'limit exceeded',
-            });
-          } catch {
-            // Best-effort journaling: never block trading due to local DB issues.
+        // Reduce-only orders are strictly risk-reducing; do not block them on spending limits.
+        // This is critical for safety loops (heartbeat/trade-management) that must be able to flatten.
+        if (!reduceOnly) {
+          const limitCheck = await ctx.limiter.checkAndReserve(size);
+          if (!limitCheck.allowed) {
+            try {
+              recordPerpTradeJournal({
+                kind: 'perp_trade_journal',
+                tradeId: null,
+                hypothesisId,
+                symbol,
+                side: side as 'buy' | 'sell',
+                size,
+                leverage: leverage ?? null,
+                orderType,
+                reduceOnly,
+                markPrice: market.markPrice ?? null,
+                confidence: null,
+                reasoning:
+                  `Spending limiter blocked: ${limitCheck.reason ?? 'limit exceeded'}` +
+                  (policyReasoning ? ` | ${policyReasoning}` : ''),
+                estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+                estimatedFeeRate: feeEstimate.estimated_fee_rate,
+                estimatedFeeType: feeEstimate.estimated_fee_type,
+                estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+                signalClass,
+                marketRegime,
+                volatilityBucket,
+                liquidityBucket,
+                expectedEdge,
+                entryTrigger,
+                newsSubtype,
+                newsSources,
+                newsSourceCount,
+                noveltyScore,
+                marketConfirmationScore,
+                thesisExpiresAtMs,
+                ...tradeContractJournalFields,
+                thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+                exitMode: exitAssessment.exitMode,
+                emotionalExitFlag: exitAssessment.emotionalExitFlag,
+                thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+                outcome: 'blocked',
+                error: limitCheck.reason ?? 'limit exceeded',
+              });
+            } catch {
+              // Best-effort journaling: never block trading due to local DB issues.
+            }
+            return { success: false, error: limitCheck.reason ?? 'limit exceeded' };
           }
-          return { success: false, error: limitCheck.reason ?? 'limit exceeded' };
         }
         const decision: TradeDecision = {
           action: side as 'buy' | 'sell',
@@ -710,12 +1232,28 @@ export async function executeToolCall(
           reduceOnly,
           confidence: 'medium' as const,
         };
-        const result = await ctx.executor.execute(market, decision);
+        const executionStartMs = Date.now();
+        const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
+        const execution = await executePerpWithRetry({
+          executor: ctx.executor,
+          marketClient: ctx.marketClient,
+          market,
+          symbol,
+          decision,
+          baseSlippageBps,
+        });
+        const result = execution.result;
         if (!result.executed) {
           ctx.limiter.release(size);
+          const retrySummary =
+            execution.attempts.length > 1
+              ? ` Retry attempts=${execution.attempts.length}; slippage_bps=[${execution.attempts
+                  .map((attempt) => String(attempt.slippage_bps))
+                  .join(',')}].`
+              : '';
           try {
             const tradeId = recordPerpTrade({
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -727,7 +1265,7 @@ export async function executeToolCall(
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               tradeId,
-              hypothesisId: null,
+              hypothesisId,
               symbol,
               side: side as 'buy' | 'sell',
               size,
@@ -736,19 +1274,96 @@ export async function executeToolCall(
               reduceOnly,
               markPrice: market.markPrice ?? null,
               confidence: 'medium',
-              reasoning: null,
+              reasoning: policyReasoning,
+              estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              estimatedFeeRate: feeEstimate.estimated_fee_rate,
+              estimatedFeeType: feeEstimate.estimated_fee_type,
+              estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              signalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              newsSources,
+              newsSourceCount,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
+              ...tradeContractJournalFields,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              emotionalExitFlag: exitAssessment.emotionalExitFlag,
+              thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
               outcome: 'failed',
-              error: result.message,
+              error: `${result.message}${retrySummary}`,
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
-          return { success: false, error: result.message };
+          return { success: false, error: `${result.message}${retrySummary}` };
         }
         ctx.limiter.confirm(size);
+        const inferredOrderId = parseOrderIdFromResultMessage(result.message);
+        const realizedFee = await fetchRealizedPerpFee(ctx, {
+          symbol,
+          side: side as 'buy' | 'sell',
+          orderId: inferredOrderId,
+          startTimeMs: Math.max(0, executionStartMs - 10_000),
+        });
+        let componentScores:
+          | {
+              directionScore: number;
+              timingScore: number;
+              sizingScore: number;
+              exitScore: number;
+              capturedR: number | null;
+              leftOnTableR: number | null;
+              wouldHit2R: boolean | null;
+              wouldHit3R: boolean | null;
+            }
+          | null = null;
+        if (reduceOnly) {
+          try {
+            const history = listPerpTradeJournals({ symbol, limit: 200 });
+            const reference = resolveClosedTradeReference({
+              entries: history,
+              symbol,
+              hypothesisId,
+              closeSide: side as 'buy' | 'sell',
+            });
+            const entrySide =
+              reference?.side ?? ((side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy');
+            componentScores = computeClosedTradeComponentScores({
+              entrySide,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              size: reference?.size ?? size,
+              expectedEdge: reference?.expectedEdge ?? expectedEdge,
+              entryPrice: closeEntryPriceOverride ?? reference?.markPrice ?? null,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              invalidationPrice: reference?.invalidationPrice ?? invalidationPrice,
+            });
+          } catch {
+            componentScores = computeClosedTradeComponentScores({
+              entrySide: (side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy',
+              thesisCorrect: exitAssessment.thesisCorrect,
+              size,
+              expectedEdge,
+              entryPrice: closeEntryPriceOverride,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              invalidationPrice,
+            });
+          }
+        }
         try {
           const tradeId = recordPerpTrade({
-            hypothesisId: null,
+            hypothesisId,
             symbol,
             side: side as 'buy' | 'sell',
             size,
@@ -760,7 +1375,7 @@ export async function executeToolCall(
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
             tradeId,
-            hypothesisId: null,
+            hypothesisId,
             symbol,
             side: side as 'buy' | 'sell',
             size,
@@ -769,14 +1384,75 @@ export async function executeToolCall(
             reduceOnly,
             markPrice: market.markPrice ?? null,
             confidence: 'medium',
-            reasoning: null,
+            reasoning: policyReasoning,
+            estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+            estimatedFeeRate: feeEstimate.estimated_fee_rate,
+            estimatedFeeType: feeEstimate.estimated_fee_type,
+            estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+            signalClass,
+            marketRegime,
+            volatilityBucket,
+            liquidityBucket,
+            expectedEdge,
+            entryTrigger,
+            newsSubtype,
+            newsSources,
+            newsSourceCount,
+            noveltyScore,
+            marketConfirmationScore,
+            thesisExpiresAtMs,
+            ...tradeContractJournalFields,
+            thesisCorrect: exitAssessment.thesisCorrect,
+            thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+            exitMode: exitAssessment.exitMode,
+            emotionalExitFlag: exitAssessment.emotionalExitFlag,
+            thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+            directionScore: componentScores?.directionScore ?? null,
+            timingScore: componentScores?.timingScore ?? null,
+            sizingScore: componentScores?.sizingScore ?? null,
+            exitScore: componentScores?.exitScore ?? null,
+            capturedR: componentScores?.capturedR ?? null,
+            leftOnTableR: componentScores?.leftOnTableR ?? null,
+            wouldHit2R: componentScores?.wouldHit2R ?? null,
+            wouldHit3R: componentScores?.wouldHit3R ?? null,
+            direction_score: componentScores?.directionScore ?? null,
+            timing_score: componentScores?.timingScore ?? null,
+            sizing_score: componentScores?.sizingScore ?? null,
+            exit_score: componentScores?.exitScore ?? null,
+            captured_r: componentScores?.capturedR ?? null,
+            left_on_table_r: componentScores?.leftOnTableR ?? null,
+            would_hit_2r: componentScores?.wouldHit2R ?? null,
+            would_hit_3r: componentScores?.wouldHit3R ?? null,
+            realizedFeeUsd: realizedFee.realized_fee_usd,
+            realizedFeeToken: realizedFee.realized_fee_token,
+            realizedFillCount: realizedFee.realized_fill_count,
+            realizedOrderId: realizedFee.realized_order_id,
+            realizedFillTimeMs: realizedFee.realized_fill_time_ms,
+            feeObservationError: realizedFee.error ?? null,
             outcome: 'executed',
             message: result.message,
           });
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
         }
-        return { success: true, data: result };
+        return {
+          success: true,
+          data: {
+            ...result,
+            policy: {
+              reason_code: policyGate.reasonCode ?? null,
+              reason: policyGate.reason ?? null,
+              size_multiplier: policyGate.sizeMultiplier,
+              requested_size: requestedSize,
+              effective_size: size,
+            },
+            fees: {
+              ...feeEstimate,
+              ...realizedFee,
+            },
+            execution_attempts: execution.attempts,
+          },
+        };
       }
 
       case 'perp_open_orders': {
@@ -1016,7 +1692,23 @@ export async function executeToolCall(
 
       case 'discovery_run': {
         const { runDiscovery } = await import('../discovery/engine.js');
-        const result = await runDiscovery(ctx.config);
+        const limit = Number(toolInput.limit ?? undefined);
+        const result = await runDiscovery(ctx.config, {
+          preselectLimit: Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : undefined,
+        });
+        return { success: true, data: result };
+      }
+
+      case 'discovery_select_markets': {
+        const { selectDiscoveryMarkets } = await import('../discovery/market_selector.js');
+        const limit = Number(toolInput.limit ?? undefined);
+        const minOpenInterestUsd = Number(toolInput.min_open_interest_usd ?? undefined);
+        const minDayVolumeUsd = Number(toolInput.min_day_volume_usd ?? undefined);
+        const result = await selectDiscoveryMarkets(ctx.config, {
+          limit: Number.isFinite(limit) ? limit : undefined,
+          minOpenInterestUsd: Number.isFinite(minOpenInterestUsd) ? minOpenInterestUsd : undefined,
+          minDayVolumeUsd: Number.isFinite(minDayVolumeUsd) ? minDayVolumeUsd : undefined,
+        });
         return { success: true, data: result };
       }
 
@@ -1234,36 +1926,14 @@ export async function executeToolCall(
           return { success: false, error: 'Missing query' };
         }
 
-        const serpResult = await searchWebViaSerpApi(query, limit);
-        if (serpResult.success) {
-          // Auto-index to QMD if enabled (fire-and-forget)
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, serpResult.data, ctx).catch(() => {});
-          }
-          return serpResult;
+        const searchResult = await resilientWebSearch(query, limit, ctx.config);
+        if (!searchResult.success) {
+          return searchResult;
         }
-
-        const braveResult = await searchWebViaBrave(query, limit);
-        if (braveResult.success) {
-          // Auto-index to QMD if enabled (fire-and-forget)
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, braveResult.data, ctx).catch(() => {});
-          }
-          return braveResult;
+        if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
+          autoIndexWebSearchResults(query, searchResult.data, ctx).catch(() => {});
         }
-
-        const ddgResult = await searchWebViaDuckDuckGo(query, limit);
-        if (ddgResult.success) {
-          if (ctx.config.qmd?.enabled && ctx.config.qmd?.autoIndexWebSearch) {
-            autoIndexWebSearchResults(query, ddgResult.data, ctx).catch(() => {});
-          }
-          return ddgResult;
-        }
-
-        return {
-          success: false,
-          error: `Web search failed: SerpAPI: ${serpResult.error}. Brave: ${braveResult.error}. DuckDuckGo: ${ddgResult.error}`,
-        };
+        return searchResult;
       }
 
       case 'get_portfolio': {
@@ -1503,7 +2173,15 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
     let hyperliquidFeesError: string | null = null;
     let hyperliquidPortfolio: Record<string, unknown> | null = null;
     let hyperliquidPortfolioError: string | null = null;
+    let dexAbstraction: boolean | null = null;
+    let dexAbstractionError: string | null = null;
     if (hasHyperliquid) {
+      try {
+        const client = new HyperliquidClient(ctx.config);
+        dexAbstraction = await client.getUserDexAbstraction();
+      } catch (error) {
+        dexAbstractionError = error instanceof Error ? error.message : 'Unknown error';
+      }
       try {
         perpPositions = await loadPerpPositions(ctx);
       } catch (error) {
@@ -1526,17 +2204,103 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
       }
     }
 
+    const spotUsdcRow = (spotBalances?.balances ?? []).find((b) => String(b.coin).toUpperCase() === 'USDC');
+    const spotUsdcTotal =
+      spotUsdcRow && typeof spotUsdcRow.total === 'number' && Number.isFinite(spotUsdcRow.total)
+        ? spotUsdcRow.total
+        : null;
+    const spotUsdcHold =
+      spotUsdcRow && typeof spotUsdcRow.hold === 'number' && Number.isFinite(spotUsdcRow.hold)
+        ? spotUsdcRow.hold
+        : null;
+    const spotUsdcFree =
+      spotUsdcRow && typeof spotUsdcRow.free === 'number' && Number.isFinite(spotUsdcRow.free)
+        ? spotUsdcRow.free
+        : spotUsdcTotal != null && spotUsdcHold != null
+          ? Math.max(0, spotUsdcTotal - spotUsdcHold)
+          : null;
+
+    const perpWithdrawable =
+      perpPositions?.summary && typeof (perpPositions.summary as any).withdrawable === 'number'
+        ? ((perpPositions.summary as any).withdrawable as number)
+        : null;
+    const perpAccountValue =
+      perpPositions?.summary && typeof (perpPositions.summary as any).account_value === 'number'
+        ? ((perpPositions.summary as any).account_value as number)
+        : null;
+
+    // Determine available perp collateral for Hyperliquid.
+    // When dex abstraction is enabled (HIP-3), spot USDC free IS perp collateral.
+    // When dex abstraction is disabled/unknown, prefer perp withdrawable, but fall
+    // back to spot USDC free when perp withdrawable is zero — many accounts function
+    // as unified even when the legacy dexAbstraction flag returns false.  The exchange
+    // itself enforces collateral requirements, so reporting the best-available figure
+    // prevents the agent from refusing to trade when funds are clearly present.
+    let availableBalance: number;
+    let availableBalanceNote: string;
+    if (!hasHyperliquid) {
+      availableBalance = balances.usdc ?? 0;
+      availableBalanceNote =
+        'available_balance reflects on-chain wallet/memory cash balance (not exchange collateral).';
+    } else if (dexAbstraction === true) {
+      availableBalance = spotUsdcFree ?? 0;
+      availableBalanceNote =
+        'Hyperliquid DEX abstraction is enabled; available_balance reflects Hyperliquid spot USDC free (unified collateral).';
+    } else {
+      // dexAbstraction is false or null.  Use perp withdrawable when it has
+      // funds; otherwise fall back to spot USDC free (covers unified accounts
+      // whose dexAbstraction flag is not yet set).
+      const perpFunds = perpWithdrawable ?? 0;
+      const spotFunds = spotUsdcFree ?? 0;
+      if (perpFunds > 0) {
+        availableBalance = perpFunds;
+        availableBalanceNote =
+          'available_balance reflects Hyperliquid perp withdrawable USDC (free collateral). Spot USDC is also present but tracked separately.';
+      } else {
+        availableBalance = spotFunds;
+        availableBalanceNote =
+          'Perp withdrawable is 0; available_balance reflects Hyperliquid spot USDC free. On unified accounts spot USDC serves as perp collateral — place orders normally and the exchange will validate.';
+      }
+    }
+
     return {
       success: true,
       data: {
+        // Legacy field: this is on-chain wallet (or memory/paper) balances, not Hyperliquid Spot/Perp balances.
         balances,
+        onchain_balances: balances,
+        onchain_balances_note:
+          'On-chain wallet (or memory/paper) balances. Do not confuse with Hyperliquid Spot/Perp USDC collateral.',
         positions: [],
         summary: {
-          available_balance: balances.usdc ?? 0,
+          available_balance: availableBalance,
+          available_balance_note: availableBalanceNote,
+          onchain_usdc: balances.usdc ?? 0,
+          hyperliquid_dex_abstraction: dexAbstraction,
+          hyperliquid_dex_abstraction_note:
+            dexAbstraction === true
+              ? 'DEX abstraction (HIP-3) enabled: spot and perp USDC are unified for collateral.'
+              : 'Use available_balance as your trading collateral. Place orders normally — the exchange validates collateral at order time.',
+          hyperliquid_spot_usdc_free: spotUsdcFree,
+          hyperliquid_spot_usdc_total: spotUsdcTotal,
+          hyperliquid_perp_withdrawable_usdc: perpWithdrawable,
+          hyperliquid_perp_account_value: perpAccountValue,
           remaining_daily_limit: remainingDaily,
           positions_source: 'none',
           perp_enabled: hasHyperliquid,
         },
+        hyperliquid_balances: hasHyperliquid
+          ? {
+              spot: {
+                usdc: { total: spotUsdcTotal, hold: spotUsdcHold, free: spotUsdcFree },
+              },
+              perp: {
+                withdrawable: perpWithdrawable,
+                account_value: perpAccountValue,
+              },
+              dexAbstraction,
+            }
+          : null,
         perp_positions: perpPositions?.positions ?? [],
         perp_summary: perpPositions?.summary ?? null,
         perp_error: perpError,
@@ -1548,6 +2312,7 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
         hyperliquid_fees_error: hyperliquidFeesError,
         hyperliquid_portfolio: hyperliquidPortfolio,
         hyperliquid_portfolio_error: hyperliquidPortfolioError,
+        hyperliquid_dex_abstraction_error: dexAbstractionError,
       },
     };
   } catch (error) {
@@ -1658,6 +2423,158 @@ function computeMaxDrawdownPct(series: Array<[number, number]>): number | null {
     }
   }
   return Number.isFinite(maxDd) ? maxDd * 100 : null;
+}
+
+async function estimatePerpOrderFee(
+  ctx: ToolExecutorContext,
+  params: {
+    orderType: 'market' | 'limit';
+    size: number;
+    inputPrice?: number;
+    markPrice: number | null;
+  }
+): Promise<PerpOrderFeeEstimate> {
+  const estimatedNotional =
+    Number.isFinite(params.inputPrice) && (params.inputPrice as number) > 0
+      ? params.size * (params.inputPrice as number)
+      : Number.isFinite(params.markPrice) && (params.markPrice as number) > 0
+        ? params.size * (params.markPrice as number)
+        : null;
+  const feeType: 'taker' | 'maker' = params.orderType === 'market' ? 'taker' : 'maker';
+  const fallback: PerpOrderFeeEstimate = {
+    estimated_notional_usd: Number.isFinite(estimatedNotional) ? estimatedNotional : null,
+    estimated_fee_rate: null,
+    estimated_fee_type: feeType,
+    estimated_fee_usd: null,
+  };
+  if (ctx.config.execution?.provider !== 'hyperliquid') {
+    return fallback;
+  }
+  try {
+    const client = new HyperliquidClient(ctx.config);
+    if (!client.getAccountAddress()) return fallback;
+    const fees = (await client.getUserFees()) as {
+      userCrossRate?: string | number;
+      userAddRate?: string | number;
+    };
+    const rateRaw = feeType === 'taker' ? fees.userCrossRate : fees.userAddRate;
+    const rate = Number(rateRaw);
+    const estimatedFee =
+      Number.isFinite(rate) && Number.isFinite(estimatedNotional)
+        ? rate * (estimatedNotional as number)
+        : null;
+    return {
+      estimated_notional_usd: Number.isFinite(estimatedNotional) ? estimatedNotional : null,
+      estimated_fee_rate: Number.isFinite(rate) ? rate : null,
+      estimated_fee_type: feeType,
+      estimated_fee_usd: Number.isFinite(estimatedFee) ? estimatedFee : null,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function parseOrderIdFromResultMessage(message: string | undefined): number | null {
+  if (typeof message !== 'string') return null;
+  const match = message.match(/oid=(\d+)/i);
+  if (!match) return null;
+  const orderId = Number(match[1]);
+  return Number.isFinite(orderId) ? orderId : null;
+}
+
+async function fetchRealizedPerpFee(
+  ctx: ToolExecutorContext,
+  params: {
+    symbol: string;
+    side: 'buy' | 'sell';
+    startTimeMs: number;
+    orderId?: number | null;
+  }
+): Promise<PerpOrderRealizedFee> {
+  const fallback: PerpOrderRealizedFee = {
+    realized_fee_usd: null,
+    realized_fee_token: null,
+    realized_fill_count: 0,
+    realized_order_id: params.orderId ?? null,
+    realized_fill_time_ms: null,
+    error: null,
+  };
+  if (ctx.config.execution?.provider !== 'hyperliquid') {
+    return fallback;
+  }
+  try {
+    const client = new HyperliquidClient(ctx.config);
+    if (!client.getAccountAddress()) return fallback;
+    const fillsRaw = await client.getUserFillsByTime({
+      startTime: Math.max(0, params.startTimeMs),
+      endTime: Date.now(),
+      aggregateByTime: false,
+    });
+    const sideCode = params.side === 'buy' ? 'B' : 'A';
+    const fills = (Array.isArray(fillsRaw) ? fillsRaw : []).filter((fill) => {
+      if (!fill || typeof fill !== 'object') return false;
+      const coin = String((fill as { coin?: unknown }).coin ?? '').toUpperCase();
+      const side = String((fill as { side?: unknown }).side ?? '').toUpperCase();
+      return coin === params.symbol.toUpperCase() && side === sideCode;
+    }) as Array<Record<string, unknown>>;
+
+    if (fills.length === 0) return fallback;
+
+    const firstFill = fills[0]!;
+    let selected = fills;
+    if (params.orderId != null) {
+      const byOrder = fills.filter((fill) => Number(fill.oid) === params.orderId);
+      if (byOrder.length > 0) {
+        selected = byOrder;
+      }
+    } else {
+      const newest = fills.reduce((acc, fill) => {
+        const t = Number(fill.time ?? 0);
+        const accT = Number(acc?.time ?? 0);
+        return t > accT ? fill : acc;
+      }, firstFill);
+      const newestOrderId = Number(newest?.oid ?? NaN);
+      if (Number.isFinite(newestOrderId)) {
+        const byNewestOrder = fills.filter((fill) => Number(fill.oid) === newestOrderId);
+        if (byNewestOrder.length > 0) {
+          selected = byNewestOrder;
+        } else {
+          selected = [newest];
+        }
+      } else {
+        selected = [newest];
+      }
+    }
+
+    const totalFee = selected.reduce((sum, fill) => {
+      const fee = Number(fill.fee ?? NaN);
+      return Number.isFinite(fee) ? sum + fee : sum;
+    }, 0);
+    const newestFill = selected.reduce((acc, fill) => {
+      const t = Number(fill.time ?? 0);
+      const accT = Number(acc?.time ?? 0);
+      return t > accT ? fill : acc;
+    }, selected[0]!);
+    const tokenRaw = newestFill?.feeToken;
+    const token = typeof tokenRaw === 'string' ? tokenRaw : null;
+    const selectedOrderId = Number(newestFill?.oid ?? NaN);
+    const selectedFillTime = Number(newestFill?.time ?? NaN);
+    return {
+      realized_fee_usd: Number.isFinite(totalFee) ? totalFee : null,
+      realized_fee_token: token,
+      realized_fill_count: selected.length,
+      realized_order_id: Number.isFinite(selectedOrderId)
+        ? selectedOrderId
+        : (params.orderId ?? null),
+      realized_fill_time_ms: Number.isFinite(selectedFillTime) ? selectedFillTime : null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ...fallback,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
 }
 
 function computePnlForPeriod(series: Array<[number, number]>): number | null {
@@ -2187,199 +3104,6 @@ async function searchTwitterViaSerpApi(
     }));
 
     return { success: true, data: tweets };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-async function searchWebViaSerpApi(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  const apiKey = process.env.SERPAPI_KEY;
-  if (!apiKey) {
-    return { success: false, error: 'SerpAPI key not configured' };
-  }
-
-  try {
-    const url = new URL('https://serpapi.com/search.json');
-    url.searchParams.set('engine', 'google');
-    url.searchParams.set('q', query);
-    url.searchParams.set('num', String(limit));
-    url.searchParams.set('api_key', apiKey);
-
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-      return { success: false, error: `SerpAPI: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      organic_results?: Array<{
-        title?: string;
-        link?: string;
-        snippet?: string;
-        date?: string;
-        source?: string;
-      }>;
-    };
-
-    const results = (data.organic_results ?? []).slice(0, limit).map((item) => ({
-      title: item.title ?? '',
-      url: item.link ?? '',
-      snippet: item.snippet ?? '',
-      date: item.date ?? null,
-      source: item.source ?? null,
-    }));
-
-    return { success: true, data: { query, provider: 'serpapi', results } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-async function searchWebViaBrave(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  const apiKey = process.env.BRAVE_API_KEY;
-  if (!apiKey) {
-    return { success: false, error: 'Brave API key not configured' };
-  }
-
-  try {
-    const url = new URL('https://api.search.brave.com/res/v1/web/search');
-    url.searchParams.set('q', query);
-    url.searchParams.set('count', String(limit));
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-        'X-Subscription-Token': apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      return { success: false, error: `Brave: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      web?: {
-        results?: Array<{
-          title?: string;
-          url?: string;
-          description?: string;
-          age?: string;
-        }>;
-      };
-    };
-
-    const results = (data.web?.results ?? []).slice(0, limit).map((item) => ({
-      title: item.title ?? '',
-      url: item.url ?? '',
-      snippet: item.description ?? '',
-      date: item.age ?? null,
-    }));
-
-    return { success: true, data: { query, provider: 'brave', results } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: message };
-  }
-}
-
-type DuckDuckGoTopic = {
-  Text?: string;
-  FirstURL?: string;
-  Result?: string;
-  Name?: string;
-  Topics?: DuckDuckGoTopic[];
-};
-
-function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[]): DuckDuckGoTopic[] {
-  const result: DuckDuckGoTopic[] = [];
-  for (const topic of topics) {
-    if (Array.isArray(topic.Topics) && topic.Topics.length > 0) {
-      result.push(...flattenDuckDuckGoTopics(topic.Topics));
-      continue;
-    }
-    result.push(topic);
-  }
-  return result;
-}
-
-async function searchWebViaDuckDuckGo(
-  query: string,
-  limit: number
-): Promise<ToolResult> {
-  try {
-    const url = new URL('https://api.duckduckgo.com/');
-    url.searchParams.set('q', query);
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('no_redirect', '1');
-    url.searchParams.set('no_html', '1');
-    url.searchParams.set('skip_disambig', '1');
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-      },
-    });
-    if (!response.ok) {
-      return { success: false, error: `DuckDuckGo: ${response.status}` };
-    }
-
-    const data = (await response.json()) as {
-      AbstractText?: string;
-      AbstractURL?: string;
-      Heading?: string;
-      RelatedTopics?: DuckDuckGoTopic[];
-    };
-
-    const results: Array<{
-      title: string;
-      url: string;
-      snippet: string;
-      date: null;
-      source: string;
-    }> = [];
-
-    if (data.AbstractURL && data.AbstractText) {
-      results.push({
-        title: data.Heading?.trim() || query,
-        url: data.AbstractURL,
-        snippet: data.AbstractText,
-        date: null,
-        source: 'duckduckgo',
-      });
-    }
-
-    const flat = flattenDuckDuckGoTopics(data.RelatedTopics ?? []);
-    for (const topic of flat) {
-      if (results.length >= limit) {
-        break;
-      }
-      const text = (topic.Text ?? '').trim();
-      const link = (topic.FirstURL ?? '').trim();
-      if (!text || !link) {
-        continue;
-      }
-      const title = text.split(' - ')[0]?.trim() || text.slice(0, 80);
-      results.push({
-        title,
-        url: link,
-        snippet: text,
-        date: null,
-        source: 'duckduckgo',
-      });
-    }
-
-    const trimmed = results.slice(0, limit);
-    if (trimmed.length === 0) {
-      return { success: false, error: 'DuckDuckGo returned no results' };
-    }
-    return { success: true, data: { query, provider: 'duckduckgo', results: trimmed } };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: message };

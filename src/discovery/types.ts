@@ -41,6 +41,10 @@ export interface ExpressionPlan {
   hypothesisId: string;
   symbol: string;
   side: 'buy' | 'sell';
+  signalClass?: 'momentum_breakout' | 'mean_reversion' | 'news_event' | 'liquidation_cascade' | 'unknown';
+  marketRegime?: 'trending' | 'choppy' | 'high_vol_expansion' | 'low_vol_compression';
+  volatilityBucket?: 'low' | 'medium' | 'high';
+  liquidityBucket?: 'thin' | 'normal' | 'deep';
   confidence: number;
   expectedEdge: number;
   entryZone: string;
@@ -49,4 +53,54 @@ export interface ExpressionPlan {
   orderType: 'market' | 'limit';
   leverage: number;
   probeSizeUsd: number;
+  newsTrigger?: {
+    enabled: boolean;
+    subtype?: string;
+    sources?: Array<{
+      source: string;
+      ref?: string;
+      publishedAtMs?: number;
+      confidence?: number;
+    }>;
+    noveltyScore?: number;
+    marketConfirmationScore?: number;
+    liquidityScore?: number;
+    volatilityScore?: number;
+    expiresAtMs?: number;
+  } | null;
+  contextPack?: ExpressionContextPack;
+}
+
+export interface ExpressionContextPack {
+  regime: {
+    marketRegime: 'trending' | 'choppy' | 'high_vol_expansion' | 'low_vol_compression';
+    volatilityBucket: 'low' | 'medium' | 'high';
+    liquidityBucket: 'thin' | 'normal' | 'deep';
+    confidence: number | null;
+    source: 'derived' | 'provider' | 'default';
+  };
+  executionQuality: {
+    status: 'good' | 'mixed' | 'poor' | 'unknown';
+    score: number | null;
+    recentWinRate: number | null;
+    slippageBps: number | null;
+    notes: string[];
+    source: 'provider' | 'default';
+  };
+  event: {
+    kind: 'news_event' | 'technical' | 'none';
+    subtype: string | null;
+    catalyst: string | null;
+    confidence: number | null;
+    expiresAtMs: number | null;
+    source: 'derived' | 'provider' | 'default';
+  };
+  portfolioState: {
+    posture: 'risk_on' | 'risk_off' | 'neutral' | 'unknown';
+    availableBalanceUsd: number | null;
+    netExposureUsd: number | null;
+    openPositions: number | null;
+    source: 'provider' | 'default';
+  };
+  missing: string[];
 }

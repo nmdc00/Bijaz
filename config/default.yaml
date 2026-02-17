@@ -26,6 +26,16 @@ agent:
   persistPlans: true
   allowFallbackNonCritical: true
   alwaysIncludeTime: false
+  proactiveRefresh:
+    enabled: false
+    intentMode: time_sensitive  # off | time_sensitive | always
+    ttlSeconds: 900
+    maxLatencyMs: 4500
+    marketLimit: 20
+    intelLimit: 5
+    webLimit: 5
+    strictFailClosed: true
+    fundingSymbols: [BTC, ETH]
   identityPromptMode: full
   identityBootstrapMaxChars: 20000
   identityBootstrapIncludeMissing: true
@@ -200,6 +210,21 @@ autonomy:
   pauseOnLossStreak: 3         # Pause after N consecutive losses
   dailyReportTime: "20:00"     # Time to send daily P&L report
   maxTradesPerScan: 3          # Max trades per scan cycle
+  tradeContract:
+    enabled: false             # Enforce entry trade contract (archetype/invalidation/time stop)
+    enforceExitFsm: false      # Require reason-coded reduce-only exits (manual needs emergency override)
+  tradeQuality:
+    enabled: false             # Segment gate from rolling decision component quality
+    minSamples: 12
+    blockBelowScore: 0.45
+    downweightBelowScore: 0.60
+    downweightMultiplier: 0.60
+  discoverySelection:
+    enabled: true
+    fullUniverseWhenSymbolsEmpty: true  # If hyperliquid.symbols is [], rank full perp universe
+    preselectLimit: 24                  # Expensive signal stack only runs on these top-ranked symbols
+    minOpenInterestUsd: 5000000
+    minDayVolumeUsd: 20000000
 
 # v1.2: Position heartbeat (risk management loop)
 heartbeat:
@@ -218,6 +243,24 @@ heartbeat:
     model: null
     maxTokens: 1024
     maxCallsPerHour: 20
+
+# Trade management (exchange-native risk controls)
+tradeManagement:
+  enabled: false
+  defaults:
+    stopLossPct: 3.0
+    takeProfitPct: 5.0
+    maxHoldHours: 72
+  bounds:
+    stopLossPct: { min: 1.0, max: 8.0 }
+    takeProfitPct: { min: 2.0, max: 15.0 }
+    maxHoldHours: { min: 1, max: 168 }
+  monitorIntervalSeconds: 900
+  activeMonitorIntervalSeconds: 60
+  useExchangeStops: true
+  liquidationGuardDistanceBps: 800
+  closeRetryMinSeconds: 30
+  dustMaxRemainingNotionalUsd: 0.5
 
 # Memory persistence
 memory:
@@ -342,6 +385,27 @@ notifications:
     #     time: "09:00"
     #     marketLimit: 25
     #     intelLimit: 40
+  escalation:
+    enabled: false
+    channels: []
+    actionableReasons:
+      - risk_breach
+      - stop_failure
+      - abnormal_slippage
+      - high_conviction_setup
+    dedupeWindowSeconds: 300
+    cooldownSeconds: 900
+    severityChannels:
+      info: []
+      warning: []
+      high: []
+      critical: []
+    llmEnrichment:
+      enabled: false
+      timeoutMs: 2500
+      maxTokens: 140
+      temperature: 0.1
+      maxChars: 420
 
 # QMD local knowledge search
 # QMD provides hybrid search (BM25 + vector + LLM reranking) for local knowledge
@@ -372,6 +436,31 @@ intel:
     model: text-embedding-3-small
     apiBaseUrl: https://api.openai.com
   retentionDays: 30
+  webSearch:
+    enabled: true
+    providers:
+      order: [brave, serpapi, duckduckgo] # brave | perplexity | serpapi | duckduckgo
+      brave:
+        enabled: true
+        apiKey: ${BRAVE_API_KEY}
+      perplexity:
+        enabled: false
+        apiKey: ${PERPLEXITY_API_KEY}
+      serpapi:
+        enabled: true
+        apiKey: ${SERPAPI_KEY}
+      duckduckgo:
+        enabled: true
+    cache:
+      enabled: true
+      ttlSeconds: 900
+      maxEntries: 5000
+    budgets:
+      maxQueriesPerDay: 500
+      perProviderDailyCaps: {}
+    circuitBreaker:
+      failureThreshold: 5
+      openSeconds: 300
 
   # Sources (configure API keys in environment)
   sources:
@@ -429,4 +518,4 @@ hyperliquid:
   privateKey: ""
   maxLeverage: 5
   defaultSlippageBps: 10
-  symbols: ["BTC", "ETH"]
+  symbols: ["BTC", "ETH"]  # Set to [] to allow full-universe discovery preselection

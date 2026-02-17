@@ -50,6 +50,18 @@ export const perpPlaceOrderTool: ToolDefinition = {
     price: z.number().optional(),
     leverage: z.number().optional(),
     reduce_only: z.boolean().optional(),
+    signal_class: z.string().optional(),
+    market_regime: z.enum(['trending', 'choppy', 'high_vol_expansion', 'low_vol_compression']).optional(),
+    expected_edge: z.number().optional(),
+    entry_trigger: z.enum(['news', 'technical', 'hybrid']).optional(),
+    news_subtype: z.string().optional(),
+    novelty_score: z.number().optional(),
+    market_confirmation_score: z.number().optional(),
+    thesis_expires_at_ms: z.number().optional(),
+    news_sources: z.array(z.string()).optional(),
+    hypothesis_id: z.string().optional(),
+    thesis_invalidation_hit: z.boolean().optional(),
+    exit_mode: z.enum(['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown']).optional(),
   }),
   execute: async (input, ctx): Promise<ToolResult> => {
     return executeToolCall('perp_place_order', input as Record<string, unknown>, toExecutorContext(ctx));
@@ -173,6 +185,21 @@ export const discoveryRunTool: ToolDefinition = {
   ...READ_TOOL_META,
 };
 
+export const discoverySelectMarketsTool: ToolDefinition = {
+  name: 'discovery_select_markets',
+  description: 'Deterministically preselect/rank markets for low-latency discovery (no LLM calls).',
+  category: 'intel',
+  schema: z.object({
+    limit: z.number().optional(),
+    min_open_interest_usd: z.number().optional(),
+    min_day_volume_usd: z.number().optional(),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('discovery_select_markets', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  ...READ_TOOL_META,
+};
+
 export const perpAnalyzeTool: ToolDefinition = {
   name: 'perp_analyze',
   description: 'Analyze a perp market and return directional probabilities, key risks, and signals.',
@@ -261,5 +288,6 @@ export const discoveryTools: ToolDefinition[] = [
   signalCrossAssetDivergenceTool,
   signalHyperliquidFundingOISkewTool,
   signalHyperliquidOrderflowImbalanceTool,
+  discoverySelectMarketsTool,
   discoveryRunTool,
 ];

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { executeToolCall } from '../src/core/tool-executor.js';
+import { resetWebSearchResilienceStateForTests } from '../src/intel/web_search_resilience.js';
 
 describe('web tools', () => {
   const originalFetch = globalThis.fetch;
@@ -8,11 +9,13 @@ describe('web tools', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    resetWebSearchResilienceStateForTests();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     process.env = { ...originalEnv };
+    resetWebSearchResilienceStateForTests();
   });
 
   it('uses SerpAPI for web_search when available', async () => {
@@ -70,7 +73,17 @@ describe('web tools', () => {
     const result = await executeToolCall(
       'web_search',
       { query: 'test query', limit: 1 },
-      { config: {} as any, marketClient: {} as any }
+      {
+        config: {
+          intel: {
+            webSearch: {
+              providers: { order: ['serpapi', 'brave', 'duckduckgo'] },
+              cache: { enabled: false },
+            },
+          },
+        } as any,
+        marketClient: {} as any,
+      }
     );
 
     expect(result.success).toBe(true);

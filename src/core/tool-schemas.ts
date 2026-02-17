@@ -548,6 +548,84 @@ export const THUFIR_TOOLS: Tool[] = [
         price: { type: 'number', description: 'Limit price (required for limit orders)' },
         leverage: { type: 'number', description: 'Leverage to apply' },
         reduce_only: { type: 'boolean', description: 'Reduce-only order' },
+        signal_class: { type: 'string', description: 'Optional signal class for policy and journaling' },
+        market_regime: {
+          type: 'string',
+          enum: ['trending', 'choppy', 'high_vol_expansion', 'low_vol_compression'],
+          description: 'Optional market regime classification',
+        },
+        expected_edge: { type: 'number', description: 'Expected edge (0-1)' },
+        entry_trigger: {
+          type: 'string',
+          enum: ['news', 'technical', 'hybrid'],
+          description: 'Primary entry trigger family',
+        },
+        news_subtype: { type: 'string', description: 'News subtype/catalyst label' },
+        novelty_score: { type: 'number', description: 'News novelty score (0-1)' },
+        market_confirmation_score: { type: 'number', description: 'Market confirmation score (0-1)' },
+        thesis_expires_at_ms: { type: 'number', description: 'Unix ms when this thesis expires' },
+        news_sources: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of source refs/urls/intel ids used for a news-triggered trade',
+        },
+        hypothesis_id: { type: 'string', description: 'Optional hypothesis id linking entry and exit' },
+        trade_archetype: {
+          type: 'string',
+          enum: ['scalp', 'intraday', 'swing'],
+          description: 'Execution archetype required when trade-contract enforcement is enabled',
+        },
+        invalidation_type: {
+          type: 'string',
+          enum: ['price_level', 'structure_break'],
+          description: 'Invalidation mode required when trade-contract enforcement is enabled',
+        },
+        invalidation_price: {
+          type: 'number',
+          description: 'Required for invalidation_type=price_level',
+        },
+        time_stop_at_ms: {
+          type: 'number',
+          description: 'Unix ms time-stop deadline for the trade contract',
+        },
+        take_profit_r: {
+          type: 'number',
+          description: 'Optional target expressed in R-multiples',
+        },
+        trail_mode: {
+          type: 'string',
+          enum: ['none', 'atr', 'structure'],
+          description: 'Trailing mode for contract-based management',
+        },
+        emergency_override: {
+          type: 'boolean',
+          description: 'Allow manual/unknown reduce-only exit only when true under FSM enforcement',
+        },
+        emergency_reason: {
+          type: 'string',
+          description: 'Required rationale when emergency_override=true',
+        },
+        thesis_invalidation_hit: {
+          type: 'boolean',
+          description: 'For reduce-only exits: true if recorded invalidation condition was hit',
+        },
+        exit_mode: {
+          type: 'string',
+          enum: ['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown'],
+          description: 'For reduce-only exits: deterministic exit mode',
+        },
+        entry_price: {
+          type: 'number',
+          description: 'Optional entry price override for closed-trade component scoring',
+        },
+        price_path_high: {
+          type: 'number',
+          description: 'Optional highest observed trade-path price for closed-trade component scoring',
+        },
+        price_path_low: {
+          type: 'number',
+          description: 'Optional lowest observed trade-path price for closed-trade component scoring',
+        },
       },
       required: ['symbol', 'side', 'size'],
     },
@@ -665,6 +743,26 @@ export const THUFIR_TOOLS: Tool[] = [
         price_offset_bps: { type: 'number', description: 'How far from mid in bps (default: 5000)' },
       },
       required: ['size'],
+    },
+  },
+  {
+    name: 'hyperliquid_usd_class_transfer',
+    description:
+      'Transfer USDC between Hyperliquid Spot and Perp accounts (Spot<->Perp). Side-effect tool.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        amount_usdc: {
+          type: 'number',
+          description: 'USDC amount to transfer (e.g., 1.5)',
+        },
+        to: {
+          type: 'string',
+          enum: ['perp', 'spot'],
+          description: 'Destination account: perp (spot->perp) or spot (perp->spot)',
+        },
+      },
+      required: ['amount_usdc', 'to'],
     },
   },
   {
@@ -832,6 +930,26 @@ export const THUFIR_TOOLS: Tool[] = [
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Maximum number of clusters to return' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'discovery_select_markets',
+    description:
+      'Deterministically preselect/rank markets for low-latency discovery (no LLM calls).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Maximum number of symbols to return' },
+        min_open_interest_usd: {
+          type: 'number',
+          description: 'Minimum open interest in USD for eligibility',
+        },
+        min_day_volume_usd: {
+          type: 'number',
+          description: 'Minimum 24h notional volume in USD for eligibility',
+        },
       },
       required: [],
     },

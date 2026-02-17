@@ -34,6 +34,19 @@ const ConfigSchema = z.object({
     persistPlans: z.boolean().default(true),
     allowFallbackNonCritical: z.boolean().default(true),
     alwaysIncludeTime: z.boolean().default(false),
+    proactiveRefresh: z
+      .object({
+        enabled: z.boolean().default(false),
+        intentMode: z.enum(['off', 'time_sensitive', 'always']).default('time_sensitive'),
+        ttlSeconds: z.number().default(900),
+        maxLatencyMs: z.number().default(4500),
+        marketLimit: z.number().default(20),
+        intelLimit: z.number().default(5),
+        webLimit: z.number().default(5),
+        strictFailClosed: z.boolean().default(true),
+        fundingSymbols: z.array(z.string()).default(['BTC', 'ETH']),
+      })
+      .default({}),
     identityPromptMode: z.enum(['full', 'minimal', 'none']).default('full'),
     internalPromptMode: z.enum(['full', 'minimal', 'none']).default('minimal'),
     identityBootstrapMaxChars: z.number().default(20000),
@@ -384,6 +397,64 @@ const ConfigSchema = z.object({
             .default({ enabled: false }),
         })
         .default({}),
+      webSearch: z
+        .object({
+          enabled: z.boolean().default(true),
+          providers: z
+            .object({
+              order: z
+                .array(z.enum(['brave', 'perplexity', 'serpapi', 'duckduckgo']))
+                .default(['brave', 'serpapi', 'duckduckgo']),
+              brave: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  apiKey: z.string().optional(),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              perplexity: z
+                .object({
+                  enabled: z.boolean().default(false),
+                  apiKey: z.string().optional(),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              serpapi: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  apiKey: z.string().optional(),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              duckduckgo: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+            })
+            .default({}),
+          cache: z
+            .object({
+              enabled: z.boolean().default(true),
+              ttlSeconds: z.number().default(900),
+              maxEntries: z.number().default(5000),
+            })
+            .default({}),
+          budgets: z
+            .object({
+              maxQueriesPerDay: z.number().default(500),
+              perProviderDailyCaps: z.record(z.number()).default({}),
+            })
+            .default({}),
+          circuitBreaker: z
+            .object({
+              failureThreshold: z.number().default(5),
+              openSeconds: z.number().default(300),
+            })
+            .default({}),
+        })
+        .default({}),
       roaming: z
         .object({
           enabled: z.boolean().default(true),
@@ -452,6 +523,19 @@ const ConfigSchema = z.object({
                   workspace: z.string().optional(),
                   useProxy: z.boolean().optional(),
                   proxyBaseUrl: z.string().optional(),
+                  proactiveRefresh: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      intentMode: z.enum(['off', 'time_sensitive', 'always']).optional(),
+                      ttlSeconds: z.number().optional(),
+                      maxLatencyMs: z.number().optional(),
+                      marketLimit: z.number().optional(),
+                      intelLimit: z.number().optional(),
+                      webLimit: z.number().optional(),
+                      strictFailClosed: z.boolean().optional(),
+                      fundingSymbols: z.array(z.string()).optional(),
+                    })
+                    .default({}),
                   trivialTaskProvider: z.enum(['local', 'openai', 'anthropic']).optional(),
                   trivialTaskModel: z.string().optional(),
                   systemTools: z
@@ -504,6 +588,52 @@ const ConfigSchema = z.object({
                   pauseOnLossStreak: z.number().optional(),
                   dailyReportTime: z.string().optional(),
                   maxTradesPerScan: z.number().optional(),
+                  maxTradesPerDay: z.number().optional(),
+                  tradeCapBypassMinEdge: z.number().optional(),
+                  dailyDrawdownCapUsd: z.number().optional(),
+                  tradeContract: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      enforceExitFsm: z.boolean().optional(),
+                    })
+                    .optional(),
+                  tradeQuality: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      minSamples: z.number().optional(),
+                      blockBelowScore: z.number().optional(),
+                      downweightBelowScore: z.number().optional(),
+                      downweightMultiplier: z.number().optional(),
+                    })
+                    .optional(),
+                  signalPerformance: z
+                    .object({
+                      minSharpe: z.number().optional(),
+                      minSamples: z.number().optional(),
+                    })
+                    .optional(),
+                  calibrationRisk: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      minSamples: z.number().optional(),
+                      downweightBelowAccuracy: z.number().optional(),
+                      blockBelowAccuracy: z.number().optional(),
+                      downweightMultiplier: z.number().optional(),
+                      blockEnabled: z.boolean().optional(),
+                    })
+                    .optional(),
+                  newsEntry: z
+                    .object({
+                      minNoveltyScore: z.number().optional(),
+                      minMarketConfirmationScore: z.number().optional(),
+                      minLiquidityScore: z.number().optional(),
+                      minVolatilityScore: z.number().optional(),
+                      minSourceCount: z.number().optional(),
+                      thesisTtlMinutes: z.number().optional(),
+                      maxKellyFraction: z.number().optional(),
+                      sizeCapFraction: z.number().optional(),
+                    })
+                    .optional(),
                 })
                 .default({}),
             })
@@ -551,6 +681,61 @@ const ConfigSchema = z.object({
       pauseOnLossStreak: z.number().default(3),
       dailyReportTime: z.string().default('20:00'),
       maxTradesPerScan: z.number().default(3),
+      maxTradesPerDay: z.number().default(25),
+      tradeCapBypassMinEdge: z.number().default(0.12),
+      dailyDrawdownCapUsd: z.number().default(0),
+      tradeContract: z
+        .object({
+          enabled: z.boolean().default(false),
+          enforceExitFsm: z.boolean().default(false),
+        })
+        .default({}),
+      tradeQuality: z
+        .object({
+          enabled: z.boolean().default(false),
+          minSamples: z.number().default(12),
+          blockBelowScore: z.number().default(0.45),
+          downweightBelowScore: z.number().default(0.6),
+          downweightMultiplier: z.number().default(0.6),
+        })
+        .default({}),
+      discoverySelection: z
+        .object({
+          enabled: z.boolean().default(true),
+          fullUniverseWhenSymbolsEmpty: z.boolean().default(true),
+          preselectLimit: z.number().default(24),
+          minOpenInterestUsd: z.number().default(5_000_000),
+          minDayVolumeUsd: z.number().default(20_000_000),
+        })
+        .default({}),
+      signalPerformance: z
+        .object({
+          minSharpe: z.number().default(0.8),
+          minSamples: z.number().default(8),
+        })
+        .default({}),
+      calibrationRisk: z
+        .object({
+          enabled: z.boolean().default(true),
+          minSamples: z.number().default(12),
+          downweightBelowAccuracy: z.number().default(0.5),
+          blockBelowAccuracy: z.number().default(0.35),
+          downweightMultiplier: z.number().default(0.5),
+          blockEnabled: z.boolean().default(true),
+        })
+        .default({}),
+      newsEntry: z
+        .object({
+          minNoveltyScore: z.number().default(0.6),
+          minMarketConfirmationScore: z.number().default(0.55),
+          minLiquidityScore: z.number().default(0.4),
+          minVolatilityScore: z.number().default(0.25),
+          minSourceCount: z.number().default(1),
+          thesisTtlMinutes: z.number().default(120),
+          maxKellyFraction: z.number().default(0.25),
+          sizeCapFraction: z.number().default(0.5),
+        })
+        .default({}),
     })
     .default({}),
   heartbeat: z
@@ -576,6 +761,37 @@ const ConfigSchema = z.object({
           maxCallsPerHour: z.number().default(20),
         })
         .default({}),
+    })
+    .default({}),
+  tradeManagement: z
+    .object({
+      enabled: z.boolean().default(false),
+      defaults: z
+        .object({
+          stopLossPct: z.number().default(3.0),
+          takeProfitPct: z.number().default(5.0),
+          maxHoldHours: z.number().default(72),
+        })
+        .default({}),
+      bounds: z
+        .object({
+          stopLossPct: z
+            .object({ min: z.number().default(1.0), max: z.number().default(8.0) })
+            .default({}),
+          takeProfitPct: z
+            .object({ min: z.number().default(2.0), max: z.number().default(15.0) })
+            .default({}),
+          maxHoldHours: z
+            .object({ min: z.number().default(1), max: z.number().default(168) })
+            .default({}),
+        })
+        .default({}),
+      monitorIntervalSeconds: z.number().default(900),
+      activeMonitorIntervalSeconds: z.number().default(60),
+      useExchangeStops: z.boolean().default(true),
+      liquidationGuardDistanceBps: z.number().default(800),
+      closeRetryMinSeconds: z.number().default(30),
+      dustMaxRemainingNotionalUsd: z.number().default(0.5),
     })
     .default({}),
   notifications: z
@@ -699,6 +915,41 @@ const ConfigSchema = z.object({
               })
             )
             .default([]),
+        })
+        .default({}),
+      escalation: z
+        .object({
+          enabled: z.boolean().default(false),
+          channels: z.array(z.string()).default([]),
+          actionableReasons: z
+            .array(
+              z.enum([
+                'risk_breach',
+                'stop_failure',
+                'abnormal_slippage',
+                'high_conviction_setup',
+              ])
+            )
+            .default(['risk_breach', 'stop_failure', 'abnormal_slippage', 'high_conviction_setup']),
+          dedupeWindowSeconds: z.number().default(300),
+          cooldownSeconds: z.number().default(900),
+          severityChannels: z
+            .object({
+              info: z.array(z.string()).default([]),
+              warning: z.array(z.string()).default([]),
+              high: z.array(z.string()).default([]),
+              critical: z.array(z.string()).default([]),
+            })
+            .default({}),
+          llmEnrichment: z
+            .object({
+              enabled: z.boolean().default(false),
+              timeoutMs: z.number().default(2500),
+              maxTokens: z.number().default(140),
+              temperature: z.number().default(0.1),
+              maxChars: z.number().default(420),
+            })
+            .default({}),
         })
         .default({}),
     })

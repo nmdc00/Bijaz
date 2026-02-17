@@ -28,7 +28,12 @@ export function detectBlockers(execution: ToolExecution): DetectedBlocker[] {
 
   // Hyperliquid signer/account preconditions.
   if (
-    (tool === 'perp_positions' || tool === 'perp_open_orders' || tool === 'perp_place_order') &&
+    (
+      tool === 'perp_positions' ||
+      tool === 'perp_open_orders' ||
+      tool === 'get_open_orders' ||
+      tool === 'perp_place_order'
+    ) &&
     (msg.includes('private key not configured') ||
       msg.includes('missing hyperliquid_private_key') ||
       msg.includes('hyperliquid private key'))
@@ -46,7 +51,7 @@ export function detectBlockers(execution: ToolExecution): DetectedBlocker[] {
   }
 
   if (
-    (tool === 'perp_positions' || tool === 'perp_open_orders') &&
+    (tool === 'perp_positions' || tool === 'perp_open_orders' || tool === 'get_open_orders') &&
     (msg.includes('account address not configured') ||
       msg.includes('hyperliquid account address not configured'))
   ) {

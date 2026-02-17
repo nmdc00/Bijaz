@@ -75,5 +75,64 @@ describe('position heartbeat', () => {
     expect(closeCalls[0]!.input.reduce_only).toBe(true);
     expect(closeCalls[0]!.input.order_type).toBe('market');
   });
-});
 
+  it('does nothing when liquidation distance is safe', async () => {
+    const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
+    const toolExec = async (toolName: string, toolInput: Record<string, unknown>) => {
+      calls.push({ tool: toolName, input: toolInput });
+      if (toolName === 'get_positions') {
+        return {
+          success: true as const,
+          data: {
+            positions: [
+              {
+                symbol: 'BTC',
+                side: 'long',
+                size: 1,
+                unrealized_pnl: 10,
+                return_on_equity: 1,
+                liquidation_price: 50,
+              },
+            ],
+            summary: { account_value: 1000 },
+          },
+        };
+      }
+      return { success: false as const, error: `unexpected tool: ${toolName}` };
+    };
+
+    const config = {
+      execution: { mode: 'live', provider: 'hyperliquid' },
+      heartbeat: {
+        enabled: true,
+        tickIntervalSeconds: 1,
+        rollingBufferSize: 10,
+        triggers: {
+          pnlShiftPct: 1.5,
+          liquidationProximityPct: 5,
+          volatilitySpikePct: 2,
+          volatilitySpikeWindowTicks: 3,
+          timeCeilingMinutes: 15,
+          triggerCooldownSeconds: 180,
+        },
+      },
+    } as any;
+
+    const client = {
+      getAllMids: async () => ({ BTC: 100 }),
+    } as any;
+
+    const service = new PositionHeartbeatService(
+      config,
+      { config } as any,
+      new Logger('error'),
+      { client, toolExec: toolExec as any }
+    );
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
+  });
+});

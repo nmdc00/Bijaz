@@ -24,6 +24,15 @@ import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
 import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
+import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
+import { EscalationPolicyEngine } from './escalation.js';
+import {
+  createAlert,
+  markAlertSent,
+  recordAlertDelivery,
+  suppressAlert,
+} from '../memory/alerts.js';
+import { enrichEscalationMessage } from './alert_enrichment.js';
 
 const config = loadConfig();
 try {
@@ -53,6 +62,7 @@ if (!defaultAgent) {
 
 const telegram = config.channels.telegram.enabled ? new TelegramAdapter(config) : null;
 const whatsapp = config.channels.whatsapp.enabled ? new WhatsAppAdapter(config) : null;
+const escalationPolicy = new EscalationPolicyEngine(config.notifications?.escalation);
 
 for (const instance of agentRegistry.agents.values()) {
   instance.start();
@@ -87,6 +97,23 @@ const onIncoming = async (
     threadId?: string;
   }
 ) => {
+  let lastProgressMessage = '';
+  let lastProgressAt = 0;
+  const sendProgress = async (text: string): Promise<void> => {
+    if (!text || text.trim().length === 0) return;
+    if (message.channel !== 'telegram' || !telegram) return;
+    const now = Date.now();
+    if (text === lastProgressMessage) return;
+    if (now - lastProgressAt < 3_000) return;
+    lastProgressMessage = text;
+    lastProgressAt = now;
+    try {
+      await telegram.sendMessage(message.senderId, text);
+      logger.info(`Telegram progress sent to ${message.senderId}: ${text}`);
+    } catch (error) {
+      logger.warn(`Telegram progress failed for ${message.senderId}`, error);
+    }
+  };
   const { agentId, agent: activeAgent } = agentRegistry.resolveAgent(message);
   const sessionKey = buildAgentPeerSessionKey({
     agentId,
@@ -101,7 +128,7 @@ const onIncoming = async (
     baseSessionKey: sessionKey,
     threadId: message.threadId,
   }).sessionKey;
-  const replyRaw = await activeAgent.handleMessage(session, message.text);
+  const replyRaw = await activeAgent.handleMessage(session, message.text, sendProgress);
   const reply = stripIdentityIntro(replyRaw);
   if (!reply || reply.trim().length === 0) {
     logger.warn(`Empty reply for ${message.channel}:${message.senderId}`);
@@ -124,6 +151,14 @@ const onIncoming = async (
     }
   }
 };
+
+const schedulerSeed = config.memory?.dbPath ?? config.agent?.workspace ?? 'default';
+const schedulerNamespace = Buffer.from(schedulerSeed).toString('base64url').slice(0, 16);
+const scheduler = new SchedulerControlPlane({
+  ownerId: `gateway:${process.pid}:${schedulerNamespace}`,
+  pollIntervalMs: 1_000,
+});
+let hasSchedulerJobs = false;
 
 const briefingConfig = config.notifications?.briefing;
 let lastBriefingDate = '';
@@ -169,43 +204,37 @@ if (briefingConfig?.enabled) {
 }
 
 const intelFetchConfig = config.notifications?.intelFetch;
-let lastIntelFetchDate = '';
 if (intelFetchConfig?.enabled) {
-  setInterval(async () => {
-    const now = new Date();
-    const [hours, minutes] = intelFetchConfig.time.split(':').map((part) => Number(part));
-    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
-      return;
-    }
-    const today = now.toISOString().split('T')[0]!;
-    if (lastIntelFetchDate === today) {
-      return;
-    }
-    if (now.getHours() !== hours || now.getMinutes() !== minutes) {
-      return;
-    }
+  scheduler.registerJob(
+    {
+      name: `gateway:${schedulerNamespace}:intel`,
+      schedule: { kind: 'daily', time: intelFetchConfig.time },
+      leaseMs: 120_000,
+    },
+    async () => {
+      try {
+        const result = await runIntelPipelineDetailed(config);
+        logger.info(`Intel fetch stored ${result.storedCount} item(s).`);
 
-    try {
-      const result = await runIntelPipelineDetailed(config);
-      logger.info(`Intel fetch stored ${result.storedCount} item(s).`);
-
-      if (config.autonomy?.eventDriven) {
-        const minItems = config.autonomy?.eventDrivenMinItems ?? 1;
-        if (result.storedCount >= minItems) {
-          const scanResult = await defaultAgent.getAutonomous().runScan();
-          logger.info(`Event-driven scan: ${scanResult}`);
+        if (config.autonomy?.eventDriven) {
+          const minItems = config.autonomy?.eventDrivenMinItems ?? 1;
+          if (result.storedCount >= minItems) {
+            const scanResult = await defaultAgent.getAutonomous().runScan();
+            logger.info(`Event-driven scan: ${scanResult}`);
+          }
         }
-      }
 
-      const alertsConfig = config.notifications?.intelAlerts;
-      if (alertsConfig?.enabled && result.storedItems.length > 0) {
-        await sendIntelAlerts(result.storedItems, alertsConfig);
+        const alertsConfig = config.notifications?.intelAlerts;
+        if (alertsConfig?.enabled && result.storedItems.length > 0) {
+          await sendIntelAlerts(result.storedItems, alertsConfig);
+        }
+      } catch (error) {
+        logger.error('Intel fetch failed', error);
+        throw error;
       }
-    } catch (error) {
-      logger.error('Intel fetch failed', error);
     }
-    lastIntelFetchDate = today;
-  }, 60_000);
+  );
+  hasSchedulerJobs = true;
 }
 
 const marketSyncConfig = config.notifications?.marketSync;
@@ -420,112 +449,52 @@ if (heartbeatConfig?.enabled) {
     }
   };
 
-  setInterval(() => {
-    runHeartbeat().catch((error) => logger.error('Heartbeat failed', error));
-  }, intervalMs);
+  scheduler.registerJob(
+    {
+      name: `gateway:${schedulerNamespace}:heartbeat`,
+      schedule: { kind: 'interval', intervalMs },
+      leaseMs: Math.max(30_000, intervalMs),
+    },
+    async () => {
+      try {
+        await runHeartbeat();
+      } catch (error) {
+        logger.error('Heartbeat failed', error);
+        throw error;
+      }
+    }
+  );
+  hasSchedulerJobs = true;
+}
+
+if (hasSchedulerJobs) {
+  scheduler.start();
 }
 
 const mentatConfig = config.notifications?.mentat;
 if (mentatConfig?.enabled) {
   const llm = createLlmClient(config);
   const mentatMarketClient = createMarketClient(config);
-  if (!mentatMarketClient.isAvailable()) {
-    logger.warn('Mentat notifications disabled: market client not configured.');
-  } else {
-    const schedules =
-    mentatConfig.schedules && mentatConfig.schedules.length > 0
-      ? mentatConfig.schedules
-      : [
-          {
-            name: 'default',
-            time: mentatConfig.time,
-            intervalMinutes: mentatConfig.intervalMinutes,
-            channels: mentatConfig.channels,
-            system: mentatConfig.system,
-            marketQuery: mentatConfig.marketQuery,
-            marketLimit: mentatConfig.marketLimit,
-            intelLimit: mentatConfig.intelLimit,
-            minOverallScore: mentatConfig.minOverallScore,
-            minDeltaScore: mentatConfig.minDeltaScore,
-          },
-        ];
+  const escalationConfig = config.notifications?.escalation;
 
-  const lastMentatDateBySchedule = new Map<string, string>();
-  const lastMentatRunAtBySchedule = new Map<string, string>();
-
-  const runMentatMonitor = async (schedule: {
-    name?: string;
-    time?: string;
-    intervalMinutes?: number;
-    channels?: string[];
-    system?: string;
-    marketQuery?: string;
-    marketLimit?: number;
-    intelLimit?: number;
-    minOverallScore?: number;
-    minDeltaScore?: number;
-  }) => {
-    const { runMentatScan } = await import('../mentat/scan.js');
-    const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
-    const { listFragilityCardDeltas } = await import('../memory/mentat.js');
-
-    const system = schedule.system ?? mentatConfig.system ?? 'Markets';
-    const marketQuery = schedule.marketQuery ?? mentatConfig.marketQuery;
-    const marketLimit = schedule.marketLimit ?? mentatConfig.marketLimit;
-    const intelLimit = schedule.intelLimit ?? mentatConfig.intelLimit;
-    const minOverallScore = schedule.minOverallScore ?? mentatConfig.minOverallScore ?? 0.7;
-    const minDeltaScore = schedule.minDeltaScore ?? mentatConfig.minDeltaScore ?? 0.15;
-    const scheduleId = schedule.name ?? `${system}-${marketQuery ?? 'all'}`;
-
-    const scan = await runMentatScan({
-      system,
-      llm,
-      config,
-      marketClient: mentatMarketClient,
-      marketQuery,
-      limit: marketLimit,
-      intelLimit,
-    });
-
-    const report = generateMentatReport({
-      system: scan.system,
-      detectors: scan.detectors,
-    });
-    const reportText = formatMentatReport(report);
-
-    const deltas = listFragilityCardDeltas({ limit: 100 })
-      .filter((delta) => {
-        const lastRunAt = lastMentatRunAtBySchedule.get(scheduleId);
-        return lastRunAt ? delta.changedAt > lastRunAt : true;
-      });
-    const maxDelta = deltas.reduce((max, delta) => {
-      const value = delta.scoreDelta ?? 0;
-      return value > max ? value : max;
-    }, 0);
-
-    const triggerOverall = (report.fragilityScore ?? 0) >= minOverallScore;
-    const triggerDelta = maxDelta >= minDeltaScore;
-    if (!(triggerOverall || triggerDelta)) {
-      lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());
-      return;
-    }
-
-    const fragilityScore = report.fragilityScore ?? 0;
-    const header = `⚠️ Mentat Alert: ${scan.system}\n` +
-      `Fragility Score: ${(fragilityScore * 100).toFixed(1)}%\n` +
-      `Max Score Delta: ${(maxDelta * 100).toFixed(1)}%`;
-    const message = `${header}\n\n${reportText}`;
-
-    const channels = (schedule.channels && schedule.channels.length > 0)
-      ? schedule.channels
-      : (mentatConfig.channels ?? []);
+  const sendMentatMessage = async (
+    channels: string[],
+    message: string
+  ): Promise<Array<{ channel: string; status: 'sent' | 'failed'; error?: string }>> => {
+    const outcomes: Array<{ channel: string; status: 'sent' | 'failed'; error?: string }> = [];
     if (channels.includes('telegram') && telegram) {
       for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
         try {
           await telegram.sendMessage(String(chatId), message);
           logger.info(`Telegram mentat alert sent to ${chatId}`);
+          outcomes.push({ channel: 'telegram', status: 'sent' });
         } catch (error) {
           logger.error(`Telegram mentat alert failed for ${chatId}`, error);
+          outcomes.push({
+            channel: 'telegram',
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
@@ -534,43 +503,239 @@ if (mentatConfig?.enabled) {
         try {
           await whatsapp.sendMessage(number, message);
           logger.info(`WhatsApp mentat alert sent to ${number}`);
+          outcomes.push({ channel: 'whatsapp', status: 'sent' });
         } catch (error) {
           logger.error(`WhatsApp mentat alert failed for ${number}`, error);
+          outcomes.push({
+            channel: 'whatsapp',
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
-
-    lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());
+    return outcomes;
   };
 
-    for (const schedule of schedules) {
-    if (schedule.intervalMinutes && schedule.intervalMinutes > 0) {
-      setInterval(() => {
-        runMentatMonitor(schedule).catch((error) => logger.error('Mentat monitor failed', error));
-      }, schedule.intervalMinutes * 60 * 1000);
-      continue;
-    }
+  if (!mentatMarketClient.isAvailable()) {
+    logger.warn('Mentat notifications disabled: market client not configured.');
+  } else {
+    const schedules =
+      mentatConfig.schedules && mentatConfig.schedules.length > 0
+        ? mentatConfig.schedules
+        : [
+            {
+              name: 'default',
+              time: mentatConfig.time,
+              intervalMinutes: mentatConfig.intervalMinutes,
+              channels: mentatConfig.channels,
+              system: mentatConfig.system,
+              marketQuery: mentatConfig.marketQuery,
+              marketLimit: mentatConfig.marketLimit,
+              intelLimit: mentatConfig.intelLimit,
+              minOverallScore: mentatConfig.minOverallScore,
+              minDeltaScore: mentatConfig.minDeltaScore,
+            },
+          ];
 
-    setInterval(() => {
-      const now = new Date();
-      const time = schedule.time ?? mentatConfig.time;
-      if (!time) return;
-      const [hours, minutes] = time.split(':').map((part) => Number(part));
-      if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    const lastMentatDateBySchedule = new Map<string, string>();
+    const lastMentatRunAtBySchedule = new Map<string, string>();
+
+    const runMentatMonitor = async (schedule: {
+      name?: string;
+      time?: string;
+      intervalMinutes?: number;
+      channels?: string[];
+      system?: string;
+      marketQuery?: string;
+      marketLimit?: number;
+      intelLimit?: number;
+      minOverallScore?: number;
+      minDeltaScore?: number;
+    }) => {
+      const { runMentatScan } = await import('../mentat/scan.js');
+      const { generateMentatReport, formatMentatReport } = await import('../mentat/report.js');
+      const { listFragilityCardDeltas } = await import('../memory/mentat.js');
+
+      const system = schedule.system ?? mentatConfig.system ?? 'Markets';
+      const marketQuery = schedule.marketQuery ?? mentatConfig.marketQuery;
+      const marketLimit = schedule.marketLimit ?? mentatConfig.marketLimit;
+      const intelLimit = schedule.intelLimit ?? mentatConfig.intelLimit;
+      const minOverallScore = schedule.minOverallScore ?? mentatConfig.minOverallScore ?? 0.7;
+      const minDeltaScore = schedule.minDeltaScore ?? mentatConfig.minDeltaScore ?? 0.15;
+      const scheduleId = schedule.name ?? `${system}-${marketQuery ?? 'all'}`;
+
+      const scan = await runMentatScan({
+        system,
+        llm,
+        config,
+        marketClient: mentatMarketClient,
+        marketQuery,
+        limit: marketLimit,
+        intelLimit,
+      });
+
+      const report = generateMentatReport({
+        system: scan.system,
+        detectors: scan.detectors,
+      });
+      const reportText = formatMentatReport(report);
+
+      const deltas = listFragilityCardDeltas({ limit: 100 }).filter((delta) => {
+        const lastRunAt = lastMentatRunAtBySchedule.get(scheduleId);
+        return lastRunAt ? delta.changedAt > lastRunAt : true;
+      });
+      const maxDelta = deltas.reduce((max, delta) => {
+        const value = delta.scoreDelta ?? 0;
+        return value > max ? value : max;
+      }, 0);
+
+      const triggerOverall = (report.fragilityScore ?? 0) >= minOverallScore;
+      const triggerDelta = maxDelta >= minDeltaScore;
+      if (!(triggerOverall || triggerDelta)) {
+        lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());
         return;
       }
-      const today = now.toISOString().split('T')[0]!;
-      const scheduleId = schedule.name ?? `${schedule.system ?? mentatConfig.system ?? 'system'}-${schedule.marketQuery ?? 'all'}`;
-      const lastDate = lastMentatDateBySchedule.get(scheduleId);
-      if (lastDate === today) {
-        return;
+
+      const fragilityScore = report.fragilityScore ?? 0;
+      const header =
+        `⚠️ Mentat Alert: ${scan.system}\n` +
+        `Fragility Score: ${(fragilityScore * 100).toFixed(1)}%\n` +
+        `Max Score Delta: ${(maxDelta * 100).toFixed(1)}%`;
+      const message = `${header}\n\n${reportText}`;
+      const channels =
+        schedule.channels && schedule.channels.length > 0
+          ? schedule.channels
+          : (mentatConfig.channels ?? []);
+
+      const enrichAlert = async (baseMessage: string, severity: 'high' | 'critical') =>
+        enrichEscalationMessage({
+          llm,
+          baseMessage,
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          config: escalationConfig?.llmEnrichment,
+          onFallback: (error) => {
+            logger.warn('Alert LLM enrichment failed; sending mechanical fallback', {
+              source: `mentat:${scheduleId}`,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
+
+      if (escalationConfig?.enabled) {
+        const severity =
+          fragilityScore >= Math.max(minOverallScore + 0.1, 0.9) ||
+          maxDelta >= Math.max(minDeltaScore + 0.15, 0.3)
+            ? 'critical'
+            : 'high';
+        const decision = escalationPolicy.evaluate({
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          dedupeKey: `mentat:${scheduleId}:high_conviction_setup`,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          message,
+        });
+        const alertId = createAlert({
+          dedupeKey: decision.dedupeKey,
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          message: decision.message,
+          metadata: {
+            scheduleId,
+            fragilityScore,
+            maxDelta,
+          },
+        });
+        if (decision.shouldSend) {
+          const enrichedMessage = await enrichAlert(decision.message, severity);
+          const outcomes = await sendMentatMessage(decision.channels, enrichedMessage);
+          let hasSent = false;
+          for (const outcome of outcomes) {
+            recordAlertDelivery({
+              alertId,
+              channel: outcome.channel,
+              status: outcome.status,
+              error: outcome.error ?? null,
+            });
+            if (outcome.status === 'sent') {
+              hasSent = true;
+            }
+          }
+          if (hasSent) {
+            markAlertSent({
+              alertId,
+              reasonCode: 'delivery_success',
+              metadata: { channels: decision.channels },
+            });
+          }
+        } else {
+          suppressAlert({
+            alertId,
+            reasonCode: decision.suppressionReason ?? 'unknown',
+            metadata: {
+              channels: decision.channels,
+            },
+          });
+          logger.info(`Escalation suppressed (${decision.suppressionReason ?? 'unknown'})`, {
+            dedupeKey: decision.dedupeKey,
+            source: `mentat:${scheduleId}`,
+          });
+        }
+      } else {
+        const severity =
+          fragilityScore >= Math.max(minOverallScore + 0.1, 0.9) ||
+          maxDelta >= Math.max(minDeltaScore + 0.15, 0.3)
+            ? 'critical'
+            : 'high';
+        const enrichedMessage = await enrichAlert(message, severity);
+        await sendMentatMessage(channels, enrichedMessage);
       }
-      if (now.getHours() !== hours || now.getMinutes() !== minutes) {
-        return;
+
+      lastMentatRunAtBySchedule.set(scheduleId, new Date().toISOString());
+    };
+
+    for (const schedule of schedules) {
+      if (schedule.intervalMinutes && schedule.intervalMinutes > 0) {
+        setInterval(() => {
+          runMentatMonitor(schedule).catch((error) => logger.error('Mentat monitor failed', error));
+        }, schedule.intervalMinutes * 60 * 1000);
+        continue;
       }
-      runMentatMonitor(schedule).catch((error) => logger.error('Mentat monitor failed', error));
-      lastMentatDateBySchedule.set(scheduleId, today);
-    }, 60_000);
+
+      setInterval(() => {
+        const now = new Date();
+        const time = schedule.time ?? mentatConfig.time;
+        if (!time) return;
+        const [hours, minutes] = time.split(':').map((part) => Number(part));
+        if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+          return;
+        }
+        const today = now.toISOString().split('T')[0]!;
+        const scheduleId =
+          schedule.name ??
+          `${schedule.system ?? mentatConfig.system ?? 'system'}-${schedule.marketQuery ?? 'all'}`;
+        const lastDate = lastMentatDateBySchedule.get(scheduleId);
+        if (lastDate === today) {
+          return;
+        }
+        if (now.getHours() !== hours || now.getMinutes() !== minutes) {
+          return;
+        }
+        runMentatMonitor(schedule).catch((error) => logger.error('Mentat monitor failed', error));
+        lastMentatDateBySchedule.set(scheduleId, today);
+      }, 60_000);
     }
   }
 }

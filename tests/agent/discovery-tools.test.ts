@@ -13,6 +13,7 @@ describe('discovery tools', () => {
     expect(names).toContain('signal_cross_asset_divergence');
     expect(names).toContain('signal_hyperliquid_funding_oi_skew');
     expect(names).toContain('signal_hyperliquid_orderflow_imbalance');
+    expect(names).toContain('discovery_select_markets');
     expect(names).toContain('discovery_run');
   });
 });

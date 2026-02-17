@@ -7,9 +7,10 @@
  */
 
 import type { ChatMessage } from '../../core/llm.js';
-import type { PlanStep } from '../planning/types.js';
+import type { AgentPlan, PlanStep } from '../planning/types.js';
 import type { CriticContext, TradeFragilityContext } from '../critic/types.js';
 import type { ToolExecution } from '../tools/types.js';
+import type { Reflection } from '../reflection/types.js';
 import type {
   AgentState,
   OrchestratorContext,
@@ -50,6 +51,141 @@ import {
   shouldContinue,
   toToolExecutionContext,
 } from './state.js';
+
+const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
+const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
+
+function isNoTradeDecisionStep(step: PlanStep): boolean {
+  return !step.requiresTool && step.description.trim().startsWith(NO_TRADE_DECISION_PREFIX);
+}
+
+function isTerminalTradeStep(step: PlanStep): boolean {
+  return (
+    (step.requiresTool && !!step.toolName && TERMINAL_TRADE_TOOLS.has(step.toolName)) ||
+    isNoTradeDecisionStep(step)
+  );
+}
+
+function hasTerminalTradeStep(plan: AgentPlan): boolean {
+  return plan.steps.some((step) => isTerminalTradeStep(step));
+}
+
+function hasPendingTerminalTradeStep(plan: AgentPlan): boolean {
+  return plan.steps.some((step) => step.status === 'pending' && isTerminalTradeStep(step));
+}
+
+function nextInjectedStepId(plan: AgentPlan, base: string): string {
+  let counter = 1;
+  let id = `${base}-${counter}`;
+  const existing = new Set(plan.steps.map((step) => step.id));
+  while (existing.has(id)) {
+    counter += 1;
+    id = `${base}-${counter}`;
+  }
+  return id;
+}
+
+function buildAutonomousTradeFallbackSteps(
+  plan: AgentPlan,
+  toolRegistry: OrchestratorContext['toolRegistry']
+): PlanStep[] {
+  const available = new Set(toolRegistry.listNames());
+  const steps: PlanStep[] = [];
+  const deps: string[] = [];
+
+  if (available.has('get_portfolio')) {
+    const id = nextInjectedStepId(plan, 'autonomous-get-portfolio');
+    steps.push({
+      id,
+      description: 'Autonomous fallback: refresh portfolio before terminal trade action',
+      requiresTool: true,
+      toolName: 'get_portfolio',
+      toolInput: {},
+      status: 'pending',
+    });
+    deps.push(id);
+  }
+
+  if (available.has('get_open_orders')) {
+    const id = nextInjectedStepId(plan, 'autonomous-get-open-orders');
+    steps.push({
+      id,
+      description: 'Autonomous fallback: refresh open orders before terminal trade action',
+      requiresTool: true,
+      toolName: 'get_open_orders',
+      toolInput: {},
+      status: 'pending',
+      dependsOn: deps.length > 0 ? [...deps] : undefined,
+    });
+    deps.push(id);
+  }
+
+  if (available.has('perp_place_order')) {
+    const id = nextInjectedStepId(plan, 'autonomous-perp-place-order');
+    steps.push({
+      id,
+      description: 'Autonomous fallback terminal action: place a perp order',
+      requiresTool: true,
+      toolName: 'perp_place_order',
+      toolInput: {
+        symbol: 'to_be_determined',
+        side: 'to_be_determined',
+        size: 'to_be_determined',
+        order_type: 'to_be_determined',
+        price: 'to_be_determined',
+      },
+      status: 'pending',
+      dependsOn: deps.length > 0 ? [...deps] : undefined,
+    });
+  }
+
+  return steps;
+}
+
+function enforceTradeTerminalContract(
+  state: AgentState,
+  ctx: OrchestratorContext,
+  reason: string
+): AgentState {
+  if (state.mode !== 'trade' || !state.plan) {
+    return state;
+  }
+  if (hasTerminalTradeStep(state.plan)) {
+    return state;
+  }
+
+  const injectedSteps = buildAutonomousTradeFallbackSteps(state.plan, ctx.toolRegistry);
+  if (injectedSteps.length === 0) {
+    return addWarning(
+      state,
+      `Trade terminal contract not enforced (${reason}): no fallback tools available`
+    );
+  }
+
+  let nextState = setPlan(state, {
+    ...state.plan,
+    steps: [...state.plan.steps, ...injectedSteps],
+    updatedAt: new Date().toISOString(),
+  });
+  nextState = addWarning(
+    nextState,
+    `Trade terminal contract enforced (${reason}); injected ${injectedSteps.length} fallback step(s)`
+  );
+  return nextState;
+}
+
+function shouldReviseAfterReflection(reflection: Reflection, execution: ToolExecution): boolean {
+  if (!reflection.suggestRevision) {
+    return false;
+  }
+  if (!execution.result.success) {
+    return true;
+  }
+  const reason = (reflection.revisionReason ?? '').toLowerCase();
+  return /(failed|error|unexpected|mismatch|invalid|missing|insufficient|blocked|no data)/.test(
+    reason
+  );
+}
 
 function formatRecentIncidentsForContext(goal: string, mode: string): string | null {
   // Keep it small and high-signal; this is for planning, not logging.
@@ -271,19 +407,123 @@ async function retrieveQmdContext(
 /**
  * System prompt for synthesis.
  */
-const SYNTHESIS_SYSTEM_PROMPT = `You are synthesizing a response for a mentat-style perp market analyst.
+const SYNTHESIS_SYSTEM_PROMPT = `You are synthesizing a response for an autonomous perp trader.
 
 Based on the tool results and analysis provided, generate a clear, actionable response.
 
 ## Rules
 
-1. **Cite Evidence**: Reference specific tool results, not assumptions.
-2. **State Confidence**: Be clear about certainty levels.
-3. **Note Assumptions**: Explicitly state key assumptions.
-4. **Identify Risks**: For trading recommendations, highlight tail risks.
-5. **Be Concise**: Respect the user's time.
+1. **Action first**: If you executed a trade or tool, state what happened immediately.
+2. **Be terse**: 3-10 lines for routine updates. No walls of text.
+3. **Cite evidence**: Reference specific tool results, not assumptions.
+4. **State confidence**: Be clear about certainty levels.
+5. **No permission-seeking**: Never ask the user for their risk tolerance, time horizon, or preferences. You are autonomous — you decide and act.
+6. **CRITICAL — You ARE connected to live tools**: You have full access to perp_place_order, get_portfolio, get_positions, perp_cancel_order, and all other trading tools. The orchestrator executes them on your behalf. NEVER say "I don't have live tools", "I can't execute", "tools aren't wired", or "I'm not connected". If a tool call failed, report the specific error. If no tool was called, that means the plan didn't include it — not that tools are unavailable.
+7. **Trade, don't talk about trading**: If the user wants you to trade, your response should report what you traded (or why a specific tool call failed), not describe what you "would" do hypothetically.
+8. **Ownership voice**: Speak as the autonomous operator of the managed trading book. Use first person ("I opened", "I reduced", "my position"). Avoid framing trade decisions as user-owned ("your position", "if you want").
+9. **Trade response contract**: In trade mode, always use this exact structure:
+Action: ...
+Book State: ...
+Risk: ...
+Next Action: ...
 
 Respond directly to the user's goal. Do not explain your reasoning process unless asked.`;
+
+function buildTradeBookState(state: AgentState): string {
+  const latestPortfolio = [...state.toolExecutions]
+    .reverse()
+    .find((t) => t.toolName === 'get_portfolio' && t.result.success);
+  if (latestPortfolio) {
+    const data = (latestPortfolio.result as { success: true; data: Record<string, unknown> }).data;
+    const available =
+      (data.available_balance as number | string | undefined) ??
+      (data.availableBalance as number | string | undefined) ??
+      (data.free_usdc as number | string | undefined);
+    if (available !== undefined) {
+      return `I am managing the book with available collateral ${String(available)} (latest portfolio snapshot).`;
+    }
+    return 'I am managing the book from the latest portfolio snapshot.';
+  }
+
+  const latestPositions = [...state.toolExecutions]
+    .reverse()
+    .find((t) => t.toolName === 'get_positions' && t.result.success);
+  if (latestPositions) {
+    return 'I am managing the book from the latest positions snapshot.';
+  }
+
+  return 'I am managing the book with no fresh portfolio snapshot in this cycle.';
+}
+
+function buildTradeActionSummary(state: AgentState): string {
+  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  if (tradeAttempts.length === 0) {
+    return 'I did not place a new perp order in this cycle.';
+  }
+
+  const successes = tradeAttempts.filter((t) => t.result.success);
+  if (successes.length > 0) {
+    return `I executed ${successes.length} perp order(s).`;
+  }
+
+  const lastError = (
+    tradeAttempts[tradeAttempts.length - 1]?.result as { success: false; error: string } | undefined
+  )?.error;
+  return `I did not execute a new perp order. Last perp_place_order failed${lastError ? `: ${lastError}` : '.'}`;
+}
+
+function buildTradeRiskSummary(state: AgentState): string {
+  const lastTrade = [...state.toolExecutions]
+    .reverse()
+    .find((t) => t.toolName === 'perp_place_order');
+  if (lastTrade?.result.success) {
+    return 'Execution risk is currently controlled, but book-level liquidation and volatility risk remain active.';
+  }
+  if (lastTrade && !lastTrade.result.success) {
+    const err = (lastTrade.result as { success: false; error: string }).error;
+    return `Primary risk is execution reliability until this blocker is resolved (${err}).`;
+  }
+  return 'Primary risk is position and collateral drift without fresh execution.';
+}
+
+function buildTradeNextActionSummary(state: AgentState): string {
+  const lastTrade = [...state.toolExecutions]
+    .reverse()
+    .find((t) => t.toolName === 'perp_place_order');
+  if (lastTrade?.result.success) {
+    return 'I will monitor positions and open orders, then rebalance or de-risk automatically on the next cycle.';
+  }
+  if (lastTrade && !lastTrade.result.success) {
+    return 'I will retry with validated inputs and current market/account state in the next autonomous cycle.';
+  }
+  return 'I will continue autonomous monitoring and execute the next valid trade action when constraints allow.';
+}
+
+function enforceTradeResponseContract(response: string, state: AgentState): string {
+  if (state.mode !== 'trade') {
+    return response;
+  }
+
+  const deterministicAction = `Action: ${buildTradeActionSummary(state)}`;
+  const hasContractShape =
+    /\bAction:\s*/i.test(response) &&
+    /\bBook State:\s*/i.test(response) &&
+    /\bRisk:\s*/i.test(response) &&
+    /\bNext Action:\s*/i.test(response);
+  if (hasContractShape) {
+    return response
+      .split('\n')
+      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
+      .join('\n');
+  }
+
+  return [
+    deterministicAction,
+    `Book State: ${buildTradeBookState(state)}`,
+    `Risk: ${buildTradeRiskSummary(state)}`,
+    `Next Action: ${buildTradeNextActionSummary(state)}`,
+  ].join('\n');
+}
 
 /**
  * Run the orchestrator for a goal.
@@ -398,6 +638,7 @@ export async function runOrchestrator(
       );
 
       state = updatePlan(state, planResult.plan, planResult.reasoning);
+      state = enforceTradeTerminalContract(state, ctx, 'initial_plan');
 
       if (planResult.warnings.length > 0) {
         for (const warning of planResult.warnings) {
@@ -425,6 +666,7 @@ export async function runOrchestrator(
 
   // Track fragility scan results for trades
   let tradeFragilityScan: QuickFragilityScan | null = null;
+  let consecutiveNonTerminalTradeToolSteps = 0;
 
   while (shouldContinue(state).continue && state.iteration < maxIterations) {
     state = incrementIteration(state);
@@ -440,6 +682,45 @@ export async function runOrchestrator(
         state = setPlan(state, { ...state.plan, complete: true });
       }
       break;
+    }
+
+    if (state.mode === 'trade' && state.plan) {
+      if (isTerminalTradeStep(nextStep)) {
+        consecutiveNonTerminalTradeToolSteps = 0;
+      } else if (nextStep.requiresTool) {
+        consecutiveNonTerminalTradeToolSteps += 1;
+        if (
+          consecutiveNonTerminalTradeToolSteps > 3 &&
+          !hasPendingTerminalTradeStep(state.plan)
+        ) {
+          const currentStepId = nextStep.id;
+          const skipped = state.plan.steps.map((step) => {
+            if (step.id === currentStepId) {
+              return step;
+            }
+            if (step.status === 'pending' && !isTerminalTradeStep(step)) {
+              return { ...step, status: 'skipped' as const };
+            }
+            return step;
+          });
+          state = setPlan(state, {
+            ...state.plan,
+            steps: skipped,
+            updatedAt: new Date().toISOString(),
+          });
+          state = enforceTradeTerminalContract(
+            state,
+            ctx,
+            'progress_guard_non_terminal_steps'
+          );
+          state = addWarning(
+            state,
+            'Progress guard skipped pending non-terminal steps and forced terminal trade action'
+          );
+          consecutiveNonTerminalTradeToolSteps = 0;
+          ctx.onUpdate?.(state);
+        }
+      }
     }
 
     // Execute tool if step requires it
@@ -552,7 +833,11 @@ export async function runOrchestrator(
         reflectionState = applyReflection(reflectionState, reflection, toolContext);
 
         // Check if reflection suggests plan revision
-        if (reflection.suggestRevision && state.plan && state.plan.revisionCount < 3) {
+        if (
+          shouldReviseAfterReflection(reflection, execution) &&
+          state.plan &&
+          state.plan.revisionCount < 3
+        ) {
           const revisionResult = await revisePlan(ctx.llm, {
             plan: state.plan,
             reason: 'tool_result_unexpected',
@@ -562,6 +847,7 @@ export async function runOrchestrator(
           });
 
           state = setPlan(state, revisionResult.plan);
+          state = enforceTradeTerminalContract(state, ctx, 'plan_revision');
           for (const change of revisionResult.changes) {
             state = addWarning(state, `Plan revised: ${change}`);
           }
@@ -646,17 +932,21 @@ export async function runOrchestrator(
       criticResult = await runCritic(ctx.llm, criticContext);
 
       // If critic provided a revised response, use it
-      const finalResponse = criticResult.revisedResponse ?? response;
+      let finalResponse = criticResult.revisedResponse ?? response;
+      if (!criticResult.approved && !criticResult.revisedResponse) {
+        finalResponse = buildCriticFailureFallbackResponse(state, response);
+      }
+      finalResponse = enforceTradeResponseContract(finalResponse, state);
       state = completeState(state, finalResponse, criticResult);
     } catch (error) {
       state = addWarning(
         state,
         `Critic failed: ${error instanceof Error ? error.message : 'Unknown'}`
       );
-      state = completeState(state, response);
+      state = completeState(state, enforceTradeResponseContract(response, state));
     }
   } else {
-    state = completeState(state, response);
+    state = completeState(state, enforceTradeResponseContract(response, state));
   }
 
   ctx.onUpdate?.(state);
@@ -832,15 +1122,287 @@ async function runPreTradeFragilityScan(
 }
 
 /**
+ * Detect whether tool input contains placeholder values that need LLM resolution.
+ * GPT often generates plans with placeholder strings like "to_be_set_based_on_step_9".
+ */
+function hasPlaceholderInputs(input: Record<string, unknown>): boolean {
+  const PLACEHOLDER_PATTERNS = [
+    /to_be_/i,
+    /to_be_determined/i,
+    /to_be_set/i,
+    /based_on_step/i,
+    /TBD/i,
+    /placeholder/i,
+    /\{.*step.*\}/i,
+    /FILL_IN/i,
+  ];
+  for (const value of Object.values(input)) {
+    if (typeof value === 'string') {
+      for (const pattern of PLACEHOLDER_PATTERNS) {
+        if (pattern.test(value)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+const VALID_EXIT_MODES = new Set([
+  'thesis_invalidation',
+  'take_profit',
+  'time_exit',
+  'risk_reduction',
+  'manual',
+  'unknown',
+]);
+
+function mapExitModeAlias(raw: string): string {
+  if (
+    raw.includes('thesis') ||
+    raw.includes('invalid') ||
+    raw.includes('stop') ||
+    raw.includes('cut')
+  ) {
+    return 'thesis_invalidation';
+  }
+  if (raw === 'tp' || raw.includes('profit')) {
+    return 'take_profit';
+  }
+  if (raw.includes('time')) {
+    return 'time_exit';
+  }
+  if (
+    raw.includes('liquid') ||
+    raw.includes('probe') ||
+    raw.includes('de-risk') ||
+    raw.includes('risk') ||
+    raw.includes('emergency')
+  ) {
+    return 'risk_reduction';
+  }
+  if (raw.includes('manual') || raw.includes('discretion')) {
+    return 'manual';
+  }
+  if (raw.includes('unknown')) {
+    return 'unknown';
+  }
+  return 'risk_reduction';
+}
+
+export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Record<string, unknown> {
+  const normalized = { ...input };
+
+  if (typeof normalized.side === 'string') {
+    normalized.side = normalized.side.toLowerCase().trim();
+  }
+  if (typeof normalized.order_type === 'string') {
+    normalized.order_type = normalized.order_type.toLowerCase().trim();
+  }
+
+  // Coerce numeric fields that often arrive as strings from planner/revision LLM output.
+  if (typeof normalized.size === 'string') {
+    const parsed = Number(normalized.size);
+    if (!Number.isNaN(parsed)) {
+      normalized.size = parsed;
+    }
+  }
+  if (typeof normalized.price === 'string') {
+    const parsed = Number(normalized.price);
+    if (!Number.isNaN(parsed)) {
+      normalized.price = parsed;
+    }
+  }
+  if (typeof normalized.leverage === 'string') {
+    const parsed = Number(normalized.leverage);
+    if (!Number.isNaN(parsed)) {
+      normalized.leverage = parsed;
+    }
+  }
+  if (typeof normalized.reduce_only === 'string') {
+    const value = normalized.reduce_only.toLowerCase().trim();
+    if (value === 'true') normalized.reduce_only = true;
+    if (value === 'false') normalized.reduce_only = false;
+  }
+  if (typeof normalized.thesis_invalidation_hit === 'string') {
+    const value = normalized.thesis_invalidation_hit.toLowerCase().trim();
+    if (value === 'true') normalized.thesis_invalidation_hit = true;
+    if (value === 'false') normalized.thesis_invalidation_hit = false;
+  }
+
+  // Ensure a positive minimal size so schema validation doesn't fail before execution.
+  const numericSize =
+    typeof normalized.size === 'number'
+      ? normalized.size
+      : typeof normalized.size === 'string'
+        ? Number(normalized.size)
+        : NaN;
+  if (!Number.isFinite(numericSize) || numericSize <= 0) {
+    normalized.size = 0.001;
+  }
+
+  // LLM-generated limit prices frequently fail exchange tick-size constraints.
+  // Default to market for autonomous execution reliability unless a higher layer overrides this.
+  normalized.order_type = 'market';
+  delete normalized.price;
+
+  const reduceOnly = normalized.reduce_only === true;
+  if (typeof normalized.exit_mode === 'string') {
+    const candidate = normalized.exit_mode.toLowerCase().trim();
+    normalized.exit_mode = VALID_EXIT_MODES.has(candidate) ? candidate : mapExitModeAlias(candidate);
+  } else if (normalized.exit_mode != null) {
+    delete normalized.exit_mode;
+  }
+  if (reduceOnly && normalized.exit_mode === 'thesis_invalidation') {
+    normalized.thesis_invalidation_hit = true;
+  }
+
+  if (normalized.side !== 'buy' && normalized.side !== 'sell') {
+    normalized.side = 'buy';
+  }
+
+  return normalized;
+}
+
+function buildCriticFailureFallbackResponse(state: AgentState, originalResponse: string): string {
+  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  if (tradeAttempts.length === 0) {
+    return originalResponse;
+  }
+
+  const successfulTrades = tradeAttempts.filter((t) => t.result.success);
+  const failedTrades = tradeAttempts.filter((t) => !t.result.success);
+
+  if (successfulTrades.length > 0) {
+    const lines: string[] = [];
+    lines.push(`Action: Executed ${successfulTrades.length} perp order(s).`);
+    if (failedTrades.length > 0) {
+      const lastErr = (failedTrades[failedTrades.length - 1]?.result as { error?: string } | undefined)?.error;
+      lines.push(
+        `Partial failures: ${failedTrades.length} additional attempt(s) failed${lastErr ? ` (last error: ${lastErr})` : ''}.`
+      );
+    }
+    return lines.join('\n');
+  }
+
+  const lastError = (failedTrades[failedTrades.length - 1]?.result as { error?: string } | undefined)?.error;
+  const toolList = state.toolExecutions
+    .map((t) => `${t.toolName}[${t.result.success ? 'ok' : 'err'}]`)
+    .join(', ');
+  return [
+    'Action: No trade was executed.',
+    `perp_place_order failed ${failedTrades.length} time(s)${lastError ? `; last error: ${lastError}` : '.'}`,
+    `Tools run: ${toolList}`,
+  ].join('\n');
+}
+
+/**
+ * Build context from completed plan steps for dynamic input resolution.
+ */
+function buildCompletedStepContext(state: AgentState): string {
+  if (!state.plan) return '';
+  const completed = state.plan.steps.filter((s) => s.status === 'complete' && s.result);
+  if (completed.length === 0) return '';
+
+  const lines: string[] = ['Previously completed steps and their results:'];
+  for (const step of completed) {
+    lines.push(`\n### Step ${step.id}: ${step.description}`);
+    if (step.toolName) lines.push(`Tool: ${step.toolName}`);
+    const resultData = (step.result as { success?: boolean; data?: unknown })?.data;
+    if (resultData) {
+      const json = JSON.stringify(resultData, null, 2);
+      // Truncate large results
+      lines.push(`Result: ${json.length > 2000 ? json.slice(0, 2000) + '...' : json}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Ask the LLM to resolve concrete tool inputs based on completed step results.
+ */
+async function resolveToolInputs(
+  step: PlanStep,
+  state: AgentState,
+  ctx: OrchestratorContext
+): Promise<Record<string, unknown>> {
+  const completedContext = buildCompletedStepContext(state);
+
+  // Try to get schema info for the LLM prompt (best-effort)
+  let schemaHint = `Tool: ${step.toolName}`;
+  try {
+    const schemas = ctx.toolRegistry.getLlmSchemas?.();
+    const match = schemas?.find((s: { name: string }) => s.name === step.toolName);
+    if (match) {
+      schemaHint = `Tool "${step.toolName}" accepts these parameters (JSON schema): ${JSON.stringify(match.input_schema)}`;
+    }
+  } catch {
+    // Ignore schema lookup failures
+  }
+
+  const prompt = `You are resolving concrete parameters for a tool call in an execution plan.
+
+## Current Step
+ID: ${step.id}
+Description: ${step.description}
+Tool: ${step.toolName}
+Original (placeholder) input: ${JSON.stringify(step.toolInput)}
+
+## ${schemaHint}
+
+## ${completedContext}
+
+## Plan Goal
+${state.plan?.goal ?? state.goal}
+
+Based on the completed step results above, provide the CONCRETE values for this tool call.
+Respond with ONLY a JSON object containing the resolved parameters. No explanation, just JSON.
+For perp_place_order: "side" must be "buy" or "sell", "size" must be > 0, "price" must be a number.
+To close a short position, use side="buy". To close a long, use side="sell".`;
+
+  try {
+    const response = await ctx.llm.complete(
+      [
+        { role: 'system', content: 'You resolve tool call parameters. Respond with ONLY valid JSON.' },
+        { role: 'user', content: prompt },
+      ],
+      { temperature: 0.1 }
+    );
+
+    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      debugLog('resolveToolInputs: no JSON in response');
+      return step.toolInput as Record<string, unknown>;
+    }
+
+    const resolved = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    debugLog('resolveToolInputs: resolved', { original: step.toolInput, resolved });
+    return resolved;
+  } catch (error) {
+    debugLog('resolveToolInputs: failed', {
+      error: error instanceof Error ? error.message : 'Unknown',
+    });
+    return (step.toolInput ?? {}) as Record<string, unknown>;
+  }
+}
+
+/**
  * Execute a tool step with confirmation if needed.
  */
 async function executeToolStep(
   step: PlanStep,
-  _state: AgentState,
+  state: AgentState,
   ctx: OrchestratorContext
 ): Promise<ToolExecution> {
   const toolName = step.toolName!;
-  const input = step.toolInput ?? {};
+  let input = (step.toolInput ?? {}) as Record<string, unknown>;
+
+  // Dynamic input resolution: if toolInput has placeholder values, ask LLM to fill them in
+  // based on completed step results.
+  if (hasPlaceholderInputs(input)) {
+    debugLog('placeholder inputs detected, resolving dynamically', { toolName, input });
+    input = await resolveToolInputs(step, state, ctx);
+    // Update the step's toolInput so the plan record reflects the resolved values
+    (step as any).toolInput = input;
+  }
 
   // Guardrail: several perp tools require a symbol, but the planner can omit it.
   // Default to the first configured symbol (or BTC) instead of calling tools with undefined inputs.
@@ -872,6 +1434,10 @@ async function executeToolStep(
     if (!sym) {
       (obj as any).symbol = defaultSymbol;
     }
+  }
+
+  if (toolName === 'perp_place_order') {
+    input = normalizePerpPlaceOrderInput(input as Record<string, unknown>);
   }
 
   // Check if tool requires confirmation

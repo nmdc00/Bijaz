@@ -27,7 +27,10 @@ import { AutonomousManager } from './autonomous.js';
 import { runDiscovery } from '../discovery/engine.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { withExecutionContext } from './llm_infra.js';
-import { executeToolCall } from './tool-executor.js';
+import { TradeManagementService } from '../trade-management/service.js';
+import { formatDelphiHelp, parseDelphiSlashCommand } from '../delphi/command.js';
+import { formatDelphiPreview, generateDelphiPredictions } from '../delphi/surface.js';
+import { formatOperatorStatusSnapshot } from './status_snapshot.js';
 
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
@@ -37,10 +40,10 @@ export class ThufirAgent {
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
   private logger: Logger;
-  private scanTimer: NodeJS.Timeout | null = null;
   private conversation: ConversationHandler;
   private autonomous: AutonomousManager;
   private toolContext: ToolExecutorContext;
+  private tradeManagement?: TradeManagementService;
 
   constructor(private config: ThufirConfig, logger?: Logger) {
     this.logger = logger ?? new Logger('info');
@@ -93,6 +96,10 @@ export class ThufirAgent {
       this.config,
       this.logger
     );
+
+    if (this.config.tradeManagement?.enabled) {
+      this.tradeManagement = new TradeManagementService(this.config, this.toolContext, this.logger);
+    }
   }
 
   private createExecutor(config: ThufirConfig): ExecutionAdapter {
@@ -111,33 +118,20 @@ export class ThufirAgent {
   }
 
   start(): void {
-    // Start autonomous manager (handles its own scheduling)
+    // Start autonomous manager (handles persisted scheduler control-plane jobs).
     this.autonomous.start();
+    this.tradeManagement?.start();
 
     // Set up event handlers for autonomous mode
     this.autonomous.on('daily-report', (_report) => {
       this.logger.info('Daily report generated');
       // Reports will be pushed to channels by the gateway
     });
-
-    // Legacy scan loop (for backwards compatibility when fullAuto is off)
-    if (this.config.autonomy.enabled && !(this.config.autonomy as any).fullAuto) {
-      const interval = this.config.autonomy.scanIntervalSeconds * 1000;
-      this.scanTimer = setInterval(() => {
-        this.autonomousScan().catch((err) =>
-          this.logger.error('Autonomous scan failed', err)
-        );
-      }, interval);
-      this.logger.info(`Legacy scan enabled: scanning every ${interval / 1000}s`);
-    }
   }
 
   stop(): void {
     this.autonomous.stop();
-    if (this.scanTimer) {
-      clearInterval(this.scanTimer);
-      this.scanTimer = null;
-    }
+    this.tradeManagement?.stop();
   }
 
   /**
@@ -152,23 +146,13 @@ export class ThufirAgent {
     return this.toolContext;
   }
 
-  async handleMessage(sender: string, text: string): Promise<string> {
+  async handleMessage(
+    sender: string,
+    text: string,
+    onProgress?: (message: string) => Promise<void> | void
+  ): Promise<string> {
     const trimmed = text.trim();
     const isQuestion = this.isQuestion(trimmed);
-    // If the user is asking "can you see X" about their account/trades, bypass the LLM and query tools directly.
-    // This prevents generic boilerplate ("tools not available") and keeps replies grounded in live state.
-    const wantsPerpStatus =
-      /\b(can\s+you\s+see)\b.*\b(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances|orders?)\b/i.test(
-        trimmed
-      ) ||
-      /\b(show|what('s| is))\b.*\b(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances|orders?)\b/i.test(
-        trimmed
-      ) ||
-      /\b(how('s| is))\b.*\b(my\s+)?(trade|trades|position|positions|pnl|wallet|portfolio|balance|balances)\b.*\b(looking|doing)\b/i.test(
-        trimmed
-      ) ||
-      // Short follow-ups after status often omit keywords ("can you see it?").
-      /\b(can\s+you|do\s+you)\s+see\s+(it|this)\b/i.test(trimmed);
 
     // Command: /access_status
     // Access status should be explicit; we do not want natural-language questions like
@@ -207,42 +191,6 @@ export class ThufirAgent {
       return this.buildLiveTradingSetupPrompt();
     }
 
-    // Fast-path: if the user is asking about current positions/orders, query tools directly
-    // (avoids the LLM/tool-planning loop and any tool-name mangling).
-    if (wantsPerpStatus) {
-      try {
-        const positions = await executeToolCall('get_positions', {}, this.toolContext);
-        const orders = await executeToolCall('get_open_orders', {}, this.toolContext);
-        const lines: string[] = [];
-        lines.push('Perp Status:');
-        if (positions.success) {
-          const ps = (positions.data as any)?.positions;
-          const count = Array.isArray(ps) ? ps.length : 0;
-          lines.push(`- Positions: ${count}`);
-          if (count > 0) {
-            const top = ps.slice(0, 5).map((p: any) => JSON.stringify(p));
-            lines.push(...top.map((s: string) => `  ${s}`));
-          }
-        } else {
-          lines.push(`- Positions: error: ${(positions as any).error ?? 'unknown'}`);
-        }
-        if (orders.success) {
-          const os = (orders.data as any)?.orders;
-          const count = Array.isArray(os) ? os.length : 0;
-          lines.push(`- Open orders: ${count}`);
-          if (count > 0) {
-            const top = os.slice(0, 5).map((o: any) => JSON.stringify(o));
-            lines.push(...top.map((s: string) => `  ${s}`));
-          }
-        } else {
-          lines.push(`- Open orders: error: ${(orders as any).error ?? 'unknown'}`);
-        }
-        return lines.join('\n');
-      } catch (error) {
-        return `Failed to load perp status: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      }
-    }
-
     // Command: /watch <marketId>
     if (trimmed.startsWith('/watch ')) {
       const marketId = trimmed.replace('/watch ', '').trim();
@@ -263,6 +211,11 @@ export class ThufirAgent {
     if (trimmed === '/scan') {
       const result = await this.autonomousScan();
       return result;
+    }
+
+    // Command: /delphi [run|help]
+    if (trimmed.startsWith('/delphi')) {
+      return this.handleDelphiCommand(trimmed);
     }
 
     // Command: /briefing
@@ -593,24 +546,8 @@ export class ThufirAgent {
 
     // Command: /status - Get autonomous mode status
     if (trimmed === '/status') {
-      const status = this.autonomous.getStatus();
-      const pnl = this.autonomous.getDailyPnL();
-
-      const lines: string[] = [];
-      lines.push('**Thufir Status**');
-      lines.push('');
-      lines.push('**Autonomous Mode:**');
-      lines.push(`• Enabled: ${status.enabled ? 'YES' : 'NO'}`);
-      lines.push(`• Full auto: ${status.fullAuto ? 'ON' : 'OFF'}`);
-      lines.push(`• Paused: ${status.isPaused ? `YES (${status.pauseReason})` : 'NO'}`);
-      lines.push(`• Consecutive losses: ${status.consecutiveLosses}`);
-      lines.push('');
-      lines.push('**Today\'s Activity:**');
-      lines.push(`• Trades: ${pnl.tradesExecuted} (W:${pnl.wins} L:${pnl.losses} P:${pnl.pending})`);
-      lines.push(`• Realized P&L: ${pnl.realizedPnl >= 0 ? '+' : ''}$${pnl.realizedPnl.toFixed(2)}`);
-      lines.push(`• Remaining budget: $${status.remainingDaily.toFixed(2)}`);
-
-      return lines.join('\n');
+      const snapshot = this.autonomous.getOperatorSnapshot();
+      return formatOperatorStatusSnapshot(snapshot);
     }
 
     // Command: /report - Get full daily report
@@ -648,6 +585,7 @@ Just type naturally to chat about markets, risks, or positioning.
 /watch <symbol> - Add symbol to watchlist
 /watchlist - Show watched symbols
 /scan - Run autonomous discovery scan
+/delphi [run] [options] - Prediction-only delphi preview
 /perp <symbol> <buy|sell> <sizeUsd> [leverage] - Execute a perp trade
 
 **Info:**
@@ -673,7 +611,7 @@ Just type naturally to chat about markets, risks, or positioning.
       return autoTradeResponse;
     }
     try {
-      return await this.conversation.chat(sender, trimmed);
+      return await this.conversation.chat(sender, trimmed, onProgress);
     } catch (error) {
       this.logger.error('Conversation error', error);
       return `Sorry, I encountered an error. Try again or use /help for commands.`;
@@ -691,6 +629,19 @@ Just type naturally to chat about markets, risks, or positioning.
         return this.autonomous.runScan();
       }
     );
+  }
+
+  private async handleDelphiCommand(rawCommand: string): Promise<string> {
+    try {
+      const command = parseDelphiSlashCommand(rawCommand);
+      if (command.kind === 'help') {
+        return formatDelphiHelp('/delphi');
+      }
+      const predictions = await generateDelphiPredictions(this.marketClient, this.config, command.options);
+      return formatDelphiPreview(command.options, predictions);
+    } catch (error) {
+      return `Invalid /delphi command: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   private async maybeHandleNaturalLanguageTrade(
@@ -713,10 +664,17 @@ Just type naturally to chat about markets, risks, or positioning.
       if (!autoEnabled) {
         return 'Autonomous trading is disabled. Enable with /fullauto on and ensure autonomy.enabled: true.';
       }
-      return this.autonomousScan();
+      const scanResult = await this.autonomousScan();
+      // If the scanner found nothing actionable, fall through to the orchestrator
+      // so it can analyze the market with its tools and decide what to do.
+      if (scanResult.includes('No expressions met') || scanResult.includes('No discovery expressions')) {
+        this.logger.info('Autonomous scan found nothing above threshold; falling through to orchestrator');
+        return null;
+      }
+      return scanResult;
     }
 
-    // Option 1: Natural-language "place a trade" forces a one-shot scan + execution (best expression).
+    // Natural-language "place a trade" forces a one-shot scan + execution (best expression).
     if (wantsPlaceTradeNow) {
       if (!autonomyEnabled) {
         return 'Autonomous trading is disabled in config. Set `autonomy.enabled: true`.';
@@ -724,7 +682,13 @@ Just type naturally to chat about markets, risks, or positioning.
       if ((this.config.execution?.mode ?? 'paper') !== 'live') {
         return 'Live execution is not enabled. Set `execution.mode: live`.';
       }
-      return this.autonomous.runScan({ forceExecute: true, maxTrades: 1 });
+      const scanResult = await this.autonomous.runScan({ forceExecute: true, maxTrades: 1 });
+      // If nothing actionable even with forced execution, let the orchestrator handle it
+      if (scanResult.includes('No expressions met') || scanResult.includes('No discovery expressions')) {
+        this.logger.info('Forced scan found nothing; falling through to orchestrator');
+        return null;
+      }
+      return scanResult;
     }
 
     void sender;

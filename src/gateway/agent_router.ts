@@ -48,6 +48,10 @@ function mergeConfig(
       ...base.agent.llmBudget,
       ...(agentOverride?.llmBudget ?? {}),
     },
+    proactiveRefresh: {
+      ...base.agent.proactiveRefresh,
+      ...(agentOverride?.proactiveRefresh ?? {}),
+    },
   };
   return {
     ...base,
@@ -62,6 +66,26 @@ function mergeConfig(
     autonomy: {
       ...base.autonomy,
       ...(override?.autonomy ?? {}),
+      signalPerformance: {
+        ...base.autonomy.signalPerformance,
+        ...(override?.autonomy?.signalPerformance ?? {}),
+      },
+      calibrationRisk: {
+        ...base.autonomy.calibrationRisk,
+        ...(override?.autonomy?.calibrationRisk ?? {}),
+      },
+      tradeContract: {
+        ...base.autonomy.tradeContract,
+        ...(override?.autonomy?.tradeContract ?? {}),
+      },
+      tradeQuality: {
+        ...base.autonomy.tradeQuality,
+        ...(override?.autonomy?.tradeQuality ?? {}),
+      },
+      newsEntry: {
+        ...base.autonomy.newsEntry,
+        ...(override?.autonomy?.newsEntry ?? {}),
+      },
     },
   };
 }

@@ -20,6 +20,7 @@ const TRADE_TOOLS = [
   'perp_analyze',
   'position_analysis',
   'discovery_report',
+  'discovery_select_markets',
   'trade_review',
 
   // Intel tools
@@ -54,6 +55,7 @@ const TRADE_TOOLS = [
   // Trading tools
   'get_portfolio',
   'get_positions',
+  'get_open_orders',
   'perp_place_order',
   'signal_price_vol_regime',
   'signal_cross_asset_divergence',
@@ -62,6 +64,8 @@ const TRADE_TOOLS = [
   'discovery_run',
   'hyperliquid_verify_live',
   'hyperliquid_order_roundtrip',
+  'hyperliquid_usd_class_transfer',
+  'perp_trade_journal_list',
 
   // Funding / bridging tools
   'evm_erc20_balance',

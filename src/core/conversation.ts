@@ -47,6 +47,14 @@ import type { ToolExecutorContext } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
 import { Logger } from './logger.js';
 import { withExecutionContext } from './llm_infra.js';
+import {
+  appendProactiveAttribution,
+  buildFailClosedMessage,
+  runProactiveRefresh,
+  type CachedProactiveSnapshot,
+  type ProactiveRefreshSettings,
+  type ProactiveRefreshSnapshot,
+} from './proactive_refresh.js';
 
 export interface ConversationContext {
   userId: string;
@@ -57,7 +65,10 @@ export interface ConversationContext {
 const SYSTEM_PROMPT_BASE = `## Operating Rules
 
 - Never claim a trade was placed unless a trading tool returned success
-- Never say you lack wallet access without first using get_wallet_info and/or get_portfolio
+- Never say you lack wallet/trade access without first using get_portfolio/get_positions/get_open_orders
+- When interpreting get_portfolio: balances/onchain_balances are on-chain wallet or paper/memory cash, NOT Hyperliquid collateral. For Hyperliquid, use summary.available_balance as the collateral you can trade with — it already accounts for unified/separate account modes. Do NOT refuse to trade because perp withdrawable is 0 if available_balance shows funds.
+- If you need the perp universe, prices, or liquidity to answer a trading question, use perp_market_list (do not ask the user to paste exports)
+- On Hyperliquid, spot USDC and perp collateral are typically unified. Place orders directly using available_balance as your collateral figure — the exchange validates collateral at order time. Only use hyperliquid_usd_class_transfer if orders are explicitly rejected for insufficient collateral.
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
 - If tool outputs are JSON, interpret them and respond with a concise narrative summary
@@ -233,6 +244,8 @@ export class ConversationHandler {
   private toolContext: ToolExecutorContext;
   private orchestratorRegistry?: AgentToolRegistry;
   private orchestratorIdentity?: AgentIdentity;
+  private liveAccountSnapshotCache = new Map<string, { ts: number; text: string }>();
+  private proactiveSnapshotCache = new Map<string, CachedProactiveSnapshot>();
 
   constructor(
     llm: LlmClient,
@@ -300,7 +313,11 @@ export class ConversationHandler {
   /**
    * Handle a conversational message from the user
    */
-  async chat(userId: string, message: string): Promise<string> {
+  async chat(
+    userId: string,
+    message: string,
+    onProgress?: (message: string) => Promise<void> | void
+  ): Promise<string> {
     return withExecutionContext(
       { mode: 'FULL_AGENT', critical: false, reason: 'chat', source: 'conversation' },
       async () => {
@@ -310,17 +327,27 @@ export class ConversationHandler {
         }
 
         const timeContext = await this.buildCurrentTimeContext();
+        const liveAccountSnapshot = await this.buildLiveAccountSnapshot(userId);
+        const proactive = await this.prepareProactiveRefresh(userId, message);
+        if (proactive.failClosed) {
+          return buildFailClosedMessage(proactive.failReason ?? 'fresh data unavailable');
+        }
+        const proactiveContext = proactive.contextText;
+        const proactiveSnapshot = proactive.snapshot;
 
         if (this.config.agent?.useOrchestrator && this.orchestratorRegistry && this.orchestratorIdentity) {
           const memorySystem = {
             getRelevantContext: async (query: string) => {
               const base = await this.getMemoryContextForOrchestrator(userId, query);
-              if (!timeContext) return base;
-              return [base, timeContext].filter(Boolean).join('\n\n');
+              return [base, timeContext, liveAccountSnapshot, proactiveContext].filter(Boolean).join('\n\n');
             },
           };
 
-    const tradeToolNames = new Set(['perp_place_order']);
+    const tradeToolNames = new Set([
+      'perp_place_order',
+      'perp_cancel_order',
+      'hyperliquid_usd_class_transfer',
+    ]);
     const fundingToolNames = new Set([
       'cctp_bridge_usdc',
       'hyperliquid_deposit_usdc',
@@ -334,6 +361,20 @@ export class ConversationHandler {
           const resumePlan = this.shouldResumePlan(message);
           const priorPlan = resumePlan ? this.sessions.getPlan(userId) : null;
 
+          let lastProgressKey = '';
+          const emitProgress = async (key: string, text: string): Promise<void> => {
+            if (!onProgress || !text || key === lastProgressKey) {
+              return;
+            }
+            lastProgressKey = key;
+            try {
+              await onProgress(text);
+            } catch {
+              // Best-effort progress updates must not affect the main flow.
+            }
+          };
+
+          let lastToolCount = 0;
           const result = await runOrchestrator(message, {
             llm: this.llm,
             toolRegistry: this.orchestratorRegistry,
@@ -351,6 +392,28 @@ export class ConversationHandler {
                 return autoApproveFunding;
               }
               return false;
+            },
+            onUpdate: (state) => {
+              if (!state.plan) {
+                void emitProgress('planning:start', 'Working: analyzing request...');
+                return;
+              }
+              if (!state.plan.complete) {
+                void emitProgress('planning:ready', 'Working: building execution plan...');
+              }
+              if (state.toolExecutions.length > lastToolCount) {
+                const latest = state.toolExecutions[state.toolExecutions.length - 1];
+                lastToolCount = state.toolExecutions.length;
+                if (latest?.toolName) {
+                  void emitProgress(
+                    `tool:${lastToolCount}:${latest.toolName}`,
+                    `Working: running ${latest.toolName}...`
+                  );
+                }
+              }
+              if (state.plan.complete) {
+                void emitProgress('synthesis', 'Working: finalizing response...');
+              }
             },
           }, {
             initialPlan: priorPlan ?? undefined,
@@ -373,8 +436,9 @@ export class ConversationHandler {
           response = await this.maybeAttachMentatReport(response, result.state.mode);
 
           if (!response || response.trim() === '') {
-            throw new Error('Orchestrator returned empty response');
+            response = await this.buildCooldownSafeFallbackResponse();
           }
+          response = appendProactiveAttribution(response, proactiveSnapshot ?? null);
 
           this.sessions.appendEntry(userId, {
             type: 'message',
@@ -413,8 +477,7 @@ export class ConversationHandler {
           return response;
         }
 
-        const forcedToolContext = await this.runForcedTooling(message);
-        const toolFirstContext = await this.runToolFirstGuard(message);
+        const toolFirstContext = proactiveContext ? '' : await this.runToolFirstGuard(message);
         const summary = this.sessions.getSummary(userId);
         const maxHistory = this.config.memory?.maxHistoryMessages ?? 50;
         const compactAfterTokens = this.config.memory?.compactAfterTokens ?? 12000;
@@ -440,7 +503,8 @@ export class ConversationHandler {
         const contextBlock = [
           userContext,
           timeContext,
-          forcedToolContext,
+          liveAccountSnapshot,
+          proactiveContext,
           toolFirstContext,
           summary ? `## Conversation Summary\n${summary}` : '',
           intelContext,
@@ -509,6 +573,7 @@ export class ConversationHandler {
         });
 
         let reply = response.content;
+        reply = appendProactiveAttribution(reply, proactiveSnapshot ?? null);
         const prompt = this.maybePromptIntelAlerts(userId);
         if (prompt) {
           reply = `${reply}\n\n${prompt}`;
@@ -517,6 +582,57 @@ export class ConversationHandler {
         return reply;
       }
     );
+  }
+
+  private getProactiveRefreshSettings(): ProactiveRefreshSettings {
+    const configured = this.config.agent?.proactiveRefresh;
+    const fundingSymbols = Array.isArray(configured?.fundingSymbols)
+      ? configured.fundingSymbols.filter((symbol) => typeof symbol === 'string' && symbol.trim().length > 0)
+      : [];
+    return {
+      enabled: configured?.enabled ?? false,
+      intentMode: configured?.intentMode ?? 'time_sensitive',
+      ttlSeconds: Math.max(0, configured?.ttlSeconds ?? 900),
+      maxLatencyMs: Math.max(250, configured?.maxLatencyMs ?? 4500),
+      marketLimit: Math.min(200, Math.max(1, configured?.marketLimit ?? 20)),
+      intelLimit: Math.min(20, Math.max(1, configured?.intelLimit ?? 5)),
+      webLimit: Math.min(10, Math.max(1, configured?.webLimit ?? 5)),
+      strictFailClosed: configured?.strictFailClosed ?? true,
+      fundingSymbols:
+        fundingSymbols.length > 0
+          ? fundingSymbols
+          : this.config.hyperliquid?.symbols?.slice(0, 2) ?? ['BTC', 'ETH'],
+    };
+  }
+
+  private async prepareProactiveRefresh(
+    userId: string,
+    message: string
+  ): Promise<{
+    failClosed: boolean;
+    failReason?: string;
+    contextText: string;
+    snapshot?: ProactiveRefreshSnapshot;
+  }> {
+    const settings = this.getProactiveRefreshSettings();
+    const cached = this.proactiveSnapshotCache.get(userId);
+    const outcome = await runProactiveRefresh({
+      message,
+      settings,
+      cached,
+      executeTool: (toolName, input) => executeToolCall(toolName, input, this.toolContext),
+    });
+
+    if (outcome.snapshot) {
+      this.proactiveSnapshotCache.set(userId, { ts: Date.now(), snapshot: outcome.snapshot });
+    }
+
+    return {
+      failClosed: outcome.failClosed,
+      failReason: outcome.failReason,
+      contextText: outcome.contextText,
+      snapshot: outcome.snapshot,
+    };
   }
 
   private async buildCurrentTimeContext(): Promise<string> {
@@ -534,32 +650,81 @@ export class ConversationHandler {
     }
   }
 
-  private async runForcedTooling(message: string): Promise<string> {
-    const text = message.toLowerCase();
-    const wantsWallet = /\b(wallet|balance|funds|usdc|address|portfolio)\b/.test(text);
-    const wantsTrade = /\b(trade|order|place|execute)\b/.test(text);
-    if (!wantsWallet && !wantsTrade) {
+  private shouldIncludeLiveAccountSnapshot(): boolean {
+    // Only inject live state when we're actually configured for live Hyperliquid execution.
+    return (
+      this.config.execution?.mode === 'live' && this.config.execution?.provider === 'hyperliquid'
+    );
+  }
+
+  private async buildLiveAccountSnapshot(userId: string): Promise<string> {
+    if (!this.shouldIncludeLiveAccountSnapshot()) {
       return '';
     }
 
-    const lines: string[] = ['## Forced Tool Snapshot'];
-
-    if (wantsWallet || wantsTrade) {
-      const walletInfo = await executeToolCall('get_wallet_info', {}, this.toolContext);
-      lines.push(`Wallet info: ${JSON.stringify(walletInfo)}`);
-      const portfolio = await executeToolCall('get_portfolio', {}, this.toolContext);
-      lines.push(`Portfolio: ${JSON.stringify(portfolio)}`);
+    // Cache a short-lived snapshot so natural back-and-forth stays grounded without hammering APIs.
+    const ttlMs = 15_000;
+    const now = Date.now();
+    const cached = this.liveAccountSnapshotCache.get(userId);
+    if (cached && now - cached.ts < ttlMs) {
+      return cached.text;
     }
 
-    if (wantsTrade) {
-      lines.push(`Execution mode: ${this.config.execution?.mode ?? 'paper'}`);
-      lines.push(
-        `Trading enabled: ${this.toolContext.executor ? 'true' : 'false'}`
-      );
-    }
+    try {
+      const [portfolio, positions, orders] = await Promise.all([
+        executeToolCall('get_portfolio', {}, this.toolContext),
+        executeToolCall('get_positions', {}, this.toolContext),
+        executeToolCall('get_open_orders', {}, this.toolContext),
+      ]);
 
-    lines.push('');
-    return lines.join('\n');
+      const snapshot = {
+        portfolio: portfolio.success ? portfolio.data : { error: (portfolio as any).error ?? 'unknown' },
+        positions: positions.success ? positions.data : { error: (positions as any).error ?? 'unknown' },
+        open_orders: orders.success ? orders.data : { error: (orders as any).error ?? 'unknown' },
+      };
+
+      const text = `## Live Account Snapshot (Hyperliquid)\n${JSON.stringify(snapshot, null, 2)}`;
+      this.liveAccountSnapshotCache.set(userId, { ts: now, text });
+      return text;
+    } catch (error) {
+      const text = `## Live Account Snapshot (Hyperliquid)\n(unavailable: ${
+        error instanceof Error ? error.message : 'unknown error'
+      })`;
+      this.liveAccountSnapshotCache.set(userId, { ts: now, text });
+      return text;
+    }
+  }
+
+  private async buildCooldownSafeFallbackResponse(): Promise<string> {
+    const [portfolio, positions, orders] = await Promise.all([
+      executeToolCall('get_portfolio', {}, this.toolContext),
+      executeToolCall('get_positions', {}, this.toolContext),
+      executeToolCall('get_open_orders', {}, this.toolContext),
+    ]);
+
+    const perpPositions = (positions as any)?.success
+      ? Array.isArray((positions as any)?.data?.positions)
+        ? (positions as any).data.positions
+        : []
+      : [];
+    const openOrders = (orders as any)?.success
+      ? Array.isArray((orders as any)?.data?.orders)
+        ? (orders as any).data.orders
+        : []
+      : [];
+    const availableBalance = (portfolio as any)?.success
+      ? Number((portfolio as any)?.data?.summary?.available_balance ?? NaN)
+      : NaN;
+
+    const positionCount = perpPositions.length;
+    const orderCount = openOrders.length;
+    const balanceText = Number.isFinite(availableBalance) ? availableBalance.toFixed(4) : 'unknown';
+
+    return [
+      'Monitoring is still active; provider cooldown prevented a full reasoning pass this turn.',
+      `Book snapshot: ${positionCount} perp position(s), ${orderCount} open order(s), available_balance=${balanceText}.`,
+      'I will continue automatic monitoring and de-risk/rebalance on the next cycle when tool/LLM capacity clears.',
+    ].join(' ');
   }
 
   private shouldResumePlan(message: string): boolean {
@@ -574,9 +739,10 @@ export class ConversationHandler {
     const text = message.toLowerCase();
     const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
     const wantsMarket = /\b(price|odds|market|probability|volume|liquidity|bid|ask)\b/.test(text);
+    const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
 
-    if (!wantsNews && !wantsMarket && !wantsTime) {
+    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime) {
       return '';
     }
 
@@ -600,7 +766,7 @@ export class ConversationHandler {
       }
     }
 
-    if (wantsMarket) {
+    if (wantsMarket || wantsTrade) {
       const marketResult = await executeToolCall('perp_market_list', { limit: 20 }, this.toolContext);
       if (marketResult.success) {
         sections.push(`### perp_market_list\n${JSON.stringify(marketResult.data, null, 2)}`);
