@@ -1276,7 +1276,7 @@ calibration
       source = `calibration_context_pack_eval_fixture:${fixturePath}`;
     } else {
       const discovery = await runDiscovery(config);
-      expressions = discovery.expressions as Array<Record<string, unknown>>;
+      expressions = discovery.expressions as unknown as Array<Record<string, unknown>>;
     }
 
     const report: ContextPackEffectivenessReport = runContextPackEffectivenessEvaluation(
