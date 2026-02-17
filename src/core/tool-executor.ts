@@ -26,7 +26,7 @@ import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
 import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
-import { validateEntryTradeContract } from './trade_contract.js';
+import { validateEntryTradeContract, validateReduceOnlyExitFsm } from './trade_contract.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -901,6 +901,11 @@ export async function executeToolCall(
             : null;
         const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
         const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
+        const emergencyOverride = Boolean(toolInput.emergency_override ?? false);
+        const emergencyReason =
+          typeof toolInput.emergency_reason === 'string' && toolInput.emergency_reason.trim().length > 0
+            ? toolInput.emergency_reason.trim()
+            : null;
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
         const exitAssessment = evaluateReduceOnlyExitAssessment({
@@ -935,6 +940,27 @@ export async function executeToolCall(
         if (!contractValidation.valid) {
           return { success: false, error: contractValidation.error };
         }
+        const exitFsmValidation = validateReduceOnlyExitFsm({
+          enabled: Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm),
+          reduceOnly,
+          exitMode,
+          thesisInvalidationHit,
+          emergencyOverride,
+          emergencyReason,
+        });
+        if (!exitFsmValidation.valid) {
+          return { success: false, error: exitFsmValidation.error };
+        }
+        const tradeContractJournalFields = {
+          tradeArchetype: tradeArchetype as 'scalp' | 'intraday' | 'swing' | null,
+          invalidationType: invalidationType as 'price_level' | 'structure_break' | null,
+          invalidationPrice,
+          timeStopAtMs,
+          takeProfitR,
+          trailMode: trailMode as 'none' | 'atr' | 'structure' | null,
+          emergencyOverride: emergencyOverride || null,
+          emergencyReason,
+        };
         const market = await ctx.marketClient.getMarket(symbol);
         const feeEstimate = await estimatePerpOrderFee(ctx, {
           orderType,
@@ -976,6 +1002,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -1046,6 +1073,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -1095,6 +1123,7 @@ export async function executeToolCall(
                 noveltyScore,
                 marketConfirmationScore,
                 thesisExpiresAtMs,
+                ...tradeContractJournalFields,
                 thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
                 exitMode: exitAssessment.exitMode,
                 emotionalExitFlag: exitAssessment.emotionalExitFlag,
@@ -1163,6 +1192,7 @@ export async function executeToolCall(
               noveltyScore,
               marketConfirmationScore,
               thesisExpiresAtMs,
+              ...tradeContractJournalFields,
               thesisCorrect: exitAssessment.thesisCorrect,
               thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
               exitMode: exitAssessment.exitMode,
@@ -1185,7 +1215,16 @@ export async function executeToolCall(
           startTimeMs: Math.max(0, executionStartMs - 10_000),
         });
         let componentScores:
-          | { directionScore: number; timingScore: number; sizingScore: number; exitScore: number }
+          | {
+              directionScore: number;
+              timingScore: number;
+              sizingScore: number;
+              exitScore: number;
+              capturedR: number | null;
+              leftOnTableR: number | null;
+              wouldHit2R: boolean | null;
+              wouldHit3R: boolean | null;
+            }
           | null = null;
         if (reduceOnly) {
           try {
@@ -1207,6 +1246,7 @@ export async function executeToolCall(
               exitPrice: market.markPrice ?? null,
               pricePathHigh: closePathHigh,
               pricePathLow: closePathLow,
+              invalidationPrice: reference?.invalidationPrice ?? invalidationPrice,
             });
           } catch {
             componentScores = computeClosedTradeComponentScores({
@@ -1218,6 +1258,7 @@ export async function executeToolCall(
               exitPrice: market.markPrice ?? null,
               pricePathHigh: closePathHigh,
               pricePathLow: closePathLow,
+              invalidationPrice,
             });
           }
         }
@@ -1261,6 +1302,7 @@ export async function executeToolCall(
             noveltyScore,
             marketConfirmationScore,
             thesisExpiresAtMs,
+            ...tradeContractJournalFields,
             thesisCorrect: exitAssessment.thesisCorrect,
             thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
             exitMode: exitAssessment.exitMode,
@@ -1270,10 +1312,18 @@ export async function executeToolCall(
             timingScore: componentScores?.timingScore ?? null,
             sizingScore: componentScores?.sizingScore ?? null,
             exitScore: componentScores?.exitScore ?? null,
+            capturedR: componentScores?.capturedR ?? null,
+            leftOnTableR: componentScores?.leftOnTableR ?? null,
+            wouldHit2R: componentScores?.wouldHit2R ?? null,
+            wouldHit3R: componentScores?.wouldHit3R ?? null,
             direction_score: componentScores?.directionScore ?? null,
             timing_score: componentScores?.timingScore ?? null,
             sizing_score: componentScores?.sizingScore ?? null,
             exit_score: componentScores?.exitScore ?? null,
+            captured_r: componentScores?.capturedR ?? null,
+            left_on_table_r: componentScores?.leftOnTableR ?? null,
+            would_hit_2r: componentScores?.wouldHit2R ?? null,
+            would_hit_3r: componentScores?.wouldHit3R ?? null,
             realizedFeeUsd: realizedFee.realized_fee_usd,
             realizedFeeToken: realizedFee.realized_fee_token,
             realizedFillCount: realizedFee.realized_fill_count,

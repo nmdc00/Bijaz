@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { validateEntryTradeContract } from '../../src/core/trade_contract.js';
+import { validateEntryTradeContract, validateReduceOnlyExitFsm } from '../../src/core/trade_contract.js';
 
 describe('trade contract validation', () => {
   const nowMs = Date.parse('2026-02-17T12:00:00Z');
@@ -69,6 +69,30 @@ describe('trade contract validation', () => {
         trailMode: 'structure',
       },
       nowMs,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects discretionary reduce-only exits when FSM enforcement is enabled', () => {
+    const result = validateReduceOnlyExitFsm({
+      enabled: true,
+      reduceOnly: true,
+      exitMode: 'manual',
+      thesisInvalidationHit: false,
+      emergencyOverride: false,
+      emergencyReason: null,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('accepts emergency override reduce-only exits when reason is provided', () => {
+    const result = validateReduceOnlyExitFsm({
+      enabled: true,
+      reduceOnly: true,
+      exitMode: 'manual',
+      thesisInvalidationHit: false,
+      emergencyOverride: true,
+      emergencyReason: 'liquidation buffer collapsed after venue spike',
     });
     expect(result.valid).toBe(true);
   });

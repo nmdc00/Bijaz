@@ -58,6 +58,8 @@ export function formatOperatorStatusSnapshot(snapshot: OperatorStatusSnapshot): 
     `full_auto=${snapshot.runtime.fullAuto ? 'ON' : 'OFF'}`,
     `paused=${snapshot.runtime.isPaused ? `YES${snapshot.runtime.pauseReason ? ` (${snapshot.runtime.pauseReason})` : ''}` : 'NO'}`,
     `observation=${snapshot.policyState.observationOnly ? 'ON' : 'OFF'}`,
+    `trade_contract=${snapshot.policyState.tradeContractEnforced ? 'ON' : 'OFF'}`,
+    `quality_gate=${snapshot.policyState.decisionQualityGateEnabled ? 'ON' : 'OFF'}`,
   ];
   if (snapshot.policyState.reason) {
     policyParts.push(`reason=${snapshot.policyState.reason}`);

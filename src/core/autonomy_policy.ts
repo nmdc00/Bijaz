@@ -24,6 +24,12 @@ export type CalibrationPolicyReasonCode =
   | 'calibration.segment.fallback_insufficient_samples'
   | 'calibration.segment.pass'
   | 'calibration.segment.disabled';
+export type DecisionQualityReasonCode =
+  | 'quality.segment.block'
+  | 'quality.segment.downweight'
+  | 'quality.segment.fallback_insufficient_samples'
+  | 'quality.segment.pass'
+  | 'quality.segment.disabled';
 export type CalibrationSegmentScope = {
   signalClass?: string | null;
   marketRegime?: MarketRegime | null;
@@ -37,6 +43,15 @@ export type CalibrationSegmentPolicyResult = {
   successRate: number | null;
   segmentKey: string;
   reasonCode: CalibrationPolicyReasonCode;
+  reason: string;
+};
+export type DecisionQualityPolicyResult = {
+  action: 'none' | 'downweight' | 'block';
+  sizeMultiplier: number;
+  sampleCount: number;
+  score: number | null;
+  segmentKey: string;
+  reasonCode: DecisionQualityReasonCode;
   reason: string;
 };
 export type GlobalTradeGateResult = {
@@ -108,6 +123,114 @@ function entryMatchesScope(entry: PerpTradeJournalEntry, scope: CalibrationSegme
   if (scope.volatilityBucket && entry.volatilityBucket !== scope.volatilityBucket) return false;
   if (scope.liquidityBucket && entry.liquidityBucket !== scope.liquidityBucket) return false;
   return true;
+}
+
+function extractDecisionQuality(entry: PerpTradeJournalEntry): number | null {
+  const values: number[] = [];
+  const pushIfFinite = (value: unknown) => {
+    const n = Number(value);
+    if (Number.isFinite(n)) {
+      values.push(Math.max(0, Math.min(1, n)));
+    }
+  };
+  pushIfFinite(entry.directionScore ?? entry.direction_score ?? null);
+  pushIfFinite(entry.timingScore ?? entry.timing_score ?? null);
+  pushIfFinite(entry.sizingScore ?? entry.sizing_score ?? null);
+  pushIfFinite(entry.exitScore ?? entry.exit_score ?? null);
+  if (values.length === 0) return null;
+  return values.reduce((acc, value) => acc + value, 0) / values.length;
+}
+
+export function evaluateDecisionQualitySegmentPolicy(
+  config: ThufirConfig,
+  entries: PerpTradeJournalEntry[],
+  scope: CalibrationSegmentScope
+): DecisionQualityPolicyResult {
+  const gate = (config.autonomy as any)?.tradeQuality ?? {};
+  const enabled = gate.enabled === true;
+  const segmentKey = formatSegmentKey(scope);
+  if (!enabled) {
+    return {
+      action: 'none',
+      sizeMultiplier: 1,
+      sampleCount: 0,
+      score: null,
+      segmentKey,
+      reasonCode: 'quality.segment.disabled',
+      reason: `decision quality policy disabled for segment ${segmentKey}`,
+    };
+  }
+
+  const minSamplesRaw = Number(gate.minSamples);
+  const minSamples = Number.isFinite(minSamplesRaw) ? Math.max(1, Math.floor(minSamplesRaw)) : 12;
+  const blockBelowScoreRaw = Number(gate.blockBelowScore);
+  const blockBelowScore = Number.isFinite(blockBelowScoreRaw) ? clamp(blockBelowScoreRaw, 0, 1) : 0.45;
+  const downweightBelowScoreRaw = Number(gate.downweightBelowScore);
+  const downweightBelowScore = Number.isFinite(downweightBelowScoreRaw)
+    ? clamp(downweightBelowScoreRaw, blockBelowScore, 1)
+    : 0.6;
+  const downweightMultiplierRaw = Number(gate.downweightMultiplier);
+  const downweightMultiplier = Number.isFinite(downweightMultiplierRaw)
+    ? clamp(downweightMultiplierRaw, 0.05, 1)
+    : 0.6;
+
+  const scoped = entries
+    .filter((entry) => entry.outcome === 'executed' && entry.reduceOnly === true)
+    .filter((entry) => entryMatchesScope(entry, scope));
+  const scored = scoped
+    .map((entry) => extractDecisionQuality(entry))
+    .filter((score): score is number => score != null);
+  const sampleCount = scored.length;
+  if (sampleCount < minSamples) {
+    return {
+      action: 'none',
+      sizeMultiplier: 1,
+      sampleCount,
+      score: null,
+      segmentKey,
+      reasonCode: 'quality.segment.fallback_insufficient_samples',
+      reason: `insufficient decision-quality samples for segment ${segmentKey}: ${sampleCount}/${minSamples}`,
+    };
+  }
+
+  const score = scored.reduce((acc, value) => acc + value, 0) / sampleCount;
+  if (score <= blockBelowScore) {
+    return {
+      action: 'block',
+      sizeMultiplier: 0,
+      sampleCount,
+      score,
+      segmentKey,
+      reasonCode: 'quality.segment.block',
+      reason:
+        `segment ${segmentKey} blocked by decision-quality policy: score=${score.toFixed(2)} ` +
+        `<= block_threshold=${blockBelowScore.toFixed(2)} over ${sampleCount} samples`,
+    };
+  }
+  if (score < downweightBelowScore) {
+    return {
+      action: 'downweight',
+      sizeMultiplier: downweightMultiplier,
+      sampleCount,
+      score,
+      segmentKey,
+      reasonCode: 'quality.segment.downweight',
+      reason:
+        `segment ${segmentKey} downweighted by decision-quality policy: score=${score.toFixed(2)} ` +
+        `< downweight_threshold=${downweightBelowScore.toFixed(2)} over ${sampleCount} samples`,
+    };
+  }
+  return {
+    action: 'none',
+    sizeMultiplier: 1,
+    sampleCount,
+    score,
+    segmentKey,
+    reasonCode: 'quality.segment.pass',
+    reason:
+      `segment ${segmentKey} passed decision-quality policy: score=${score.toFixed(2)} ` +
+      `over ${sampleCount} samples`,
+  };
 }
 
 export function evaluateCalibrationSegmentPolicy(
@@ -424,6 +547,9 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
   }
 
   if (input?.signalClass) {
+    let accumulatedSizeMultiplier = 1;
+    let policyReasonCode: string | undefined;
+    let policyReason: string | undefined;
     const perf = summarizeSignalPerformance(listPerpTradeJournals({ limit: 200 }), input.signalClass);
     const minSharpe = Number((config.autonomy as any)?.signalPerformance?.minSharpe ?? 0.8);
     const minSamples = Number((config.autonomy as any)?.signalPerformance?.minSamples ?? 8);
@@ -463,14 +589,43 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
       };
     }
     if (calibrationPolicy.action === 'downweight') {
+      accumulatedSizeMultiplier *= calibrationPolicy.sizeMultiplier;
+      policyReasonCode = calibrationPolicy.reasonCode;
+      policyReason = `${calibrationPolicy.reasonCode}: ${calibrationPolicy.reason}`;
+    }
+
+    const qualityPolicy = evaluateDecisionQualitySegmentPolicy(
+      config,
+      listPerpTradeJournals({ limit: 500 }),
+      {
+        signalClass: input.signalClass,
+        marketRegime: input.marketRegime ?? null,
+        volatilityBucket: input.volatilityBucket ?? null,
+        liquidityBucket: input.liquidityBucket ?? null,
+      }
+    );
+    if (qualityPolicy.action === 'block') {
       return {
-        allowed: true,
-        reasonCode: calibrationPolicy.reasonCode,
-        reason: `${calibrationPolicy.reasonCode}: ${calibrationPolicy.reason}`,
-        sizeMultiplier: calibrationPolicy.sizeMultiplier,
+        allowed: false,
+        reasonCode: 'policy.decision_quality',
+        reason: `${qualityPolicy.reasonCode}: ${qualityPolicy.reason}`,
+        sizeMultiplier: 1,
         policyState,
       };
     }
+    if (qualityPolicy.action === 'downweight') {
+      accumulatedSizeMultiplier *= qualityPolicy.sizeMultiplier;
+      policyReasonCode = 'policy.decision_quality';
+      policyReason = `${qualityPolicy.reasonCode}: ${qualityPolicy.reason}`;
+    }
+
+    return {
+      allowed: true,
+      reasonCode: policyReasonCode,
+      reason: policyReason,
+      sizeMultiplier: clamp(accumulatedSizeMultiplier, 0.05, 1),
+      policyState,
+    };
   }
 
   return { allowed: true, sizeMultiplier: 1, policyState };

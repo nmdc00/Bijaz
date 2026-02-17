@@ -230,6 +230,76 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('blocks manual reduce-only exits when exit FSM enforcement is enabled', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        exit_mode: 'manual',
+        thesis_invalidation_hit: false,
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(false);
+    expect(String(res.error)).toMatch(/manual\/unknown reduce-only exits are blocked/i);
+  });
+
+  it('allows manual reduce-only exits with emergency override under FSM enforcement', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'XBTTEST',
+        side: 'sell',
+        size: 0.001,
+        reduce_only: true,
+        exit_mode: 'manual',
+        emergency_override: true,
+        emergency_reason: 'Exchange-side stop desynced after outage',
+      },
+      {
+        config: {
+          execution: { provider: 'hyperliquid' },
+          autonomy: { tradeContract: { enforceExitFsm: true } },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(true);
+  });
+
   it('persists deterministic direction/timing/sizing/exit scores for closed trades', async () => {
     let markPrice = 100;
     const dynamicMarketClient = {

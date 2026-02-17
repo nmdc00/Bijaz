@@ -14,6 +14,8 @@ describe('status snapshot formatter', () => {
         minEdgeOverride: null,
         maxTradesPerScanOverride: null,
         leverageCapOverride: null,
+        tradeContractEnforced: false,
+        decisionQualityGateEnabled: false,
       },
       lastTrade: null,
       nextScanAt: null,
@@ -65,6 +67,8 @@ describe('status snapshot formatter', () => {
         minEdgeOverride: null,
         maxTradesPerScanOverride: null,
         leverageCapOverride: null,
+        tradeContractEnforced: true,
+        decisionQualityGateEnabled: true,
       },
       lastTrade: {
         marketId: 'BTC',

@@ -3,6 +3,13 @@ export type TradeArchetype = 'scalp' | 'intraday' | 'swing';
 export type InvalidationType = 'price_level' | 'structure_break';
 
 export type TrailMode = 'none' | 'atr' | 'structure';
+export type ExitReasonCode =
+  | 'thesis_invalidation'
+  | 'take_profit'
+  | 'time_exit'
+  | 'risk_reduction'
+  | 'manual'
+  | 'unknown';
 
 export interface EntryTradeContractInput {
   tradeArchetype?: string | null;
@@ -21,6 +28,8 @@ export interface EntryTradeContract {
   takeProfitR: number | null;
   trailMode: TrailMode;
 }
+
+type ExitValidationResult = { valid: true } | { valid: false; error: string };
 
 type ContractValidationResult =
   | { valid: true; contract: EntryTradeContract | null }
@@ -122,4 +131,58 @@ export function validateEntryTradeContract(params: {
       trailMode,
     },
   };
+}
+
+export function validateReduceOnlyExitFsm(params: {
+  enabled: boolean;
+  reduceOnly: boolean;
+  exitMode: ExitReasonCode | null;
+  thesisInvalidationHit: boolean | null;
+  emergencyOverride: boolean;
+  emergencyReason: string | null;
+}): ExitValidationResult {
+  if (!params.enabled || !params.reduceOnly) {
+    return { valid: true };
+  }
+  if (params.emergencyOverride) {
+    if (!params.emergencyReason || params.emergencyReason.trim().length < 8) {
+      return {
+        valid: false,
+        error: 'emergency_reason is required (>=8 chars) when emergency_override=true',
+      };
+    }
+    return { valid: true };
+  }
+  if (!params.exitMode) {
+    return {
+      valid: false,
+      error:
+        'reduce-only exit requires exit_mode (thesis_invalidation|take_profit|time_exit|risk_reduction) when exit FSM is enabled',
+    };
+  }
+  if (params.exitMode === 'manual' || params.exitMode === 'unknown') {
+    return {
+      valid: false,
+      error:
+        'manual/unknown reduce-only exits are blocked by exit FSM; use emergency_override with reason',
+    };
+  }
+  if (params.exitMode === 'thesis_invalidation' && params.thesisInvalidationHit !== true) {
+    return {
+      valid: false,
+      error: 'exit_mode=thesis_invalidation requires thesis_invalidation_hit=true',
+    };
+  }
+  if (
+    (params.exitMode === 'take_profit' ||
+      params.exitMode === 'time_exit' ||
+      params.exitMode === 'risk_reduction') &&
+    params.thesisInvalidationHit === true
+  ) {
+    return {
+      valid: false,
+      error: 'thesis_invalidation_hit=true conflicts with non-invalidation exit_mode',
+    };
+  }
+  return { valid: true };
 }

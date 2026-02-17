@@ -594,6 +594,16 @@ const ConfigSchema = z.object({
                   tradeContract: z
                     .object({
                       enabled: z.boolean().optional(),
+                      enforceExitFsm: z.boolean().optional(),
+                    })
+                    .optional(),
+                  tradeQuality: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      minSamples: z.number().optional(),
+                      blockBelowScore: z.number().optional(),
+                      downweightBelowScore: z.number().optional(),
+                      downweightMultiplier: z.number().optional(),
                     })
                     .optional(),
                   signalPerformance: z
@@ -677,6 +687,16 @@ const ConfigSchema = z.object({
       tradeContract: z
         .object({
           enabled: z.boolean().default(false),
+          enforceExitFsm: z.boolean().default(false),
+        })
+        .default({}),
+      tradeQuality: z
+        .object({
+          enabled: z.boolean().default(false),
+          minSamples: z.number().default(12),
+          blockBelowScore: z.number().default(0.45),
+          downweightBelowScore: z.number().default(0.6),
+          downweightMultiplier: z.number().default(0.6),
         })
         .default({}),
       discoverySelection: z

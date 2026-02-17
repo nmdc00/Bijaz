@@ -13,12 +13,17 @@ describe('decision component scores', () => {
       exitPrice: 110,
       pricePathHigh: 120,
       pricePathLow: 90,
+      invalidationPrice: 95,
     });
 
     expect(result.directionScore).toBe(1);
     expect(result.timingScore).toBeCloseTo(2 / 3, 8);
     expect(result.sizingScore).toBeCloseTo(0.6857142857, 8);
     expect(result.exitScore).toBeCloseTo(0.5, 8);
+    expect(result.capturedR).toBeCloseTo(2, 8);
+    expect(result.leftOnTableR).toBeCloseTo(2, 8);
+    expect(result.wouldHit2R).toBe(true);
+    expect(result.wouldHit3R).toBe(true);
   });
 
   it('scores short closed trades deterministically', () => {
@@ -31,12 +36,17 @@ describe('decision component scores', () => {
       exitPrice: 105,
       pricePathHigh: 110,
       pricePathLow: 80,
+      invalidationPrice: 106,
     });
 
     expect(result.directionScore).toBe(0);
     expect(result.timingScore).toBeCloseTo(2 / 3, 8);
     expect(result.sizingScore).toBeCloseTo(0.5333333333, 8);
     expect(result.exitScore).toBe(0);
+    expect(result.capturedR).toBeCloseTo(-5 / 6, 8);
+    expect(result.leftOnTableR).toBeCloseTo(20 / 6, 8);
+    expect(result.wouldHit2R).toBe(true);
+    expect(result.wouldHit3R).toBe(true);
   });
 
   it('falls back to neutral scores when inputs are missing', () => {
@@ -49,5 +59,9 @@ describe('decision component scores', () => {
     expect(result.timingScore).toBe(0.5);
     expect(result.sizingScore).toBe(0.5);
     expect(result.exitScore).toBe(0.5);
+    expect(result.capturedR).toBeNull();
+    expect(result.leftOnTableR).toBeNull();
+    expect(result.wouldHit2R).toBeNull();
+    expect(result.wouldHit3R).toBeNull();
   });
 });

@@ -597,6 +597,14 @@ export const THUFIR_TOOLS: Tool[] = [
           enum: ['none', 'atr', 'structure'],
           description: 'Trailing mode for contract-based management',
         },
+        emergency_override: {
+          type: 'boolean',
+          description: 'Allow manual/unknown reduce-only exit only when true under FSM enforcement',
+        },
+        emergency_reason: {
+          type: 'string',
+          description: 'Required rationale when emergency_override=true',
+        },
         thesis_invalidation_hit: {
           type: 'boolean',
           description: 'For reduce-only exits: true if recorded invalidation condition was hit',
