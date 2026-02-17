@@ -26,6 +26,12 @@ import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
+import {
+  createAlert,
+  markAlertSent,
+  recordAlertDelivery,
+  suppressAlert,
+} from '../memory/alerts.js';
 
 const config = loadConfig();
 try {
@@ -453,14 +459,24 @@ if (mentatConfig?.enabled) {
   const mentatMarketClient = createMarketClient(config);
   const escalationConfig = config.notifications?.escalation;
 
-  const sendMentatMessage = async (channels: string[], message: string): Promise<void> => {
+  const sendMentatMessage = async (
+    channels: string[],
+    message: string
+  ): Promise<Array<{ channel: string; status: 'sent' | 'failed'; error?: string }>> => {
+    const outcomes: Array<{ channel: string; status: 'sent' | 'failed'; error?: string }> = [];
     if (channels.includes('telegram') && telegram) {
       for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
         try {
           await telegram.sendMessage(String(chatId), message);
           logger.info(`Telegram mentat alert sent to ${chatId}`);
+          outcomes.push({ channel: 'telegram', status: 'sent' });
         } catch (error) {
           logger.error(`Telegram mentat alert failed for ${chatId}`, error);
+          outcomes.push({
+            channel: 'telegram',
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
@@ -469,11 +485,18 @@ if (mentatConfig?.enabled) {
         try {
           await whatsapp.sendMessage(number, message);
           logger.info(`WhatsApp mentat alert sent to ${number}`);
+          outcomes.push({ channel: 'whatsapp', status: 'sent' });
         } catch (error) {
           logger.error(`WhatsApp mentat alert failed for ${number}`, error);
+          outcomes.push({
+            channel: 'whatsapp',
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
+    return outcomes;
   };
 
   if (!mentatMarketClient.isAvailable()) {
@@ -583,9 +606,50 @@ if (mentatConfig?.enabled) {
             `and max delta ${(maxDelta * 100).toFixed(1)}%`,
           message,
         });
+        const alertId = createAlert({
+          dedupeKey: decision.dedupeKey,
+          source: `mentat:${scheduleId}`,
+          reason: 'high_conviction_setup',
+          severity,
+          summary:
+            `${scan.system} triggered with fragility ${(fragilityScore * 100).toFixed(1)}% ` +
+            `and max delta ${(maxDelta * 100).toFixed(1)}%`,
+          message: decision.message,
+          metadata: {
+            scheduleId,
+            fragilityScore,
+            maxDelta,
+          },
+        });
         if (decision.shouldSend) {
-          await sendMentatMessage(decision.channels, decision.message);
+          const outcomes = await sendMentatMessage(decision.channels, decision.message);
+          let hasSent = false;
+          for (const outcome of outcomes) {
+            recordAlertDelivery({
+              alertId,
+              channel: outcome.channel,
+              status: outcome.status,
+              error: outcome.error ?? null,
+            });
+            if (outcome.status === 'sent') {
+              hasSent = true;
+            }
+          }
+          if (hasSent) {
+            markAlertSent({
+              alertId,
+              reasonCode: 'delivery_success',
+              metadata: { channels: decision.channels },
+            });
+          }
         } else {
+          suppressAlert({
+            alertId,
+            reasonCode: decision.suppressionReason ?? 'unknown',
+            metadata: {
+              channels: decision.channels,
+            },
+          });
           logger.info(`Escalation suppressed (${decision.suppressionReason ?? 'unknown'})`, {
             dedupeKey: decision.dedupeKey,
             source: `mentat:${scheduleId}`,
