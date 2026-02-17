@@ -1012,6 +1012,38 @@ export async function executeToolCall(
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
+        let size = requestedSize;
+        let reduceOnlyPreflightNote: string | null = null;
+        if (reduceOnly && ctx.config.execution?.provider === 'hyperliquid') {
+          try {
+            const position = await getReduceOnlyPositionSnapshot(ctx.config, symbol);
+            if (!position) {
+              return {
+                success: false,
+                error: `Reduce-only preflight blocked: no open ${symbol} position to reduce.`,
+              };
+            }
+            const wouldIncreaseLong = position.side === 'long' && side === 'buy';
+            const wouldIncreaseShort = position.side === 'short' && side === 'sell';
+            if (wouldIncreaseLong || wouldIncreaseShort) {
+              return {
+                success: false,
+                error:
+                  `Reduce-only preflight blocked: ${side} would increase current ` +
+                  `${position.side} ${symbol} position (size=${position.size}).`,
+              };
+            }
+            if (size > position.size) {
+              reduceOnlyPreflightNote =
+                `reduce_only size capped from ${size} to live position size ${position.size}`;
+              size = position.size;
+            }
+          } catch (error) {
+            // Best-effort preflight. If exchange state lookup fails, let exchange validation decide.
+            const detail = error instanceof Error ? error.message : String(error);
+            console.warn(`Reduce-only preflight lookup failed for ${symbol}: ${detail}`);
+          }
+        }
         const tradeContractEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enabled);
         const exitFsmEnabled = Boolean((ctx.config.autonomy as any)?.tradeContract?.enforceExitFsm);
         const normalizedReduceOnlyExit = normalizeReduceOnlyExitFsmInput({
