@@ -73,6 +73,7 @@ export type PerpTradeJournalEntry = {
   message?: string | null;
   error?: string | null;
   snapshot?: Record<string, unknown> | null;
+  planContext?: Record<string, unknown> | null;
 };
 
 export function recordPerpTradeJournal(entry: PerpTradeJournalEntry): void {

@@ -62,6 +62,7 @@ export const perpPlaceOrderTool: ToolDefinition = {
     hypothesis_id: z.string().optional(),
     thesis_invalidation_hit: z.boolean().optional(),
     exit_mode: z.enum(['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown']).optional(),
+    plan_context: z.record(z.unknown()).optional(),
   }),
   execute: async (input, ctx): Promise<ToolResult> => {
     return executeToolCall('perp_place_order', input as Record<string, unknown>, toExecutorContext(ctx));

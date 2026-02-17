@@ -1523,6 +1523,27 @@ function buildCompletedStepContext(state: AgentState): string {
   return lines.join('\n');
 }
 
+function buildPerpPlanContext(state: AgentState, step: PlanStep): Record<string, unknown> | null {
+  if (!state.plan) return null;
+  const pendingStepIds = state.plan.steps
+    .filter((candidate) => candidate.status === 'pending')
+    .map((candidate) => candidate.id)
+    .slice(0, 5);
+
+  return {
+    plan_id: state.plan.id,
+    plan_goal: state.plan.goal,
+    plan_revision_count: state.plan.revisionCount,
+    plan_created_at: state.plan.createdAt,
+    plan_updated_at: state.plan.updatedAt,
+    current_step_id: step.id,
+    current_step_description: step.description,
+    pending_step_ids: pendingStepIds,
+    iteration: state.iteration,
+    mode: state.mode,
+  };
+}
+
 /**
  * Ask the LLM to resolve concrete tool inputs based on completed step results.
  */
@@ -1644,6 +1665,10 @@ async function executeToolStep(
   }
 
   if (toolName === 'perp_place_order') {
+    const planContext = buildPerpPlanContext(state, step);
+    if (planContext) {
+      (input as Record<string, unknown>).plan_context = planContext;
+    }
     input = normalizePerpPlaceOrderInput(input as Record<string, unknown>);
   }
 

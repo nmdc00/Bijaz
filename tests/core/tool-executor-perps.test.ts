@@ -622,6 +622,49 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('persists plan_context metadata in perp trade journal entries', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const symbol = 'PLANTESTBTC';
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'buy',
+        size: 0.001,
+        plan_context: {
+          plan_id: 'plan-abc',
+          current_step_id: 'step-1',
+          plan_revision_count: 2,
+        },
+      },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 5 },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient }
+    );
+    expect(listRes.success).toBe(true);
+    const entries = ((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>;
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries[0]?.planContext).toMatchObject({
+      plan_id: 'plan-abc',
+      current_step_id: 'step-1',
+      plan_revision_count: 2,
+    });
+  });
+
   it('perp_open_orders returns executor orders', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
