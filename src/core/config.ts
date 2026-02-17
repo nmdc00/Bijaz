@@ -583,6 +583,15 @@ const ConfigSchema = z.object({
       maxTradesPerScan: z.number().default(3),
       maxTradesPerDay: z.number().default(25),
       tradeCapBypassMinEdge: z.number().default(0.12),
+      discoverySelection: z
+        .object({
+          enabled: z.boolean().default(true),
+          fullUniverseWhenSymbolsEmpty: z.boolean().default(true),
+          preselectLimit: z.number().default(24),
+          minOpenInterestUsd: z.number().default(5_000_000),
+          minDayVolumeUsd: z.number().default(20_000_000),
+        })
+        .default({}),
       signalPerformance: z
         .object({
           minSharpe: z.number().default(0.8),

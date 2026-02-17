@@ -1443,7 +1443,23 @@ export async function executeToolCall(
 
       case 'discovery_run': {
         const { runDiscovery } = await import('../discovery/engine.js');
-        const result = await runDiscovery(ctx.config);
+        const limit = Number(toolInput.limit ?? undefined);
+        const result = await runDiscovery(ctx.config, {
+          preselectLimit: Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : undefined,
+        });
+        return { success: true, data: result };
+      }
+
+      case 'discovery_select_markets': {
+        const { selectDiscoveryMarkets } = await import('../discovery/market_selector.js');
+        const limit = Number(toolInput.limit ?? undefined);
+        const minOpenInterestUsd = Number(toolInput.min_open_interest_usd ?? undefined);
+        const minDayVolumeUsd = Number(toolInput.min_day_volume_usd ?? undefined);
+        const result = await selectDiscoveryMarkets(ctx.config, {
+          limit: Number.isFinite(limit) ? limit : undefined,
+          minOpenInterestUsd: Number.isFinite(minOpenInterestUsd) ? minOpenInterestUsd : undefined,
+          minDayVolumeUsd: Number.isFinite(minDayVolumeUsd) ? minDayVolumeUsd : undefined,
+        });
         return { success: true, data: result };
       }
 
