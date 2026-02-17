@@ -26,6 +26,16 @@ agent:
   persistPlans: true
   allowFallbackNonCritical: true
   alwaysIncludeTime: false
+  proactiveRefresh:
+    enabled: false
+    intentMode: time_sensitive  # off | time_sensitive | always
+    ttlSeconds: 900
+    maxLatencyMs: 4500
+    marketLimit: 20
+    intelLimit: 5
+    webLimit: 5
+    strictFailClosed: true
+    fundingSymbols: [BTC, ETH]
   identityPromptMode: full
   identityBootstrapMaxChars: 20000
   identityBootstrapIncludeMissing: true
