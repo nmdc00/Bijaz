@@ -6,10 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadConfig } from '../../src/core/config.js';
 
-vi.mock('../../src/core/llm.js', () => ({
-  createLlmClient: vi.fn(() => ({ complete: vi.fn() })),
-  createTrivialTaskClient: vi.fn(() => null),
-}));
+vi.mock('../../src/core/llm.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/llm.js')>();
+  return {
+    ...actual,
+    createLlmClient: vi.fn(() => ({ complete: vi.fn() })),
+    createTrivialTaskClient: vi.fn(() => null),
+  };
+});
 
 import { Thufir } from '../../src/index.js';
 
@@ -36,6 +40,7 @@ describe('config schema validation', () => {
     const { path } = writeTempConfig(`
 agent:
   model: claude-3-5-sonnet-20241022
+memory: {}
 `);
 
     const config = loadConfig(path);
@@ -64,6 +69,7 @@ execution:
     const { path } = writeTempConfig(`
 agent:
   model: claude-3-5-sonnet-20241022
+memory: {}
 `);
 
     const config = loadConfig(path);
@@ -76,6 +82,7 @@ describe('startup config validation', () => {
     const { path } = writeTempConfig(`
 agent:
   model: claude-3-5-sonnet-20241022
+memory: {}
 execution:
   mode: invalid
 `);
