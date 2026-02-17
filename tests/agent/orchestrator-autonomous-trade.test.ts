@@ -1059,4 +1059,94 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect((cancelExec?.result as { success: true; data: { skipped?: boolean } }).data.skipped).toBe(true);
     expect(result.response).toContain('Action: I did not place a new perp order in this cycle.');
   });
+
+  it('skips mutating trade tools for chat-origin requests even with explicit trade wording', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Place order',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: { symbol: 'BTC', side: 'buy', size: 0.001 },
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'attempt buy',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content:
+              'Action: I executed a buy.\nBook State: updated.\nRisk: medium.\nNext Action: monitor.',
+          };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: (_name: string) => ({ sideEffects: true, requiresConfirmation: true } as any),
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, { success: true, data: { ok: true } });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Buy BTC now.',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      {
+        forceMode: 'trade',
+        skipCritic: true,
+        maxIterations: 4,
+        executionOrigin: 'chat',
+        allowTradeMutations: false,
+      }
+    );
+
+    expect(calls).toEqual([]);
+    const placeExec = result.state.toolExecutions.find((execution) => execution.toolName === 'perp_place_order');
+    expect(placeExec).toBeDefined();
+    expect((placeExec?.result as { success: true; data: { skipped?: boolean } }).data.skipped).toBe(true);
+    expect(
+      ((placeExec?.result as { success: true; data: { reason?: string } }).data.reason ?? '').toLowerCase()
+    ).toContain('chat-origin requests are analysis-only');
+  });
 });

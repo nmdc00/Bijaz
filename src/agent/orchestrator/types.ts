@@ -193,6 +193,12 @@ export interface OrchestratorOptions {
 
   /** Prior plan to resume (if any) */
   initialPlan?: AgentPlan;
+
+  /** Invocation origin to enforce execution safety policy. */
+  executionOrigin?: 'chat' | 'autonomous' | 'manual_override' | 'system';
+
+  /** Whether mutating trade tools are allowed for this invocation. */
+  allowTradeMutations?: boolean;
 }
 
 /**

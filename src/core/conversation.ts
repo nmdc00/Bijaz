@@ -418,6 +418,8 @@ export class ConversationHandler {
           }, {
             initialPlan: priorPlan ?? undefined,
             resumePlan,
+            executionOrigin: 'chat',
+            allowTradeMutations: false,
           });
 
           if (result.state.plan && !result.state.plan.complete) {

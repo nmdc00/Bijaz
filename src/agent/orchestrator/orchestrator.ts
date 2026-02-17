@@ -410,10 +410,24 @@ function goalIsAnalysisStyle(goal: string): boolean {
   );
 }
 
-function shouldSkipMutatingTradeToolForAnalysis(state: AgentState, step: PlanStep): boolean {
-  if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return false;
-  if (!goalIsAnalysisStyle(state.goal)) return false;
-  return !goalRequestsTradeMutation(state.goal);
+function getMutatingTradeSkipReason(
+  state: AgentState,
+  step: PlanStep,
+  options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
+): string | null {
+  if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return null;
+
+  // Chat-origin calls are analysis-only by default; trading must come from autonomous loop
+  // or an explicit manual override path.
+  if (options?.executionOrigin === 'chat' && options?.allowTradeMutations !== true) {
+    return 'Mutating trade action skipped: chat-origin requests are analysis-only.';
+  }
+
+  if (goalIsAnalysisStyle(state.goal) && !goalRequestsTradeMutation(state.goal)) {
+    return 'Mutating trade action skipped: request appears analytical and did not explicitly request execution.';
+  }
+
+  return null;
 }
 
 function isReadOnlyStep(step: PlanStep, ctx: OrchestratorContext): boolean {
@@ -425,14 +439,15 @@ function isReadOnlyStep(step: PlanStep, ctx: OrchestratorContext): boolean {
 function buildParallelReadBatch(
   readySteps: PlanStep[],
   state: AgentState,
-  ctx: OrchestratorContext
+  ctx: OrchestratorContext,
+  options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): PlanStep[] {
   const batch: PlanStep[] = [];
   for (const step of readySteps) {
     if (batch.length >= MAX_PARALLEL_READ_STEPS) break;
     if (!isReadOnlyStep(step, ctx)) break;
     if (shouldSkipRedundantToolsList(state, step)) continue;
-    if (shouldSkipMutatingTradeToolForAnalysis(state, step)) continue;
+    if (getMutatingTradeSkipReason(state, step, options)) continue;
     batch.push(step);
   }
   return batch;
@@ -1041,7 +1056,8 @@ export async function runOrchestrator(
         ctx.onUpdate?.(state);
         continue;
       }
-      if (shouldSkipMutatingTradeToolForAnalysis(state, nextStep)) {
+      const mutatingTradeSkipReason = getMutatingTradeSkipReason(state, nextStep, options);
+      if (mutatingTradeSkipReason) {
         const skippedExecution: ToolExecution = {
           toolName: nextStep.toolName,
           input: nextStep.toolInput ?? {},
@@ -1049,8 +1065,7 @@ export async function runOrchestrator(
             success: true,
             data: {
               skipped: true,
-              reason:
-                'Mutating trade action skipped: request appears analytical and did not explicitly request execution.',
+              reason: mutatingTradeSkipReason,
             },
           },
           timestamp: new Date().toISOString(),
@@ -1063,7 +1078,7 @@ export async function runOrchestrator(
         continue;
       }
 
-      const readBatch = buildParallelReadBatch(readySteps, state, ctx);
+      const readBatch = buildParallelReadBatch(readySteps, state, ctx, options);
       if (readBatch.length > 1) {
         const executions = await Promise.all(
           readBatch.map((step) => executeToolStep(step, state, ctx))
