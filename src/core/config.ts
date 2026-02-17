@@ -244,6 +244,7 @@ const ConfigSchema = z.object({
       privateKey: z.string().optional(),
       maxLeverage: z.number().default(5),
       defaultSlippageBps: z.number().default(10),
+      maxQuoteAgeMs: z.number().default(2000),
       symbols: z.array(z.string()).default(['BTC', 'ETH']),
       bridge: z
         .object({
