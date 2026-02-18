@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const runOrchestratorMock = vi.fn(async () => ({
+  response: '',
+  state: {
+    plan: null,
+    toolExecutions: [],
+    criticResult: null,
+    mode: 'trade',
+  },
+  summary: { fragility: null },
+}));
+
 vi.mock('../../src/intel/vectorstore.js', () => ({
   IntelVectorStore: class {
     async query() {
@@ -65,16 +76,7 @@ vi.mock('../../src/memory/chat_vectorstore.js', () => ({
 }));
 
 vi.mock('../../src/agent/orchestrator/orchestrator.js', () => ({
-  runOrchestrator: async () => ({
-    response: '',
-    state: {
-      plan: null,
-      toolExecutions: [],
-      criticResult: null,
-      mode: 'trade',
-    },
-    summary: { fragility: null },
-  }),
+  runOrchestrator: runOrchestratorMock,
 }));
 
 vi.mock('../../src/core/tool-executor.js', () => ({
@@ -94,6 +96,17 @@ vi.mock('../../src/core/tool-executor.js', () => ({
 
 describe('ConversationHandler cooldown fallback', () => {
   it('returns deterministic non-empty response when orchestrator synthesis is empty', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockResolvedValue({
+      response: '',
+      state: {
+        plan: null,
+        toolExecutions: [],
+        criticResult: null,
+        mode: 'trade',
+      },
+      summary: { fragility: null },
+    });
     const { ConversationHandler } = await import('../../src/core/conversation.js');
     const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
     const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
@@ -109,5 +122,42 @@ describe('ConversationHandler cooldown fallback', () => {
     expect(reply).toContain('Monitoring is still active');
     expect(reply).toContain('perp position');
     expect(reply.trim().length).toBeGreaterThan(0);
+  });
+
+  it('uses autonomous execution origin for heartbeat and chat origin for normal messages', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockResolvedValue({
+      response: 'ok',
+      state: {
+        plan: null,
+        toolExecutions: [],
+        criticResult: null,
+        mode: 'trade',
+      },
+      summary: { fragility: null },
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'live', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: true },
+    } as any;
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    await handler.chat('__heartbeat__', 'Read heartbeat');
+    await handler.chat('user', 'Buy BTC now');
+
+    expect(runOrchestratorMock).toHaveBeenCalledTimes(2);
+    expect(runOrchestratorMock.mock.calls[0]?.[2]).toMatchObject({
+      executionOrigin: 'autonomous',
+      allowTradeMutations: true,
+    });
+    expect(runOrchestratorMock.mock.calls[1]?.[2]).toMatchObject({
+      executionOrigin: 'chat',
+      allowTradeMutations: true,
+    });
   });
 });

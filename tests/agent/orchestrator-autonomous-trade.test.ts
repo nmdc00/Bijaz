@@ -1512,4 +1512,120 @@ describe('runOrchestrator autonomous trade contract', () => {
       execution_origin: 'manual_override',
     });
   });
+
+  it('applies short trade-mutation cooldown across origins to prevent immediate flip-flops', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Place order',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: { symbol: 'BTC', side: 'buy', size: 0.001 },
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'attempt buy',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'Action: done.' };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: (_name: string) => ({ sideEffects: true, requiresConfirmation: true } as any),
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { order_id: `oid-${calls.length}` },
+        });
+      },
+    };
+
+    await runOrchestrator(
+      'Buy BTC now.',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: { config: { autonomy: { tradeMutationCooldownSeconds: 45 } } } as any,
+      },
+      {
+        forceMode: 'trade',
+        skipCritic: true,
+        maxIterations: 4,
+        executionOrigin: 'manual_override',
+        allowTradeMutations: true,
+      }
+    );
+
+    const second = await runOrchestrator(
+      'Buy BTC now.',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: { config: { autonomy: { tradeMutationCooldownSeconds: 45 } } } as any,
+      },
+      {
+        forceMode: 'trade',
+        skipCritic: true,
+        maxIterations: 4,
+        executionOrigin: 'autonomous',
+        allowTradeMutations: true,
+      }
+    );
+
+    expect(calls).toEqual(['perp_place_order']);
+    const placeExec = second.state.toolExecutions.find(
+      (execution) => execution.toolName === 'perp_place_order'
+    );
+    expect(placeExec).toBeDefined();
+    expect((placeExec?.result as { success: true; data: { skipped?: boolean } }).data.skipped).toBe(true);
+    expect(
+      ((placeExec?.result as { success: true; data: { reason?: string } }).data.reason ?? '').toLowerCase()
+    ).toContain('trade coordination cooldown active');
+  });
 });

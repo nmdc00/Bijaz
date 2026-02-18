@@ -342,9 +342,14 @@ export class ConversationHandler {
             ? message.slice(manualTradeOverride[0].length).trim()
             : message;
           const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
-          const allowTradeMutations = Boolean(
-            autoApproveTrades || (manualTradeOverride && orchestratorMessage.length > 0)
-          );
+          const isManualTradeOverride = Boolean(manualTradeOverride && orchestratorMessage.length > 0);
+          const executionOrigin =
+            isManualTradeOverride
+              ? 'manual_override'
+              : userId === '__heartbeat__'
+                ? 'autonomous'
+                : 'chat';
+          const allowTradeMutations = Boolean(autoApproveTrades || isManualTradeOverride);
           if (manualTradeOverride && orchestratorMessage.length === 0) {
             return 'Manual override requires a concrete instruction after `/trade confirm`, e.g. `/trade confirm buy BTC 0.001 market`.';
           }
@@ -398,7 +403,7 @@ export class ConversationHandler {
             memorySystem,
             onConfirmation: async (_prompt, toolName) => {
               if (tradeToolNames.has(toolName)) {
-                return allowTradeMutations || autoApproveTrades;
+                return allowTradeMutations;
               }
               if (fundingToolNames.has(toolName)) {
                 return autoApproveFunding;
@@ -430,7 +435,7 @@ export class ConversationHandler {
           }, {
             initialPlan: priorPlan ?? undefined,
             resumePlan,
-            executionOrigin: allowTradeMutations ? 'manual_override' : 'chat',
+            executionOrigin,
             allowTradeMutations,
           });
 

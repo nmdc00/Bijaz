@@ -32,6 +32,7 @@ import { runCritic, shouldRunCritic } from '../critic/critic.js';
 import { buildIdentityPrompt, buildMinimalIdentityPrompt } from '../identity/identity.js';
 import type { QuickFragilityScan } from '../../mentat/scan.js';
 import { recordDecisionAudit } from '../../memory/decision_audit.js';
+import { getExecutionState, upsertExecutionState } from '../../memory/execution_state.js';
 import {
   recordAgentIncident,
   listRecentAgentIncidents,
@@ -61,6 +62,8 @@ import {
 const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
 const MAX_PARALLEL_READ_STEPS = 3;
 const MUTATING_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
+const TRADE_MUTATION_GUARD_SOURCE = 'trade_mutation_guard';
+const DEFAULT_TRADE_MUTATION_COOLDOWN_SECONDS = 45;
 const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
 const EXECUTION_INTENT_PATTERNS = [
   /\b(buy|sell|place|execute|open|close|reduce|trim|cut|flatten|cancel)\b/i,
@@ -413,18 +416,43 @@ function goalIsAnalysisStyle(goal: string): boolean {
 function getMutatingTradeSkipReason(
   state: AgentState,
   step: PlanStep,
+  ctx: OrchestratorContext,
   options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): string | null {
   if (!step.toolName || !MUTATING_TRADE_TOOLS.has(step.toolName)) return null;
+  const executionOrigin = options?.executionOrigin ?? 'system';
 
   // Chat-origin calls are analysis-only by default; trading must come from autonomous loop
   // or an explicit manual override path.
-  if (options?.executionOrigin === 'chat' && options?.allowTradeMutations !== true) {
+  if (executionOrigin === 'chat' && options?.allowTradeMutations !== true) {
     return 'Mutating trade action skipped: chat-origin requests are analysis-only.';
   }
 
   if (goalIsAnalysisStyle(state.goal) && !goalRequestsTradeMutation(state.goal)) {
     return 'Mutating trade action skipped: request appears analytical and did not explicitly request execution.';
+  }
+
+  if (
+    step.toolName === 'perp_place_order' &&
+    executionOrigin !== 'manual_override' &&
+    !isLikelyReduceOnlyToolInput(step.toolInput) &&
+    options?.allowTradeMutations === true
+  ) {
+    const cooldownMs = resolveTradeMutationCooldownMs(ctx);
+    if (cooldownMs > 0) {
+      const previous = getExecutionState(TRADE_MUTATION_GUARD_SOURCE);
+      const previousTs = previous?.updatedAt ? Date.parse(previous.updatedAt) : Number.NaN;
+      if (Number.isFinite(previousTs)) {
+        const elapsedMs = Date.now() - previousTs;
+        if (elapsedMs >= 0 && elapsedMs < cooldownMs) {
+          const remainingSeconds = Math.ceil((cooldownMs - elapsedMs) / 1000);
+          return (
+            'Mutating trade action skipped: trade coordination cooldown active ' +
+            `(${remainingSeconds}s remaining after ${previous?.lastMode ?? 'unknown'} action).`
+          );
+        }
+      }
+    }
   }
 
   return null;
@@ -447,10 +475,32 @@ function buildParallelReadBatch(
     if (batch.length >= MAX_PARALLEL_READ_STEPS) break;
     if (!isReadOnlyStep(step, ctx)) break;
     if (shouldSkipRedundantToolsList(state, step)) continue;
-    if (getMutatingTradeSkipReason(state, step, options)) continue;
+    if (getMutatingTradeSkipReason(state, step, ctx, options)) continue;
     batch.push(step);
   }
   return batch;
+}
+
+function isLikelyReduceOnlyToolInput(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false;
+  const payload = input as Record<string, unknown>;
+  if (payload.reduce_only === true || payload.reduceOnly === true) return true;
+  if (payload.exit_mode === true || payload.exitMode === true) return true;
+  if (payload.close === true) return true;
+  const value = payload.reduce_only ?? payload.reduceOnly ?? payload.exit_mode ?? payload.exitMode;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return false;
+}
+
+function resolveTradeMutationCooldownMs(ctx: OrchestratorContext): number {
+  const raw = (ctx.toolContext as { config?: { autonomy?: { tradeMutationCooldownSeconds?: unknown } } })
+    ?.config?.autonomy?.tradeMutationCooldownSeconds;
+  const parsed = Number(raw);
+  const seconds = Number.isFinite(parsed) ? parsed : DEFAULT_TRADE_MUTATION_COOLDOWN_SECONDS;
+  return Math.max(0, seconds) * 1000;
 }
 
 function enforceIdentityMarker(identity: { marker: string }, prompt: string): void {
@@ -761,6 +811,7 @@ export async function runOrchestrator(
 ): Promise<OrchestratorResult> {
   const startTime = Date.now();
   const startedAt = new Date().toISOString();
+  const executionOrigin = options?.executionOrigin ?? 'system';
 
   if (isDebugEnabled()) {
     const cfg = (ctx.toolContext as { config?: { agent?: Record<string, unknown> } })?.config;
@@ -1129,7 +1180,7 @@ export async function runOrchestrator(
         ctx.onUpdate?.(state);
         continue;
       }
-      const mutatingTradeSkipReason = getMutatingTradeSkipReason(state, nextStep, options);
+      const mutatingTradeSkipReason = getMutatingTradeSkipReason(state, nextStep, ctx, options);
       if (mutatingTradeSkipReason) {
         const skippedExecution: ToolExecution = {
           toolName: nextStep.toolName,
@@ -1180,6 +1231,27 @@ export async function runOrchestrator(
 
       const execution = await executeToolStep(nextStep, state, ctx, options);
       await processToolExecution(nextStep, execution);
+      if (
+        execution.result.success &&
+        nextStep.toolName === 'perp_place_order' &&
+        !isSkippedToolExecution(execution) &&
+        !isLikelyReduceOnlyToolInput(execution.input)
+      ) {
+        upsertExecutionState({
+          source: TRADE_MUTATION_GUARD_SOURCE,
+          fingerprint: JSON.stringify({
+            tool: nextStep.toolName,
+            origin: executionOrigin,
+            symbol:
+              (execution.input as { symbol?: unknown } | undefined)?.symbol ??
+              (execution.input as { market?: unknown } | undefined)?.market ??
+              inferSymbolFromGoal(state.goal) ??
+              null,
+          }),
+          lastMode: executionOrigin,
+          lastReason: 'perp_place_order_success',
+        });
+      }
     } else {
       // Non-tool step - mark as complete
       state = setPlan(state, completeStep(state.plan!, nextStep.id));
