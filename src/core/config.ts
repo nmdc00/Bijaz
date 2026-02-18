@@ -731,6 +731,7 @@ const ConfigSchema = z.object({
       dailyReportTime: z.string().default('20:00'),
       maxTradesPerScan: z.number().default(3),
       maxTradesPerDay: z.number().default(25),
+      tradeMutationCooldownSeconds: z.number().default(45),
       tradeCapBypassMinEdge: z.number().default(0.12),
       dailyDrawdownCapUsd: z.number().default(0),
       tradeContract: z
