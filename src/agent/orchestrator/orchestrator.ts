@@ -662,7 +662,8 @@ function buildTradeActionSummary(state: AgentState): string {
   const lastError = (
     tradeAttempts[tradeAttempts.length - 1]?.result as { success: false; error: string } | undefined
   )?.error;
-  return `I did not execute a new perp order. Last perp_place_order failed${lastError ? `: ${lastError}` : '.'}`;
+  const compactError = compactTradeError(lastError);
+  return `I did not execute a new perp order. Last perp_place_order failed${compactError ? `: ${compactError}` : '.'}`;
 }
 
 function buildTradeRiskSummary(state: AgentState): string {
@@ -677,7 +678,8 @@ function buildTradeRiskSummary(state: AgentState): string {
   }
   if (lastTrade && !lastTrade.result.success) {
     const err = (lastTrade.result as { success: false; error: string }).error;
-    return `Primary risk is execution reliability until this blocker is resolved (${err}).`;
+    const compactError = compactTradeError(err) ?? err;
+    return `Primary risk is execution reliability until this blocker is resolved (${compactError}).`;
   }
   return 'Primary risk is position and collateral drift without fresh execution.';
 }
@@ -1745,14 +1747,54 @@ function buildCriticFailureFallbackResponse(state: AgentState, originalResponse:
   }
 
   const lastError = (failedTrades[failedTrades.length - 1]?.result as { error?: string } | undefined)?.error;
-  const toolList = state.toolExecutions
-    .map((t) => `${t.toolName}[${t.result.success ? 'ok' : 'err'}]`)
-    .join(', ');
+  const minNotionalInfo = extractMinNotionalFailureInfo(failedTrades);
+  if (minNotionalInfo) {
+    const minimumUsdText =
+      minNotionalInfo.minimumUsd != null ? `$${trimTrailingZeros(minNotionalInfo.minimumUsd.toFixed(2))}` : '$10';
+    return [
+      'Action: No trade was executed.',
+      `Reason: Order value was below Hyperliquid minimum notional (${minimumUsdText}).`,
+      `Next: Increase size so size × price >= ${minimumUsdText}, then retry.`,
+    ].join('\n');
+  }
+
+  const compactError = compactTradeError(lastError);
   return [
     'Action: No trade was executed.',
-    `perp_place_order failed ${failedTrades.length} time(s)${lastError ? `; last error: ${lastError}` : '.'}`,
-    `Tools run: ${toolList}`,
+    `perp_place_order failed ${failedTrades.length} time(s)${compactError ? `; last error: ${compactError}` : '.'}`,
   ].join('\n');
+}
+
+function compactTradeError(error: string | undefined): string | null {
+  if (typeof error !== 'string') {
+    return null;
+  }
+  const cleaned = error
+    .replace(/^hyperliquid trade failed:\s*/i, '')
+    .replace(/\s*asset=\d+\b/gi, '')
+    .trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function extractMinNotionalFailureInfo(
+  failedTrades: ToolExecution[]
+): { minimumUsd: number | null } | null {
+  for (let index = failedTrades.length - 1; index >= 0; index -= 1) {
+    const failed = failedTrades[index];
+    const err = ((failed?.result as { error?: string } | undefined)?.error ?? '').toLowerCase();
+    if (!/minimum value of \$?\d+/.test(err)) {
+      continue;
+    }
+    const rawError = (failed?.result as { error?: string } | undefined)?.error ?? '';
+    const minimumMatch = rawError.match(/minimum value of \$?(\d+(?:\.\d+)?)/i);
+    const minimumUsd = minimumMatch ? Number(minimumMatch[1]) : null;
+    return { minimumUsd: Number.isFinite(minimumUsd) ? minimumUsd : null };
+  }
+  return null;
+}
+
+function trimTrailingZeros(value: string): string {
+  return value.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
 }
 
 /**
