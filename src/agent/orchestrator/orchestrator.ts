@@ -681,7 +681,11 @@ function buildTradeNextActionSummary(state: AgentState): string {
   return 'I will continue autonomous monitoring and execute the next valid trade action when constraints allow.';
 }
 
-function enforceTradeResponseContract(response: string, state: AgentState): string {
+function enforceTradeResponseContract(
+  response: string,
+  state: AgentState,
+  executionOrigin: 'chat' | 'autonomous' | 'manual_override' | 'system' = 'system'
+): string {
   const shouldEnforce =
     state.mode === 'trade' &&
     (isTradeExecutionIntent(state.goal) ||
@@ -691,24 +695,43 @@ function enforceTradeResponseContract(response: string, state: AgentState): stri
   }
 
   const deterministicAction = `Action: ${buildTradeActionSummary(state)}`;
-  const hasContractShape =
-    /\bAction:\s*/i.test(response) &&
-    /\bBook State:\s*/i.test(response) &&
-    /\bRisk:\s*/i.test(response) &&
-    /\bNext Action:\s*/i.test(response);
-  if (hasContractShape) {
-    return response
-      .split('\n')
-      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
-      .join('\n');
-  }
-
-  return [
+  const deterministicContract = [
     deterministicAction,
     `Book State: ${buildTradeBookState(state)}`,
     `Risk: ${buildTradeRiskSummary(state)}`,
     `Next Action: ${buildTradeNextActionSummary(state)}`,
   ].join('\n');
+  const hasContractShape =
+    /\bAction:\s*/i.test(response) &&
+    /\bBook State:\s*/i.test(response) &&
+    /\bRisk:\s*/i.test(response) &&
+    /\bNext Action:\s*/i.test(response);
+  const rewriteActionLine = (input: string): string =>
+    input
+      .split('\n')
+      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
+      .join('\n');
+
+  if (executionOrigin === 'chat') {
+    const hasTerminalTradeExecution = state.toolExecutions.some((execution) =>
+      TERMINAL_TRADE_TOOLS.has(execution.toolName)
+    );
+    // Strip permission-seeking phrases if the synthesizer emitted them.
+    const sanitizedResponse = response.replace(/\bif you want\b[^.!?]*[.!?]?/gi, '').trim();
+    if (!hasTerminalTradeExecution) {
+      return sanitizedResponse || response;
+    }
+    if (hasContractShape) {
+      return rewriteActionLine(response);
+    }
+    return `${sanitizedResponse || response}\n\n${deterministicContract}`;
+  }
+
+  if (hasContractShape) {
+    return rewriteActionLine(response);
+  }
+
+  return deterministicContract;
 }
 
 /**
@@ -1216,17 +1239,23 @@ export async function runOrchestrator(
       if (!criticResult.approved && !criticResult.revisedResponse) {
         finalResponse = buildCriticFailureFallbackResponse(state, response);
       }
-      finalResponse = enforceTradeResponseContract(finalResponse, state);
+      finalResponse = enforceTradeResponseContract(finalResponse, state, options?.executionOrigin ?? 'system');
       state = completeState(state, finalResponse, criticResult);
     } catch (error) {
       state = addWarning(
         state,
         `Critic failed: ${error instanceof Error ? error.message : 'Unknown'}`
       );
-      state = completeState(state, enforceTradeResponseContract(response, state));
+      state = completeState(
+        state,
+        enforceTradeResponseContract(response, state, options?.executionOrigin ?? 'system')
+      );
     }
   } else {
-    state = completeState(state, enforceTradeResponseContract(response, state));
+    state = completeState(
+      state,
+      enforceTradeResponseContract(response, state, options?.executionOrigin ?? 'system')
+    );
   }
 
   ctx.onUpdate?.(state);
