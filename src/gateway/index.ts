@@ -571,7 +571,9 @@ if (heartbeatConfig?.enabled) {
   const heartbeatUserId = '__heartbeat__';
   const heartbeatPrompt =
     'Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. ' +
-    'Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.';
+    'Do not infer or repeat old tasks from prior chats. ' +
+    'If you execute any action, start the first line with "HEARTBEAT_ACTION:". ' +
+    'If nothing needs attention, reply HEARTBEAT_OK.';
 
   const isHeartbeatEmpty = (content: string | null): boolean => {
     if (!content) return true;
@@ -655,6 +657,8 @@ if (heartbeatConfig?.enabled) {
     if (!response || response.trim().length === 0) {
       return;
     }
+    const summary = response.replace(/\s+/g, ' ').trim().slice(0, 240);
+    logger.info(`Heartbeat response summary: ${summary}`);
     const normalized = response.trim().toUpperCase();
     if (normalized.startsWith('HEARTBEAT_OK')) {
       return;
