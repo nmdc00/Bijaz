@@ -199,7 +199,7 @@ function registerScheduledTaskJob(params: { jobName: string; taskId: string; sch
         identityLinks: config.session?.identityLinks,
       });
       const scheduledPrompt = buildScheduledTaskInstruction(rec);
-      const result = await defaultAgent.handleMessage(sessionKey, scheduledPrompt);
+      const result = await primaryAgent.handleMessage(sessionKey, scheduledPrompt);
       const header = '📌 Scheduled task delivery';
       const scheduledFor = `Scheduled for (UTC): ${formatScheduleTarget(rec)}`;
       const deliveredAt = `Delivered at (UTC): ${formatUtcDateTime(new Date().toISOString())}`;
