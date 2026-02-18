@@ -55,11 +55,20 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       const leverageCap = marketMeta.maxLeverage ?? this.maxLeverage;
       const appliedLeverage = Math.min(leverage, leverageCap);
       if (decision.leverage != null) {
-        await exchange.updateLeverage({
-          asset: marketMeta.assetId,
-          isCross: true,
-          leverage: appliedLeverage,
-        });
+        try {
+          await exchange.updateLeverage({
+            asset: marketMeta.assetId,
+            isCross: true,
+            leverage: appliedLeverage,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Hyperliquid can reject cross-leverage reductions when margin is tight.
+          // Continue with order placement at current leverage instead of failing autonomous execution.
+          if (!/decrease leverage/i.test(message)) {
+            throw error;
+          }
+        }
       }
 
       const sizeStr = formatDecimal(size, marketMeta.szDecimals ?? 6);
