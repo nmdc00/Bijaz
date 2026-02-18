@@ -551,7 +551,7 @@ describe('runOrchestrator autonomous trade contract', () => {
       { forceMode: 'trade', maxIterations: 4 }
     );
 
-    expect(result.response).toContain('Action: I executed 1 perp order(s).');
+    expect(result.response).toContain('Action: I attempted 1 perp order(s), but none had confirmed execution.');
   });
 
   it('enforces agency contract response shape in trade mode', async () => {
