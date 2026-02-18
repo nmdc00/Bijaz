@@ -604,7 +604,7 @@ function buildTradeBookState(state: AgentState): string {
   return 'I am managing the book with no fresh portfolio snapshot in this cycle.';
 }
 
-function isConfirmedPerpExecution(execution: ToolExecutionContext): boolean {
+function isConfirmedPerpExecution(execution: ToolExecution): boolean {
   if (execution.toolName !== 'perp_place_order' || !execution.result.success) {
     return false;
   }
