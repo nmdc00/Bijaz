@@ -158,4 +158,27 @@ describe('HyperliquidLiveExecutor', () => {
     quoteSpy.mockRestore();
     nowSpy.mockRestore();
   });
+
+  it('continues order placement when leverage decrease is rejected by exchange', async () => {
+    updateLeverageMock.mockRejectedValueOnce(
+      new Error(
+        'Cross position does not have sufficient margin available to decrease leverage. To decrease leverage, deposit more collateral.'
+      )
+    );
+    const config: ThufirConfig = {
+      hyperliquid: { defaultSlippageBps: 10, maxLeverage: 5 },
+    } as ThufirConfig;
+    const executor = new HyperliquidLiveExecutor({ config });
+
+    const result = await executor.execute(market, {
+      action: 'buy',
+      size: 1,
+      leverage: 1,
+      orderType: 'market',
+    });
+
+    expect(result.executed).toBe(true);
+    expect(updateLeverageMock).toHaveBeenCalledTimes(1);
+    expect(orderMock).toHaveBeenCalledTimes(1);
+  });
 });

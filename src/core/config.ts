@@ -904,7 +904,7 @@ const ConfigSchema = z.object({
           webLimitPerQuery: z.number().default(5),
           fetchPerQuery: z.number().default(1),
           fetchMaxChars: z.number().default(4000),
-          suppressLlmDuringActiveChatSeconds: z.number().default(90),
+          suppressLlmDuringActiveChatSeconds: z.number().default(0),
           channels: z.array(z.string()).default([]),
         })
         .default({}),
@@ -912,7 +912,7 @@ const ConfigSchema = z.object({
         .object({
           enabled: z.boolean().default(false),
           intervalMinutes: z.number().default(30),
-          suppressLlmDuringActiveChatSeconds: z.number().default(90),
+          suppressLlmDuringActiveChatSeconds: z.number().default(0),
           channels: z.array(z.string()).default([]),
           target: z.string().default('last'),
         })
