@@ -341,8 +341,9 @@ export class ConversationHandler {
           const orchestratorMessage = manualTradeOverride
             ? message.slice(manualTradeOverride[0].length).trim()
             : message;
+          const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
           const allowTradeMutations = Boolean(
-            manualTradeOverride && orchestratorMessage.length > 0
+            autoApproveTrades || (manualTradeOverride && orchestratorMessage.length > 0)
           );
           if (manualTradeOverride && orchestratorMessage.length === 0) {
             return 'Manual override requires a concrete instruction after `/trade confirm`, e.g. `/trade confirm buy BTC 0.001 market`.';
@@ -366,7 +367,6 @@ export class ConversationHandler {
       'hyperliquid_order_roundtrip',
       'playbook_upsert',
     ]);
-          const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
           const autoApproveFunding = Boolean(
             this.config.autonomy?.fullAuto && this.config.autonomy?.allowFundingActions
           );
