@@ -45,6 +45,12 @@ import {
   formatScheduledTaskHelp,
   parseScheduledTaskAction,
 } from './scheduled_task_commands.js';
+import {
+  buildScheduledTaskInstruction,
+  describeSchedule,
+  formatScheduleTarget,
+  formatUtcDateTime,
+} from './scheduled_task_format.js';
 import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
@@ -165,21 +171,6 @@ async function sendChannelReply(
   }
 }
 
-function describeSchedule(rec: {
-  scheduleKind: 'once' | 'daily' | 'interval';
-  runAt: string | null;
-  dailyTime: string | null;
-  intervalMinutes: number | null;
-}): string {
-  if (rec.scheduleKind === 'once') {
-    return rec.runAt ? `once at ${rec.runAt} (UTC)` : 'once';
-  }
-  if (rec.scheduleKind === 'daily') {
-    return `daily at ${rec.dailyTime ?? '??:??'} (UTC)`;
-  }
-  return `every ${rec.intervalMinutes ?? 0} minute(s)`;
-}
-
 function registerScheduledTaskJob(params: { jobName: string; taskId: string; schedule: ScheduleDefinition }) {
   scheduler.registerJob(
     {
@@ -207,11 +198,14 @@ function registerScheduledTaskJob(params: { jobName: string; taskId: string; sch
         dmScope: config.session?.dmScope,
         identityLinks: config.session?.identityLinks,
       });
-      const result = await primaryAgent.handleMessage(sessionKey, rec.instruction);
-      const header = `📌 Scheduled task (${describeSchedule(rec)})`;
+      const scheduledPrompt = buildScheduledTaskInstruction(rec);
+      const result = await primaryAgent.handleMessage(sessionKey, scheduledPrompt);
+      const header = '📌 Scheduled task delivery';
+      const scheduledFor = `Scheduled for (UTC): ${formatScheduleTarget(rec)}`;
+      const deliveredAt = `Delivered at (UTC): ${formatUtcDateTime(new Date().toISOString())}`;
       await sendChannelReply(
         { channel: rec.channel as 'telegram' | 'whatsapp' | 'cli', senderId: rec.recipientId },
-        `${header}\nTask: ${rec.instruction}\n\n${result}`,
+        `${header}\n${scheduledFor}\n${deliveredAt}\nTask: ${rec.instruction}\n\n${result}`,
         'scheduled task'
       );
       markScheduledTaskRan(rec.id);
@@ -301,7 +295,6 @@ async function maybeHandleScheduledTaskAction(message: {
 
   return null;
 }
-
 const onIncoming = async (
   message: {
     channel: 'telegram' | 'whatsapp' | 'cli';
