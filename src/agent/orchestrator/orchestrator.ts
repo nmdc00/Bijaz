@@ -623,8 +623,21 @@ function isConfirmedPerpExecution(execution: ToolExecution): boolean {
   return /\b(order\s+(filled|resting|placed)|oid=)\b/i.test(message);
 }
 
+function isSkippedToolExecution(execution: ToolExecution): boolean {
+  if (!execution.result.success) {
+    return false;
+  }
+  const data = (execution.result as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  return (data as { skipped?: unknown }).skipped === true;
+}
+
 function buildTradeActionSummary(state: AgentState): string {
-  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  const tradeAttempts = state.toolExecutions
+    .filter((t) => t.toolName === 'perp_place_order')
+    .filter((t) => !isSkippedToolExecution(t));
   if (tradeAttempts.length === 0) {
     return 'I did not place a new perp order in this cycle.';
   }
@@ -653,7 +666,9 @@ function buildTradeActionSummary(state: AgentState): string {
 }
 
 function buildTradeRiskSummary(state: AgentState): string {
-  const lastTrade = [...state.toolExecutions].reverse().find((t) => t.toolName === 'perp_place_order');
+  const lastTrade = [...state.toolExecutions]
+    .reverse()
+    .find((t) => t.toolName === 'perp_place_order' && !isSkippedToolExecution(t));
   if (lastTrade && isConfirmedPerpExecution(lastTrade)) {
     return 'Execution risk is currently controlled, but book-level liquidation and volatility risk remain active.';
   }
@@ -668,7 +683,9 @@ function buildTradeRiskSummary(state: AgentState): string {
 }
 
 function buildTradeNextActionSummary(state: AgentState): string {
-  const lastTrade = [...state.toolExecutions].reverse().find((t) => t.toolName === 'perp_place_order');
+  const lastTrade = [...state.toolExecutions]
+    .reverse()
+    .find((t) => t.toolName === 'perp_place_order' && !isSkippedToolExecution(t));
   if (lastTrade && isConfirmedPerpExecution(lastTrade)) {
     return 'I will monitor positions and open orders, then rebalance or de-risk automatically on the next cycle.';
   }
@@ -713,8 +730,8 @@ function enforceTradeResponseContract(
       .join('\n');
 
   if (executionOrigin === 'chat') {
-    const hasTerminalTradeExecution = state.toolExecutions.some((execution) =>
-      TERMINAL_TRADE_TOOLS.has(execution.toolName)
+    const hasTerminalTradeExecution = state.toolExecutions.some(
+      (execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName) && !isSkippedToolExecution(execution)
     );
     // Strip permission-seeking phrases if the synthesizer emitted them.
     const sanitizedResponse = response.replace(/\bif you want\b[^.!?]*[.!?]?/gi, '').trim();
@@ -1677,7 +1694,9 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
 }
 
 function buildCriticFailureFallbackResponse(state: AgentState, originalResponse: string): string {
-  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  const tradeAttempts = state.toolExecutions
+    .filter((t) => t.toolName === 'perp_place_order')
+    .filter((t) => !isSkippedToolExecution(t));
   if (tradeAttempts.length === 0) {
     return originalResponse;
   }
