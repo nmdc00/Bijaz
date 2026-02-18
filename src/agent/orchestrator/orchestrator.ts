@@ -62,8 +62,12 @@ import {
 const TERMINAL_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
 const MAX_PARALLEL_READ_STEPS = 3;
 const MUTATING_TRADE_TOOLS = new Set(['perp_place_order', 'perp_cancel_order']);
+const SHORT_LIVED_READ_CACHE_TOOLS = new Set(['perp_market_get', 'perp_analyze']);
+const READ_ONCE_PER_TURN_TOOLS = new Set(['position_analysis', 'perp_open_orders', 'perp_positions']);
+const shortLivedReadCache = new Map<string, { expiresAtMs: number; execution: ToolExecution }>();
 const TRADE_MUTATION_GUARD_SOURCE = 'trade_mutation_guard';
 const DEFAULT_TRADE_MUTATION_COOLDOWN_SECONDS = 45;
+const DEFAULT_TRADE_READ_CACHE_SECONDS = 10;
 const NO_TRADE_DECISION_PREFIX = 'NO_TRADE_DECISION:';
 const EXECUTION_INTENT_PATTERNS = [
   /\b(buy|sell|place|execute|open|close|reduce|trim|cut|flatten|cancel)\b/i,
@@ -471,14 +475,52 @@ function buildParallelReadBatch(
   options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): PlanStep[] {
   const batch: PlanStep[] = [];
+  const readOnceKeys = new Set<string>();
   for (const step of readySteps) {
     if (batch.length >= MAX_PARALLEL_READ_STEPS) break;
-    if (!isReadOnlyStep(step, ctx)) break;
+    if (!isReadOnlyStep(step, ctx)) continue;
     if (shouldSkipRedundantToolsList(state, step)) continue;
     if (getMutatingTradeSkipReason(state, step, ctx, options)) continue;
+    const readOnceKey = getReadOncePerTurnKey(step);
+    if (readOnceKey && readOnceKeys.has(readOnceKey)) continue;
     batch.push(step);
+    if (readOnceKey) {
+      readOnceKeys.add(readOnceKey);
+    }
   }
   return batch;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`);
+  return `{${entries.join(',')}}`;
+}
+
+function resolveTradeReadCacheTtlMs(ctx: OrchestratorContext): number {
+  const raw = (ctx.toolContext as { config?: { autonomy?: { tradeReadCacheSeconds?: unknown } } })
+    ?.config?.autonomy?.tradeReadCacheSeconds;
+  const parsed = Number(raw);
+  const seconds = Number.isFinite(parsed) ? parsed : DEFAULT_TRADE_READ_CACHE_SECONDS;
+  return Math.max(0, seconds) * 1000;
+}
+
+function buildShortLivedReadCacheKey(step: PlanStep): string | null {
+  if (!step.toolName || !SHORT_LIVED_READ_CACHE_TOOLS.has(step.toolName)) return null;
+  return `${step.toolName}:${stableStringify(step.toolInput ?? {})}`;
+}
+
+function getReadOncePerTurnKey(step: PlanStep): string | null {
+  if (!step.toolName || !READ_ONCE_PER_TURN_TOOLS.has(step.toolName)) return null;
+  const input = (step.toolInput ?? {}) as Record<string, unknown>;
+  const symbol = typeof input.symbol === 'string' ? input.symbol.trim().toUpperCase() : '';
+  return `${step.toolName}:${symbol || '*'}`;
 }
 
 function isLikelyReduceOnlyToolInput(input: unknown): boolean {
@@ -978,6 +1020,7 @@ export async function runOrchestrator(
   // Track fragility scan results for trades
   let tradeFragilityScan: QuickFragilityScan | null = null;
   let consecutiveNonTerminalTradeToolSteps = 0;
+  const readOnceByKey = new Map<string, ToolExecution>();
 
   const processToolExecution = async (
     step: PlanStep,
@@ -1205,7 +1248,9 @@ export async function runOrchestrator(
       const readBatch = buildParallelReadBatch(readySteps, state, ctx, options);
       if (readBatch.length > 1) {
         const executions = await Promise.all(
-          readBatch.map((step) => executeToolStep(step, state, ctx, options))
+          readBatch.map((step) =>
+            executeToolStep(step, state, ctx, { readOnceByKey }, options)
+          )
         );
         for (let index = 0; index < readBatch.length; index += 1) {
           await processToolExecution(readBatch[index]!, executions[index]!, { allowRevision: false });
@@ -1229,7 +1274,7 @@ export async function runOrchestrator(
         }
       }
 
-      const execution = await executeToolStep(nextStep, state, ctx, options);
+      const execution = await executeToolStep(nextStep, state, ctx, { readOnceByKey }, options);
       await processToolExecution(nextStep, execution);
       if (
         execution.result.success &&
@@ -1950,6 +1995,9 @@ async function executeToolStep(
   step: PlanStep,
   state: AgentState,
   ctx: OrchestratorContext,
+  runtime?: {
+    readOnceByKey?: Map<string, ToolExecution>;
+  },
   options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): Promise<ToolExecution> {
   const toolName = step.toolName!;
@@ -2005,6 +2053,39 @@ async function executeToolStep(
     input = normalizePerpPlaceOrderInput(input as Record<string, unknown>);
   }
 
+  const shortLivedCacheKey = buildShortLivedReadCacheKey({ ...step, toolInput: input });
+  if (shortLivedCacheKey) {
+    const ttlMs = resolveTradeReadCacheTtlMs(ctx);
+    if (ttlMs > 0) {
+      const nowMs = Date.now();
+      const cached = shortLivedReadCache.get(shortLivedCacheKey);
+      if (cached && cached.expiresAtMs > nowMs) {
+        return {
+          ...cached.execution,
+          input,
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          cached: true,
+        };
+      }
+      if (cached && cached.expiresAtMs <= nowMs) {
+        shortLivedReadCache.delete(shortLivedCacheKey);
+      }
+    }
+  }
+
+  const readOnceKey = getReadOncePerTurnKey({ ...step, toolInput: input });
+  const readOnceExecution = readOnceKey ? runtime?.readOnceByKey?.get(readOnceKey) : undefined;
+  if (readOnceExecution && readOnceExecution.result.success) {
+    return {
+      ...readOnceExecution,
+      input,
+      timestamp: new Date().toISOString(),
+      durationMs: 0,
+      cached: true,
+    };
+  }
+
   // Check if tool requires confirmation
   const toolDef = ctx.toolRegistry.get?.(toolName);
   if (toolDef?.requiresConfirmation && ctx.onConfirmation) {
@@ -2034,6 +2115,21 @@ async function executeToolStep(
     durationMs: execution.durationMs,
     cached: execution.cached,
   });
+
+  if (shortLivedCacheKey && execution.result.success) {
+    const ttlMs = resolveTradeReadCacheTtlMs(ctx);
+    if (ttlMs > 0) {
+      shortLivedReadCache.set(shortLivedCacheKey, {
+        expiresAtMs: Date.now() + ttlMs,
+        execution,
+      });
+    }
+  }
+
+  if (readOnceKey && execution.result.success) {
+    runtime?.readOnceByKey?.set(readOnceKey, execution);
+  }
+
   return execution;
 }
 
