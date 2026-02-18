@@ -32,6 +32,24 @@ import {
   recordAlertDelivery,
   suppressAlert,
 } from '../memory/alerts.js';
+import {
+  createScheduledTask,
+  deactivateScheduledTask,
+  getScheduledTaskById,
+  listActiveScheduledTasks,
+  listScheduledTasksByRecipient,
+  markScheduledTaskRan,
+} from '../memory/scheduled_tasks.js';
+import {
+  formatScheduledTaskHelp,
+  parseScheduledTaskAction,
+} from './scheduled_task_commands.js';
+import {
+  buildScheduledTaskInstruction,
+  describeSchedule,
+  formatScheduleTarget,
+  formatUtcDateTime,
+} from './scheduled_task_format.js';
 import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 
@@ -85,7 +103,7 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
     return;
   }
   const startedAt = Date.now();
-  const scanResult = await defaultAgent!.getAutonomous().runScan();
+  const scanResult = await primaryAgent.getAutonomous().runScan();
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );
@@ -125,6 +143,156 @@ function isWithinActiveChatWindow(seconds: number | undefined): boolean {
   return Date.now() - lastInteractiveMessageAtMs < windowSeconds * 1000;
 }
 
+async function sendChannelReply(
+  message: {
+    channel: 'telegram' | 'whatsapp' | 'cli';
+    senderId: string;
+  },
+  reply: string,
+  label: string = 'reply'
+): Promise<void> {
+  if (message.channel === 'telegram' && telegram) {
+    try {
+      await telegram.sendMessage(message.senderId, reply);
+      logger.info(`Telegram ${label} sent to ${message.senderId}`);
+    } catch (error) {
+      logger.error(`Telegram ${label} failed for ${message.senderId}`, error);
+    }
+  }
+  if (message.channel === 'whatsapp' && whatsapp) {
+    try {
+      await whatsapp.sendMessage(message.senderId, reply);
+      logger.info(`WhatsApp ${label} sent to ${message.senderId}`);
+    } catch (error) {
+      logger.error(`WhatsApp ${label} failed for ${message.senderId}`, error);
+    }
+  }
+}
+
+function registerScheduledTaskJob(params: { jobName: string; taskId: string; schedule: ScheduleDefinition }) {
+  scheduler.registerJob(
+    {
+      name: params.jobName,
+      schedule: params.schedule,
+      leaseMs: 120_000,
+    },
+    async () => {
+      const rec = getScheduledTaskById(params.taskId);
+      if (!rec || !rec.active || !rec.instruction) return;
+
+      if (rec.scheduleKind === 'once' && rec.runAt) {
+        const dueMs = Date.parse(rec.runAt);
+        if (Number.isFinite(dueMs) && Date.now() < dueMs) {
+          return;
+        }
+      }
+
+      const sessionKey = buildAgentPeerSessionKey({
+        agentId: agentRegistry.defaultAgentId,
+        mainKey: config.session?.mainKey,
+        channel: rec.channel as 'telegram' | 'whatsapp' | 'cli',
+        peerKind: 'dm',
+        peerId: rec.recipientId,
+        dmScope: config.session?.dmScope,
+        identityLinks: config.session?.identityLinks,
+      });
+      const scheduledPrompt = buildScheduledTaskInstruction(rec);
+      const result = await primaryAgent.handleMessage(sessionKey, scheduledPrompt);
+      const header = '📌 Scheduled task delivery';
+      const scheduledFor = `Scheduled for (UTC): ${formatScheduleTarget(rec)}`;
+      const deliveredAt = `Delivered at (UTC): ${formatUtcDateTime(new Date().toISOString())}`;
+      await sendChannelReply(
+        { channel: rec.channel as 'telegram' | 'whatsapp' | 'cli', senderId: rec.recipientId },
+        `${header}\n${scheduledFor}\n${deliveredAt}\nTask: ${rec.instruction}\n\n${result}`,
+        'scheduled task'
+      );
+      markScheduledTaskRan(rec.id);
+      if (rec.scheduleKind === 'once') {
+        deactivateScheduledTask(rec.id);
+      }
+    }
+  );
+}
+
+async function maybeHandleScheduledTaskAction(message: {
+  channel: 'telegram' | 'whatsapp' | 'cli';
+  senderId: string;
+  text: string;
+}): Promise<string | null> {
+  const action = parseScheduledTaskAction(message.text);
+  if (action.kind === 'none') return null;
+
+  if (action.kind === 'help') {
+    return formatScheduledTaskHelp();
+  }
+
+  if (action.kind === 'schedule_intent_without_parse') {
+    return `${formatScheduledTaskHelp()}\n\nI detected scheduling intent but couldn't parse the time exactly.`;
+  }
+
+  if (action.kind === 'list') {
+    const rows = listScheduledTasksByRecipient({
+      channel: message.channel,
+      recipientId: message.senderId,
+    });
+    if (rows.length === 0) {
+      return 'No scheduled tasks configured.';
+    }
+    return [
+      'Scheduled tasks:',
+      ...rows.map(
+        (row) =>
+          `- ${row.id.slice(0, 8)} | ${row.active ? 'active' : 'inactive'} | ${describeSchedule(row)} | ${row.instruction}`
+      ),
+    ].join('\n');
+  }
+
+  if (action.kind === 'cancel') {
+    const rows = listScheduledTasksByRecipient({
+      channel: message.channel,
+      recipientId: message.senderId,
+    });
+    const target = rows.find(
+      (row) => row.id === action.id || row.id.startsWith(action.id)
+    );
+    if (!target) {
+      return `No scheduled task found for id ${action.id}.`;
+    }
+    const ok = deactivateScheduledTask(target.id);
+    return ok ? `Cancelled scheduled task ${target.id.slice(0, 8)}.` : `Scheduled task ${target.id.slice(0, 8)} was already inactive.`;
+  }
+
+  if (action.kind === 'create') {
+    const shortId = Math.random().toString(36).slice(2, 10);
+    const jobName = `gateway:${schedulerNamespace}:scheduled-task:${shortId}`;
+    const schedule: ScheduleDefinition =
+      action.scheduleKind === 'daily'
+        ? { kind: 'daily', time: action.dailyTime ?? '00:00' }
+        : {
+            kind: 'interval',
+            intervalMs:
+              action.scheduleKind === 'interval'
+                ? Math.max(1, action.intervalMinutes ?? 30) * 60 * 1000
+                : 5 * 1000,
+          };
+
+    const rec = createScheduledTask({
+      schedulerJobName: jobName,
+      channel: message.channel,
+      recipientId: message.senderId,
+      scheduleKind: action.scheduleKind,
+      runAt: action.runAtIso ?? null,
+      dailyTime: action.dailyTime ?? null,
+      intervalMinutes: action.intervalMinutes ?? null,
+      instruction: action.instruction,
+    });
+    registerScheduledTaskJob({ jobName, taskId: rec.id, schedule });
+    hasSchedulerJobs = true;
+    return `Scheduled task created (${rec.id.slice(0, 8)}): ${describeSchedule(rec)}.\nTask: ${action.instruction}`;
+  }
+
+  return null;
+}
 const onIncoming = async (
   message: {
     channel: 'telegram' | 'whatsapp' | 'cli';
@@ -392,7 +560,9 @@ if (heartbeatConfig?.enabled) {
   const heartbeatUserId = '__heartbeat__';
   const heartbeatPrompt =
     'Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. ' +
-    'Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.';
+    'Do not infer or repeat old tasks from prior chats. ' +
+    'If you execute any action, start the first line with "HEARTBEAT_ACTION:". ' +
+    'If nothing needs attention, reply HEARTBEAT_OK.';
 
   const isHeartbeatEmpty = (content: string | null): boolean => {
     if (!content) return true;
@@ -472,10 +642,12 @@ if (heartbeatConfig?.enabled) {
       logger.info('Heartbeat LLM message generation suppressed due to active chat window');
       return;
     }
-    const response = await defaultAgent.handleMessage(heartbeatUserId, prompt);
+    const response = await primaryAgent.handleMessage(heartbeatUserId, prompt);
     if (!response || response.trim().length === 0) {
       return;
     }
+    const summary = response.replace(/\s+/g, ' ').trim().slice(0, 240);
+    logger.info(`Heartbeat response summary: ${summary}`);
     const normalized = response.trim().toUpperCase();
     if (normalized.startsWith('HEARTBEAT_OK')) {
       return;

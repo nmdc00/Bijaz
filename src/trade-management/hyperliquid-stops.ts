@@ -1,4 +1,5 @@
 import type { ExchangeClient } from '@nktkas/hyperliquid';
+import { formatPrice } from '@nktkas/hyperliquid/utils';
 import { randomBytes } from 'node:crypto';
 
 export type BracketSide = 'long' | 'short';
@@ -54,8 +55,8 @@ export async function placeExchangeSideTpsl(params: {
 
   // HL requires string decimals.
   const sizeStr = formatDecimal(params.bracket.size, params.market.szDecimals);
-  const slStr = formatDecimal(slPx, 8);
-  const tpStr = formatDecimal(tpPx, 8);
+  const slStr = formatPerpPrice(slPx, params.market.szDecimals);
+  const tpStr = formatPerpPrice(tpPx, params.market.szDecimals);
 
   // Close direction is opposite of the position direction.
   const closeIsBuy = params.bracket.side === 'short';
@@ -91,3 +92,10 @@ function formatDecimal(value: number, decimals: number): string {
   return fixed.replace(/\.?0+$/, '');
 }
 
+function formatPerpPrice(price: number, szDecimals: number): string {
+  try {
+    return formatPrice(price, szDecimals, 'perp');
+  } catch {
+    return formatDecimal(price, 8);
+  }
+}

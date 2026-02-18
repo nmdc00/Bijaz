@@ -106,6 +106,26 @@ describe('HyperliquidLiveExecutor', () => {
     expect(result.message).toContain('bad request');
   });
 
+  it('treats non-final exchange statuses as unconfirmed', async () => {
+    orderMock.mockResolvedValueOnce({
+      response: { data: { statuses: [{ submitted: true }] } },
+    });
+    const config: ThufirConfig = {
+      hyperliquid: { defaultSlippageBps: 10 },
+    } as ThufirConfig;
+    const executor = new HyperliquidLiveExecutor({ config });
+
+    const result = await executor.execute(market, {
+      action: 'sell',
+      size: 1,
+      orderType: 'market',
+    });
+
+    expect(result.executed).toBe(false);
+    expect(result.message).toContain('unconfirmed');
+    expect(result.message).toContain('fill/resting evidence');
+  });
+
   it('formats market price with Hyperliquid precision rules', async () => {
     mockSzDecimals = 5;
     mockMid = 66872.5;

@@ -604,15 +604,59 @@ function buildTradeBookState(state: AgentState): string {
   return 'I am managing the book with no fresh portfolio snapshot in this cycle.';
 }
 
+function isConfirmedPerpExecution(execution: ToolExecution): boolean {
+  if (execution.toolName !== 'perp_place_order' || !execution.result.success) {
+    return false;
+  }
+  const data = (execution.result as { data?: Record<string, unknown> }).data ?? {};
+  const executedFlag = (data as { executed?: unknown }).executed;
+  if (typeof executedFlag === 'boolean') {
+    return executedFlag;
+  }
+  const message = typeof (data as { message?: unknown }).message === 'string'
+    ? String((data as { message?: string }).message)
+    : '';
+  // Conservative fallback: only consider execution confirmed when exchange-like order evidence is present.
+  if (/\bfailed\b/i.test(message)) {
+    return false;
+  }
+  return /\b(order\s+(filled|resting|placed)|oid=)\b/i.test(message);
+}
+
+function isSkippedToolExecution(execution: ToolExecution): boolean {
+  if (!execution.result.success) {
+    return false;
+  }
+  const data = (execution.result as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  return (data as { skipped?: unknown }).skipped === true;
+}
+
 function buildTradeActionSummary(state: AgentState): string {
-  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  const tradeAttempts = state.toolExecutions
+    .filter((t) => t.toolName === 'perp_place_order')
+    .filter((t) => !isSkippedToolExecution(t));
   if (tradeAttempts.length === 0) {
     return 'I did not place a new perp order in this cycle.';
   }
 
-  const successes = tradeAttempts.filter((t) => t.result.success);
-  if (successes.length > 0) {
-    return `I executed ${successes.length} perp order(s).`;
+  const confirmedExecutions = tradeAttempts.filter((t) => isConfirmedPerpExecution(t));
+  if (confirmedExecutions.length > 0) {
+    return `I executed ${confirmedExecutions.length} perp order(s).`;
+  }
+
+  const unconfirmedSuccesses = tradeAttempts.filter((t) => t.result.success);
+  if (unconfirmedSuccesses.length > 0) {
+    const lastMessage = (
+      unconfirmedSuccesses[unconfirmedSuccesses.length - 1]?.result as
+        | { data?: { message?: string } }
+        | undefined
+    )?.data?.message;
+    return `I attempted ${unconfirmedSuccesses.length} perp order(s), but none had confirmed execution${
+      lastMessage ? ` (last result: ${lastMessage})` : '.'
+    }`;
   }
 
   const lastError = (
@@ -624,9 +668,12 @@ function buildTradeActionSummary(state: AgentState): string {
 function buildTradeRiskSummary(state: AgentState): string {
   const lastTrade = [...state.toolExecutions]
     .reverse()
-    .find((t) => t.toolName === 'perp_place_order');
-  if (lastTrade?.result.success) {
+    .find((t) => t.toolName === 'perp_place_order' && !isSkippedToolExecution(t));
+  if (lastTrade && isConfirmedPerpExecution(lastTrade)) {
     return 'Execution risk is currently controlled, but book-level liquidation and volatility risk remain active.';
+  }
+  if (lastTrade?.result.success) {
+    return 'Primary risk is execution confirmation mismatch; no exchange-confirmed fill/resting evidence in this cycle.';
   }
   if (lastTrade && !lastTrade.result.success) {
     const err = (lastTrade.result as { success: false; error: string }).error;
@@ -638,9 +685,12 @@ function buildTradeRiskSummary(state: AgentState): string {
 function buildTradeNextActionSummary(state: AgentState): string {
   const lastTrade = [...state.toolExecutions]
     .reverse()
-    .find((t) => t.toolName === 'perp_place_order');
-  if (lastTrade?.result.success) {
+    .find((t) => t.toolName === 'perp_place_order' && !isSkippedToolExecution(t));
+  if (lastTrade && isConfirmedPerpExecution(lastTrade)) {
     return 'I will monitor positions and open orders, then rebalance or de-risk automatically on the next cycle.';
+  }
+  if (lastTrade?.result.success) {
+    return 'I will re-check live orders/positions and only report execution after confirmed exchange evidence.';
   }
   if (lastTrade && !lastTrade.result.success) {
     return 'I will retry with validated inputs and current market/account state in the next autonomous cycle.';
@@ -648,7 +698,11 @@ function buildTradeNextActionSummary(state: AgentState): string {
   return 'I will continue autonomous monitoring and execute the next valid trade action when constraints allow.';
 }
 
-function enforceTradeResponseContract(response: string, state: AgentState): string {
+function enforceTradeResponseContract(
+  response: string,
+  state: AgentState,
+  executionOrigin: 'chat' | 'autonomous' | 'manual_override' | 'system' = 'system'
+): string {
   const shouldEnforce =
     state.mode === 'trade' &&
     (isTradeExecutionIntent(state.goal) ||
@@ -658,24 +712,43 @@ function enforceTradeResponseContract(response: string, state: AgentState): stri
   }
 
   const deterministicAction = `Action: ${buildTradeActionSummary(state)}`;
-  const hasContractShape =
-    /\bAction:\s*/i.test(response) &&
-    /\bBook State:\s*/i.test(response) &&
-    /\bRisk:\s*/i.test(response) &&
-    /\bNext Action:\s*/i.test(response);
-  if (hasContractShape) {
-    return response
-      .split('\n')
-      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
-      .join('\n');
-  }
-
-  return [
+  const deterministicContract = [
     deterministicAction,
     `Book State: ${buildTradeBookState(state)}`,
     `Risk: ${buildTradeRiskSummary(state)}`,
     `Next Action: ${buildTradeNextActionSummary(state)}`,
   ].join('\n');
+  const hasContractShape =
+    /\bAction:\s*/i.test(response) &&
+    /\bBook State:\s*/i.test(response) &&
+    /\bRisk:\s*/i.test(response) &&
+    /\bNext Action:\s*/i.test(response);
+  const rewriteActionLine = (input: string): string =>
+    input
+      .split('\n')
+      .map((line) => (/^\s*Action:\s*/i.test(line) ? deterministicAction : line))
+      .join('\n');
+
+  if (executionOrigin === 'chat') {
+    const hasTerminalTradeExecution = state.toolExecutions.some(
+      (execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName) && !isSkippedToolExecution(execution)
+    );
+    // Strip permission-seeking phrases if the synthesizer emitted them.
+    const sanitizedResponse = response.replace(/\bif you want\b[^.!?]*[.!?]?/gi, '').trim();
+    if (!hasTerminalTradeExecution) {
+      return sanitizedResponse || response;
+    }
+    if (hasContractShape) {
+      return rewriteActionLine(response);
+    }
+    return `${sanitizedResponse || response}\n\n${deterministicContract}`;
+  }
+
+  if (hasContractShape) {
+    return rewriteActionLine(response);
+  }
+
+  return deterministicContract;
 }
 
 /**
@@ -1183,17 +1256,23 @@ export async function runOrchestrator(
       if (!criticResult.approved && !criticResult.revisedResponse) {
         finalResponse = buildCriticFailureFallbackResponse(state, response);
       }
-      finalResponse = enforceTradeResponseContract(finalResponse, state);
+      finalResponse = enforceTradeResponseContract(finalResponse, state, options?.executionOrigin ?? 'system');
       state = completeState(state, finalResponse, criticResult);
     } catch (error) {
       state = addWarning(
         state,
         `Critic failed: ${error instanceof Error ? error.message : 'Unknown'}`
       );
-      state = completeState(state, enforceTradeResponseContract(response, state));
+      state = completeState(
+        state,
+        enforceTradeResponseContract(response, state, options?.executionOrigin ?? 'system')
+      );
     }
   } else {
-    state = completeState(state, enforceTradeResponseContract(response, state));
+    state = completeState(
+      state,
+      enforceTradeResponseContract(response, state, options?.executionOrigin ?? 'system')
+    );
   }
 
   ctx.onUpdate?.(state);
@@ -1615,12 +1694,15 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
 }
 
 function buildCriticFailureFallbackResponse(state: AgentState, originalResponse: string): string {
-  const tradeAttempts = state.toolExecutions.filter((t) => t.toolName === 'perp_place_order');
+  const tradeAttempts = state.toolExecutions
+    .filter((t) => t.toolName === 'perp_place_order')
+    .filter((t) => !isSkippedToolExecution(t));
   if (tradeAttempts.length === 0) {
     return originalResponse;
   }
 
-  const successfulTrades = tradeAttempts.filter((t) => t.result.success);
+  const successfulTrades = tradeAttempts.filter((t) => isConfirmedPerpExecution(t));
+  const unconfirmedSuccesses = tradeAttempts.filter((t) => t.result.success && !isConfirmedPerpExecution(t));
   const failedTrades = tradeAttempts.filter((t) => !t.result.success);
 
   if (successfulTrades.length > 0) {
@@ -1645,6 +1727,21 @@ function buildCriticFailureFallbackResponse(state: AgentState, originalResponse:
       }
     }
     return lines.join('\n');
+  }
+
+  if (unconfirmedSuccesses.length > 0) {
+    const lastMessage = (
+      unconfirmedSuccesses[unconfirmedSuccesses.length - 1]?.result as
+        | { data?: { message?: string } }
+        | undefined
+    )?.data?.message;
+    return [
+      'Action: No confirmed trade execution.',
+      `perp_place_order returned success ${unconfirmedSuccesses.length} time(s), but no exchange-confirmed fill/resting evidence.`,
+      lastMessage ? `Last result: ${lastMessage}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   const lastError = (failedTrades[failedTrades.length - 1]?.result as { error?: string } | undefined)?.error;

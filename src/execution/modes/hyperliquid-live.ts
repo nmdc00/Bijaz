@@ -120,17 +120,23 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       const result = await exchange.order(payload);
       const status = (result as any)?.response?.data?.statuses?.[0];
       const statusMessage = summarizeOrderStatus(status);
-      if (statusMessage?.error) {
+      if (statusMessage.error) {
         return {
           executed: false,
           message: `Hyperliquid trade failed: ${statusMessage.error} (symbol=${symbol} side=${side} size=${sizeStr} p=${priceStr} tif=${tif})`,
         };
       }
+      if (!statusMessage.confirmed) {
+        return {
+          executed: false,
+          message:
+            `Hyperliquid trade unconfirmed: ${statusMessage.message} ` +
+            `(symbol=${symbol} side=${side} size=${sizeStr} p=${priceStr} tif=${tif})`,
+        };
+      }
       return {
         executed: true,
-        message:
-          statusMessage?.message ??
-          `Hyperliquid order placed: ${symbol} ${side} size=${sizeStr} ${orderType}`,
+        message: statusMessage.message,
       };
     } catch (error) {
       return {
@@ -277,18 +283,36 @@ function formatDecimal(value: number, decimals: number): string {
 
 function summarizeOrderStatus(
   status: unknown
-): { message?: string; error?: string } | null {
-  if (!status || typeof status !== 'object') return null;
+): { confirmed: boolean; message: string; error?: string } {
+  if (!status || typeof status !== 'object') {
+    return {
+      confirmed: false,
+      message: 'No exchange status payload returned',
+    };
+  }
   if ('error' in status && typeof (status as { error?: unknown }).error === 'string') {
-    return { error: (status as { error: string }).error };
+    return {
+      confirmed: false,
+      message: 'Exchange returned an explicit error status',
+      error: (status as { error: string }).error,
+    };
   }
   if ('resting' in status && (status as { resting?: { oid?: number | string } }).resting) {
     const oid = (status as { resting?: { oid?: number | string } }).resting?.oid;
-    return { message: `Hyperliquid order resting (oid=${oid ?? 'unknown'}).` };
+    return {
+      confirmed: true,
+      message: `Hyperliquid order resting (oid=${oid ?? 'unknown'}).`,
+    };
   }
   if ('filled' in status && (status as { filled?: { oid?: number | string } }).filled) {
     const oid = (status as { filled?: { oid?: number | string } }).filled?.oid;
-    return { message: `Hyperliquid order filled (oid=${oid ?? 'unknown'}).` };
+    return {
+      confirmed: true,
+      message: `Hyperliquid order filled (oid=${oid ?? 'unknown'}).`,
+    };
   }
-  return null;
+  return {
+    confirmed: false,
+    message: 'Exchange returned a non-final status without fill/resting evidence',
+  };
 }
