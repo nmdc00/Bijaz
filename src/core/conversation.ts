@@ -379,6 +379,9 @@ export class ConversationHandler {
           const priorPlan = resumePlan ? this.sessions.getPlan(userId) : null;
 
           let lastProgressKey = '';
+          let planningStarted = false;
+          let planningReady = false;
+          let synthesisStarted = false;
           const emitProgress = async (key: string, text: string): Promise<void> => {
             if (!onProgress || !text || key === lastProgressKey) {
               return;
@@ -412,11 +415,17 @@ export class ConversationHandler {
             },
             onUpdate: (state) => {
               if (!state.plan) {
-                void emitProgress('planning:start', 'Working: analyzing request...');
+                if (!planningStarted) {
+                  planningStarted = true;
+                  void emitProgress('planning:start', 'Working: analyzing request...');
+                }
                 return;
               }
               if (!state.plan.complete) {
-                void emitProgress('planning:ready', 'Working: building execution plan...');
+                if (!planningReady) {
+                  planningReady = true;
+                  void emitProgress('planning:ready', 'Working: building execution plan...');
+                }
               }
               if (state.toolExecutions.length > lastToolCount) {
                 const latest = state.toolExecutions[state.toolExecutions.length - 1];
@@ -429,7 +438,10 @@ export class ConversationHandler {
                 }
               }
               if (state.plan.complete) {
-                void emitProgress('synthesis', 'Working: finalizing response...');
+                if (!synthesisStarted) {
+                  synthesisStarted = true;
+                  void emitProgress('synthesis', 'Working: finalizing response...');
+                }
               }
             },
           }, {

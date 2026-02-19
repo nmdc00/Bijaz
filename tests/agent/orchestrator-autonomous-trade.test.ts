@@ -554,6 +554,103 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).toContain('Action: I attempted 1 perp order(s), but none had confirmed execution.');
   });
 
+  it('formats minimum-notional perp failures into user-facing guidance', async () => {
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Try placing order',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: { symbol: 'ETH', side: 'buy', size: 0.001 },
+                },
+              ],
+              confidence: 0.7,
+              blockers: [],
+              reasoning: 'trade',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'Trade done.' };
+        }
+
+        if (system.includes('You are a critical reviewer')) {
+          return {
+            content: JSON.stringify({
+              approved: false,
+              issues: [
+                {
+                  type: 'unsupported_claim',
+                  severity: 'critical',
+                  description: 'Claimed execution despite failed order',
+                },
+              ],
+            }),
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) =>
+        mkExecution(name, input as Record<string, unknown>, {
+          success: false,
+          error: 'Hyperliquid trade failed: Order 0: Order must have minimum value of $10. asset=1',
+        }),
+    };
+
+    const result = await runOrchestrator(
+      'Buy ETH now',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', maxIterations: 4, executionOrigin: 'chat', allowTradeMutations: true }
+    );
+
+    expect(result.response).toContain('Reason: Order value was below Hyperliquid minimum notional ($10).');
+    expect(result.response).toContain('Next: Increase size so size × price >= $10, then retry.');
+    expect(result.response).not.toContain('Tools run:');
+    expect(result.response).not.toContain('asset=1');
+  });
+
   it('does not report unconfirmed execution when perp_place_order was skipped for chat-origin', async () => {
     const llm = {
       complete: async (messages: Array<{ role: string; content: string }>) => {
@@ -1627,5 +1724,200 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(
       ((placeExec?.result as { success: true; data: { reason?: string } }).data.reason ?? '').toLowerCase()
     ).toContain('trade coordination cooldown active');
+  });
+
+  it('reuses short-lived cached executions for perp_analyze across nearby runs', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Analyze perp',
+                  requiresTool: true,
+                  toolName: 'perp_analyze',
+                  toolInput: { symbol: 'BTC', timeframe: 'cache_test_t1' },
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'analyze only',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'analysis complete' };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_analyze'],
+      getLlmSchemas: () => [],
+      get: (_name: string) => ({ sideEffects: false, requiresConfirmation: false } as any),
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { ok: true, seq: calls.length },
+        });
+      },
+    };
+
+    await runOrchestrator(
+      'Analyze BTC perp setup.',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: { config: { autonomy: { tradeReadCacheSeconds: 30 } } } as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 3 }
+    );
+
+    const second = await runOrchestrator(
+      'Analyze BTC perp setup.',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: { config: { autonomy: { tradeReadCacheSeconds: 30 } } } as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 3 }
+    );
+
+    expect(calls).toEqual(['perp_analyze']);
+    const secondExec = second.state.toolExecutions.find((execution) => execution.toolName === 'perp_analyze');
+    expect(secondExec?.cached).toBe(true);
+  });
+
+  it('executes position/open-order read tools once per turn and reuses result for duplicates', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Read positions',
+                  requiresTool: true,
+                  toolName: 'perp_positions',
+                  toolInput: { symbol: 'BTC' },
+                },
+                {
+                  id: '2',
+                  description: 'Read open orders',
+                  requiresTool: true,
+                  toolName: 'perp_open_orders',
+                  toolInput: { symbol: 'BTC' },
+                },
+                {
+                  id: '3',
+                  description: 'Read positions again',
+                  requiresTool: true,
+                  toolName: 'perp_positions',
+                  toolInput: { symbol: 'BTC' },
+                },
+              ],
+              confidence: 0.8,
+              blockers: [],
+              reasoning: 'refresh state',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'state refreshed' };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_positions', 'perp_open_orders'],
+      getLlmSchemas: () => [],
+      get: (_name: string) => ({ sideEffects: false, requiresConfirmation: false } as any),
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { ok: true, name, calls: [...calls] },
+        });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Check position and orders quickly.',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: { config: { autonomy: { tradeReadCacheSeconds: 0 } } } as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 5 }
+    );
+
+    expect(calls).toEqual(['perp_positions', 'perp_open_orders']);
+    const positionExecs = result.state.toolExecutions.filter(
+      (execution) => execution.toolName === 'perp_positions'
+    );
+    expect(positionExecs.length).toBe(2);
+    expect(positionExecs[1]?.cached).toBe(true);
   });
 });

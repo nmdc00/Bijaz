@@ -160,4 +160,52 @@ describe('ConversationHandler cooldown fallback', () => {
       allowTradeMutations: true,
     });
   });
+
+  it('suppresses repeated planning progress updates while preserving stage transitions', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockImplementationOnce(async (_goal: string, ctx: any) => {
+      const update = ctx?.onUpdate as ((state: any) => void) | undefined;
+      update?.({ plan: null, toolExecutions: [] });
+      update?.({ plan: null, toolExecutions: [] });
+      update?.({ plan: { complete: false }, toolExecutions: [] });
+      update?.({ plan: { complete: false }, toolExecutions: [] });
+      update?.({
+        plan: { complete: false },
+        toolExecutions: [{ toolName: 'perp_market_get' }],
+      });
+      update?.({
+        plan: { complete: true },
+        toolExecutions: [{ toolName: 'perp_market_get' }],
+      });
+      return {
+        response: 'ok',
+        state: {
+          plan: { complete: true },
+          toolExecutions: [{ toolName: 'perp_market_get' }],
+          criticResult: null,
+          mode: 'trade',
+        },
+        summary: { fragility: null },
+      };
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'live', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: true },
+    } as any;
+    const onProgress = vi.fn(async () => undefined);
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    await handler.chat('user', 'Run a quick check', onProgress);
+
+    const progressMessages = onProgress.mock.calls.map((call) => String(call[0]));
+    expect(progressMessages.filter((m) => m.includes('analyzing request')).length).toBe(1);
+    expect(progressMessages.filter((m) => m.includes('building execution plan')).length).toBe(1);
+    expect(progressMessages.some((m) => m.includes('running perp_market_get'))).toBe(true);
+    expect(progressMessages.filter((m) => m.includes('finalizing response')).length).toBe(1);
+  });
 });
