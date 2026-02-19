@@ -554,6 +554,103 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).toContain('Action: I attempted 1 perp order(s), but none had confirmed execution.');
   });
 
+  it('formats minimum-notional perp failures into user-facing guidance', async () => {
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Try placing order',
+                  requiresTool: true,
+                  toolName: 'perp_place_order',
+                  toolInput: { symbol: 'ETH', side: 'buy', size: 0.001 },
+                },
+              ],
+              confidence: 0.7,
+              blockers: [],
+              reasoning: 'trade',
+              warnings: [],
+            }),
+          };
+        }
+
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'Trade done.' };
+        }
+
+        if (system.includes('You are a critical reviewer')) {
+          return {
+            content: JSON.stringify({
+              approved: false,
+              issues: [
+                {
+                  type: 'unsupported_claim',
+                  severity: 'critical',
+                  description: 'Claimed execution despite failed order',
+                },
+              ],
+            }),
+          };
+        }
+
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['perp_place_order'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) =>
+        mkExecution(name, input as Record<string, unknown>, {
+          success: false,
+          error: 'Hyperliquid trade failed: Order 0: Order must have minimum value of $10. asset=1',
+        }),
+    };
+
+    const result = await runOrchestrator(
+      'Buy ETH now',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', maxIterations: 4, executionOrigin: 'chat', allowTradeMutations: true }
+    );
+
+    expect(result.response).toContain('Reason: Order value was below Hyperliquid minimum notional ($10).');
+    expect(result.response).toContain('Next: Increase size so size × price >= $10, then retry.');
+    expect(result.response).not.toContain('Tools run:');
+    expect(result.response).not.toContain('asset=1');
+  });
+
   it('does not report unconfirmed execution when perp_place_order was skipped for chat-origin', async () => {
     const llm = {
       complete: async (messages: Array<{ role: string; content: string }>) => {
