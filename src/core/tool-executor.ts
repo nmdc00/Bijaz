@@ -197,8 +197,11 @@ function resolvePerpExecutor(ctx: ToolExecutorContext, mode: PerpBookMode): Exec
     if (ctx.config.execution?.provider !== 'hyperliquid') {
       throw new Error('Live perp execution requires hyperliquid provider.');
     }
-    if (ctx.config.execution?.mode === 'live' && ctx.executor) {
-      return ctx.executor;
+    if (ctx.executor) {
+      const ctorName = String((ctx.executor as { constructor?: { name?: string } })?.constructor?.name ?? '');
+      if (ctx.config.execution?.mode === 'live' || ctorName !== 'PaperExecutor') {
+        return ctx.executor;
+      }
     }
     return new HyperliquidLiveExecutor({ config: ctx.config });
   }

@@ -251,7 +251,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
@@ -304,7 +304,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(false);
@@ -327,7 +327,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: true },
+      { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(false);
@@ -354,7 +354,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 0.8, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 0.8, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
