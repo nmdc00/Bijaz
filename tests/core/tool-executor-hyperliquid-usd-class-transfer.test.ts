@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoisted mocks must run before importing tool-executor.
 const mockState = vi.hoisted(() => {
@@ -65,6 +69,25 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => {
 });
 
 describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', () => {
+  const originalDbPath = process.env.THUFIR_DB_PATH;
+
+  beforeEach(() => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'thufir-hl-usd-class-transfer-'));
+    process.env.THUFIR_DB_PATH = join(tempDir, 'thufir.sqlite');
+  });
+
+  afterEach(() => {
+    if (process.env.THUFIR_DB_PATH) {
+      rmSync(process.env.THUFIR_DB_PATH, { force: true });
+      rmSync(dirname(process.env.THUFIR_DB_PATH), { recursive: true, force: true });
+    }
+    if (originalDbPath === undefined) {
+      delete process.env.THUFIR_DB_PATH;
+    } else {
+      process.env.THUFIR_DB_PATH = originalDbPath;
+    }
+  });
+
   it('hyperliquid_usd_class_transfer calls ExchangeClient.usdClassTransfer with amount string and toPerp=true', async () => {
     const { executeToolCall } = await import('../../src/core/tool-executor.js');
     const res = await executeToolCall(
@@ -98,8 +121,9 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     );
     expect(res.success).toBe(true);
     const data = (res as any).data;
-    expect(data.balances.usdc).toBe(123); // on-chain/memory cash
-    expect(data.summary.onchain_usdc).toBe(123);
+    // v1.8 paper mode uses configured paper bankroll as onchain/paper cash source.
+    expect(data.balances.usdc).toBe(200);
+    expect(data.summary.onchain_usdc).toBe(200);
     expect(data.summary.hyperliquid_dex_abstraction).toBe(false);
     expect(data.summary.hyperliquid_spot_usdc_free).toBeCloseTo(16.86, 6);
     expect(data.summary.hyperliquid_perp_withdrawable_usdc).toBeCloseTo(5, 6);
