@@ -144,6 +144,27 @@ function parseplanResponse(
   availableTools: string[]
 ): PlanCreationResult {
   const now = new Date().toISOString();
+  const available = new Set(availableTools);
+
+  const resolveAvailableTool = (toolName: string | undefined): string | null => {
+    if (!toolName) return null;
+    if (available.has(toolName)) return toolName;
+    const underscored = toolName.replace(/\./g, '_');
+    if (available.has(underscored)) return underscored;
+    const dotted = toolName.replace(/_/g, '.');
+    if (available.has(dotted)) return dotted;
+    if ((toolName === 'symbol_resolve' || toolName === 'symbol_lookup') && available.has('perp_market_list')) {
+      return 'perp_market_list';
+    }
+    if (toolName === 'perp_risk_action_router') {
+      if (available.has('position_analysis')) return 'position_analysis';
+      if (available.has('perp_positions')) return 'perp_positions';
+    }
+    if (toolName === 'playbook_get' && available.has('playbook_search')) {
+      return 'playbook_search';
+    }
+    return null;
+  };
 
   try {
     // Extract JSON from response
@@ -167,15 +188,51 @@ function parseplanResponse(
       warnings?: string[];
     };
 
-    const steps: PlanStep[] = (parsed.steps ?? []).map((step, index) => ({
-      id: step.id ?? String(index + 1),
-      description: step.description ?? 'Unknown step',
-      requiresTool: step.requiresTool ?? false,
-      toolName: step.toolName,
-      toolInput: step.toolInput,
-      status: 'pending',
-      dependsOn: step.dependsOn,
-    }));
+    const parserWarnings: string[] = [...(parsed.warnings ?? [])];
+    const steps: PlanStep[] = (parsed.steps ?? []).map((step, index) => {
+      const id = step.id ?? String(index + 1);
+      const description = step.description ?? 'Unknown step';
+      const requiresTool = step.requiresTool ?? false;
+      if (!requiresTool) {
+        return {
+          id,
+          description,
+          requiresTool: false,
+          status: 'pending',
+          dependsOn: step.dependsOn,
+        };
+      }
+
+      const requestedTool = typeof step.toolName === 'string' ? step.toolName : undefined;
+      const resolvedTool = resolveAvailableTool(requestedTool);
+      if (!resolvedTool) {
+        parserWarnings.push(
+          `Planner requested unavailable tool "${requestedTool ?? 'undefined'}"; downgraded step ${id} to non-tool.`
+        );
+        return {
+          id,
+          description,
+          requiresTool: false,
+          status: 'pending',
+          dependsOn: step.dependsOn,
+        };
+      }
+      if (requestedTool !== resolvedTool) {
+        parserWarnings.push(
+          `Planner requested unavailable tool "${requestedTool}"; remapped to "${resolvedTool}" for step ${id}.`
+        );
+      }
+
+      return {
+        id,
+        description,
+        requiresTool: true,
+        toolName: resolvedTool,
+        toolInput: step.toolInput,
+        status: 'pending',
+        dependsOn: step.dependsOn,
+      };
+    });
 
     const plan: AgentPlan = {
       id: randomUUID(),
@@ -194,7 +251,7 @@ function parseplanResponse(
     return {
       plan,
       reasoning: parsed.reasoning ?? 'No reasoning provided',
-      warnings: parsed.warnings ?? [],
+      warnings: parserWarnings,
     };
   } catch (error) {
     const fallbackSteps = buildFallbackSteps(goal, availableTools);
