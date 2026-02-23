@@ -57,7 +57,7 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => {
   return { HyperliquidClient };
 });
 
-describe('get_portfolio dex abstraction semantics', () => {
+describe('get_portfolio paper mode semantics', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
 
   beforeEach(() => {
@@ -77,7 +77,7 @@ describe('get_portfolio dex abstraction semantics', () => {
     }
   });
 
-  it('when dex abstraction is enabled, available_balance reflects spot USDC free (unified collateral)', async () => {
+  it('in paper mode, available_balance reflects paper bankroll regardless of dex abstraction', async () => {
     const { executeToolCall } = await import('../../src/core/tool-executor.js');
     const res = await executeToolCall(
       'get_portfolio',
@@ -86,9 +86,10 @@ describe('get_portfolio dex abstraction semantics', () => {
     );
     expect(res.success).toBe(true);
     const data = (res as any).data;
-    expect(data.summary.hyperliquid_dex_abstraction).toBe(true);
-    expect(data.summary.hyperliquid_spot_usdc_free).toBeCloseTo(16.86, 6);
-    expect(data.summary.hyperliquid_perp_withdrawable_usdc).toBeCloseTo(0, 6);
-    expect(data.summary.available_balance).toBeCloseTo(16.86, 6);
+    expect(data.summary.execution_mode).toBe('paper');
+    expect(data.summary.onchain_usdc).toBe(200);
+    expect(data.summary.available_balance).toBe(200);
+    expect(data.summary.perp_enabled).toBe(false);
+    expect(data.hyperliquid_balances).toBeNull();
   });
 });
