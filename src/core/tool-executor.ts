@@ -43,6 +43,7 @@ export interface ToolSpendingLimiter {
   getState?(): { todaySpent: number; reserved: number } & Record<string, unknown>;
 }
 import { getCashBalance } from '../memory/portfolio.js';
+import { getPaperPerpBookSummary, listPaperPerpPositions } from '../memory/paper_perps.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
 import { loadKeystore } from '../execution/wallet/keystore.js';
@@ -1708,12 +1709,28 @@ export async function executeToolCall(
       case 'perp_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
+          const book = getPaperPerpBookSummary(ctx.config.paper?.initialCashUsdc ?? 200);
+          const positions = listPaperPerpPositions(ctx.config.paper?.initialCashUsdc ?? 200).map((position) => ({
+            symbol: position.symbol,
+            side: position.side,
+            size: position.size,
+            entry_price: position.entryPrice,
+            leverage: position.leverage,
+            position_value: position.entryPrice * position.size,
+            unrealized_pnl: null,
+            liquidation_price: null,
+            margin_used: null,
+          }));
           return {
             success: true,
             data: {
               mode,
-              positions: [],
-              summary: { account_value: getCashBalance(), withdrawable: getCashBalance(), source: 'paper' },
+              positions,
+              summary: {
+                account_value: book.cashBalanceUsdc,
+                withdrawable: book.cashBalanceUsdc,
+                source: 'paper',
+              },
             },
           };
         }
@@ -2178,12 +2195,28 @@ export async function executeToolCall(
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
+          const book = getPaperPerpBookSummary(ctx.config.paper?.initialCashUsdc ?? 200);
+          const positions = listPaperPerpPositions(ctx.config.paper?.initialCashUsdc ?? 200).map((position) => ({
+            symbol: position.symbol,
+            side: position.side,
+            size: position.size,
+            entry_price: position.entryPrice,
+            leverage: position.leverage,
+            position_value: position.entryPrice * position.size,
+            unrealized_pnl: null,
+            liquidation_price: null,
+            margin_used: null,
+          }));
           return {
             success: true,
             data: {
               mode,
-              positions: [],
-              summary: { account_value: getCashBalance(), withdrawable: getCashBalance(), source: 'paper' },
+              positions,
+              summary: {
+                account_value: book.cashBalanceUsdc,
+                withdrawable: book.cashBalanceUsdc,
+                source: 'paper',
+              },
             },
           };
         }
@@ -3212,7 +3245,8 @@ async function getBalances(ctx: ToolExecutorContext): Promise<{
   source: string;
 }> {
   if (ctx.config.execution?.mode !== 'live') {
-    return { usdc: getCashBalance(), matic: 0, source: 'paper' };
+    const paperBook = getPaperPerpBookSummary(ctx.config.paper?.initialCashUsdc ?? 200);
+    return { usdc: paperBook.cashBalanceUsdc, matic: 0, source: 'paper' };
   }
 
   const password = process.env.THUFIR_WALLET_PASSWORD;

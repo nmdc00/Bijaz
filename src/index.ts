@@ -113,7 +113,7 @@ export class Thufir {
       return new WebhookExecutor(config.execution.webhookUrl);
     }
 
-    return new PaperExecutor();
+    return new PaperExecutor({ initialCashUsdc: config.paper?.initialCashUsdc ?? 200 });
   }
 
   /**
