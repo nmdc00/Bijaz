@@ -112,7 +112,7 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     expect(mockState.usdClassTransferCalls[0]).toEqual({ amount: '2', toPerp: false });
   });
 
-  it('get_portfolio prefers Hyperliquid perp withdrawable as available_balance when perp has funds', async () => {
+  it('get_portfolio in paper mode reports paper bankroll without live Hyperliquid collateral blending', async () => {
     const { executeToolCall } = await import('../../src/core/tool-executor.js');
     const res = await executeToolCall(
       'get_portfolio',
@@ -121,16 +121,15 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     );
     expect(res.success).toBe(true);
     const data = (res as any).data;
-    // v1.8 paper mode uses configured paper bankroll as onchain/paper cash source.
     expect(data.balances.usdc).toBe(200);
     expect(data.summary.onchain_usdc).toBe(200);
-    expect(data.summary.hyperliquid_dex_abstraction).toBe(false);
-    expect(data.summary.hyperliquid_spot_usdc_free).toBeCloseTo(16.86, 6);
-    expect(data.summary.hyperliquid_perp_withdrawable_usdc).toBeCloseTo(5, 6);
-    expect(data.summary.available_balance).toBeCloseTo(5, 6); // prefer perp withdrawable when it has funds
+    expect(data.summary.execution_mode).toBe('paper');
+    expect(data.summary.available_balance).toBe(200);
+    expect(data.hyperliquid_balances).toBeNull();
+    expect(data.perp_positions).toEqual([]);
   });
 
-  it('get_portfolio falls back to spot USDC free when dexAbstraction is false and perp withdrawable is 0', async () => {
+  it('get_portfolio in paper mode ignores live spot/perp balances even when live balances exist', async () => {
     // Simulate unified account where API reports dexAbstraction=false but funds are only in spot
     mockState.clearinghouseState = {
       assetPositions: [],
@@ -147,10 +146,10 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     );
     expect(res.success).toBe(true);
     const data = (res as any).data;
-    expect(data.summary.hyperliquid_dex_abstraction).toBe(false);
-    expect(data.summary.hyperliquid_perp_withdrawable_usdc).toBeCloseTo(0, 6);
-    expect(data.summary.hyperliquid_spot_usdc_free).toBeCloseTo(16.86, 6);
-    // Should fall back to spot USDC free instead of reporting 0
-    expect(data.summary.available_balance).toBeCloseTo(16.86, 6);
+    expect(data.summary.execution_mode).toBe('paper');
+    expect(data.summary.onchain_usdc).toBe(200);
+    expect(data.summary.available_balance).toBe(200);
+    expect(data.summary.perp_enabled).toBe(false);
+    expect(data.hyperliquid_balances).toBeNull();
   });
 });

@@ -2452,12 +2452,49 @@ function getWalletInfo(ctx: ToolExecutorContext): ToolResult {
 async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
   try {
     const balances = await getBalances(ctx);
+    const isPaperMode = ctx.config.execution?.mode !== 'live';
     const limiterState = ctx.limiter?.getState?.();
     const dailyLimit = ctx.config.wallet?.limits?.daily ?? 100;
     const remainingDaily =
       limiterState != null
         ? Math.max(0, dailyLimit - limiterState.todaySpent - limiterState.reserved)
         : null;
+    if (isPaperMode) {
+      const availableBalance = balances.usdc ?? 0;
+      return {
+        success: true,
+        data: {
+          balances,
+          onchain_balances: balances,
+          onchain_balances_note:
+            'In paper mode, balances reflect the paper ledger cash balance (not live exchange collateral).',
+          positions: [],
+          summary: {
+            available_balance: availableBalance,
+            available_balance_note:
+              'Paper mode active: available_balance reflects paper USDC bankroll only.',
+            onchain_usdc: balances.usdc ?? 0,
+            remaining_daily_limit: remainingDaily,
+            positions_source: 'paper',
+            perp_enabled: false,
+            execution_mode: 'paper',
+          },
+          hyperliquid_balances: null,
+          perp_positions: [],
+          perp_summary: null,
+          perp_error: null,
+          spot_balances: [],
+          spot_escrows: [],
+          spot_summary: null,
+          spot_error: null,
+          hyperliquid_fees: null,
+          hyperliquid_fees_error: null,
+          hyperliquid_portfolio: null,
+          hyperliquid_portfolio_error: null,
+          hyperliquid_dex_abstraction_error: null,
+        },
+      };
+    }
     const hasHyperliquid =
       Boolean(ctx.config.hyperliquid?.enabled) ||
       Boolean(ctx.config.hyperliquid?.accountAddress) ||
