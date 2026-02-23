@@ -49,6 +49,13 @@ memory: {}
     expect(config.gateway.bind).toBe('loopback');
     expect(config.execution.mode).toBe('paper');
     expect(config.execution.provider).toBe('hyperliquid');
+    expect(config.paper.enabled).toBe(true);
+    expect(config.paper.initialCashUsdc).toBe(200);
+    expect(config.paper.defaultMode).toBe('paper');
+    expect(config.paper.requireExplicitLive).toBe(true);
+    expect(config.paper.liveSymbolsAllowlist).toEqual(['BTC', 'ETH']);
+    expect(config.paper.promotionGates.minTrades).toBe(25);
+    expect(config.paper.promotionGates.maxDrawdownR).toBe(6);
     expect(config.wallet.limits.daily).toBe(100);
     expect(config.agent.persistPlans).toBe(true);
     expect(config.agent.trivial.timeoutMs).toBe(12000);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { executeToolCall } from '../../src/core/tool-executor.js';
 import { HyperliquidClient } from '../../src/execution/hyperliquid/client.js';
+import { PaperExecutor } from '../../src/execution/modes/paper.js';
 
 describe('tool-executor perps', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
@@ -250,7 +251,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
@@ -303,7 +304,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 1, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(false);
@@ -326,7 +327,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: true },
+      { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(false);
@@ -353,7 +354,7 @@ describe('tool-executor perps', () => {
     };
     const res = await executeToolCall(
       'perp_place_order',
-      { symbol: 'BTC', side: 'sell', size: 0.8, reduce_only: true },
+      { symbol: 'BTC', side: 'sell', size: 0.8, reduce_only: true, mode: 'live' },
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
@@ -695,5 +696,96 @@ describe('tool-executor perps', () => {
     );
     expect(res.success).toBe(true);
     expect(called).toBe(true);
+  });
+
+  it('tracks paper open orders and positions with 200 USDC default bankroll', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    const placeLimit = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.01, order_type: 'limit', price: 49000 },
+      ctx
+    );
+    expect(placeLimit.success).toBe(true);
+
+    const openOrders = await executeToolCall('perp_open_orders', {}, ctx);
+    expect(openOrders.success).toBe(true);
+    const orders = ((openOrders as any).data?.orders ?? []) as Array<Record<string, unknown>>;
+    expect(orders.length).toBeGreaterThan(0);
+    const orderId = String(orders[0]?.id ?? '');
+    expect(orderId.length).toBeGreaterThan(0);
+
+    const cancel = await executeToolCall('perp_cancel_order', { order_id: orderId }, ctx);
+    expect(cancel.success).toBe(true);
+
+    const placeMarket = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.005, order_type: 'market' },
+      ctx
+    );
+    expect(placeMarket.success).toBe(true);
+
+    const positions = await executeToolCall('perp_positions', {}, ctx);
+    expect(positions.success).toBe(true);
+    const perpPositions = ((positions as any).data?.positions ?? []) as Array<Record<string, unknown>>;
+    expect(perpPositions.length).toBeGreaterThan(0);
+
+    const portfolio = await executeToolCall('get_portfolio', {}, ctx);
+    expect(portfolio.success).toBe(true);
+    expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
+  });
+
+  it('paper_promotion_report returns gate evaluation', async () => {
+    const symbol = 'GATETEST';
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    for (const side of ['buy', 'buy', 'sell', 'sell'] as const) {
+      await executeToolCall(
+        'perp_place_order',
+        {
+          symbol,
+          side,
+          size: 0.001,
+          signal_class: 'breakout_15m',
+          thesis_invalidation_hit: side === 'sell',
+          exit_mode: side === 'sell' ? 'take_profit' : undefined,
+          reduce_only: side === 'sell',
+        },
+        { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+      );
+    }
+
+    const res = await executeToolCall(
+      'paper_promotion_report',
+      { symbol, signal_class: 'breakout_15m' },
+      {
+        config: { execution: { provider: 'hyperliquid' }, paper: { promotionGates: { minTrades: 1 } } } as any,
+        marketClient,
+      }
+    );
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect((res.data as any).setupKey).toBe(`${symbol}:breakout_15m`);
+      expect((res.data as any).sampleCount).toBeGreaterThanOrEqual(1);
+    }
   });
 });

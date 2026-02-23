@@ -155,6 +155,24 @@ const ConfigSchema = z.object({
       webhookUrl: z.string().optional(),
     })
     .default({}),
+  paper: z
+    .object({
+      enabled: z.boolean().default(true),
+      initialCashUsdc: z.number().default(200),
+      defaultMode: z.enum(['paper', 'live']).default('paper'),
+      requireExplicitLive: z.boolean().default(true),
+      liveSymbolsAllowlist: z.array(z.string()).default(['BTC', 'ETH']),
+      promotionGates: z
+        .object({
+          minTrades: z.number().default(25),
+          maxDrawdownR: z.number().default(6),
+          minHitRate: z.number().default(0.5),
+          minPayoffRatio: z.number().default(1.2),
+          minExpectancyR: z.number().default(0.1),
+        })
+        .default({}),
+    })
+    .default({}),
   wallet: z
     .object({
       keystorePath: z.string().optional(),

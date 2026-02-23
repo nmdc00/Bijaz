@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => {
   return {
@@ -54,6 +58,25 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => {
 });
 
 describe('get_portfolio dex abstraction semantics', () => {
+  const originalDbPath = process.env.THUFIR_DB_PATH;
+
+  beforeEach(() => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'thufir-hl-dex-abstraction-'));
+    process.env.THUFIR_DB_PATH = join(tempDir, 'thufir.sqlite');
+  });
+
+  afterEach(() => {
+    if (process.env.THUFIR_DB_PATH) {
+      rmSync(process.env.THUFIR_DB_PATH, { force: true });
+      rmSync(dirname(process.env.THUFIR_DB_PATH), { recursive: true, force: true });
+    }
+    if (originalDbPath === undefined) {
+      delete process.env.THUFIR_DB_PATH;
+    } else {
+      process.env.THUFIR_DB_PATH = originalDbPath;
+    }
+  });
+
   it('when dex abstraction is enabled, available_balance reflects spot USDC free (unified collateral)', async () => {
     const { executeToolCall } = await import('../../src/core/tool-executor.js');
     const res = await executeToolCall(
@@ -69,4 +92,3 @@ describe('get_portfolio dex abstraction semantics', () => {
     expect(data.summary.available_balance).toBeCloseTo(16.86, 6);
   });
 });
-
