@@ -390,6 +390,7 @@ describe('runOrchestrator autonomous trade contract', () => {
                     symbol: 'BTC',
                     side: 'BUY',
                     size: '0.01',
+                    mode: 'LIVE',
                     reduce_only: true,
                     exit_mode: 'liquidity_probe',
                   },
@@ -455,6 +456,7 @@ describe('runOrchestrator autonomous trade contract', () => {
     );
 
     expect(placeOrderInputs.length).toBe(1);
+    expect(placeOrderInputs[0]?.mode).toBe('live');
     expect(placeOrderInputs[0]?.exit_mode).toBe('risk_reduction');
   });
 

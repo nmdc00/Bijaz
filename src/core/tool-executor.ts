@@ -2,6 +2,8 @@ import type { ThufirConfig } from './config.js';
 import type { Market } from '../execution/markets.js';
 import type { MarketClient } from '../execution/market-client.js';
 import type { ExecutionAdapter, TradeDecision, TradeResult } from '../execution/executor.js';
+import { PaperExecutor } from '../execution/modes/paper.js';
+import { HyperliquidLiveExecutor } from '../execution/modes/hyperliquid-live.js';
 import type { LimitCheckResult } from '../execution/wallet/limits.js';
 import { ethers } from 'ethers';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -109,6 +111,8 @@ type PerpExecutionAttempt = {
   message: string;
 };
 
+type PerpBookMode = 'paper' | 'live';
+
 function isNoImmediateMatchError(message: string | null | undefined): boolean {
   if (!message) return false;
   return /could not immediately match against any resting orders/i.test(message);
@@ -153,6 +157,54 @@ async function executePerpWithRetry(params: {
     result: { executed: false, message: 'Execution failed before attempting order placement.' },
     attempts,
   };
+}
+
+function normalizePerpBookMode(value: unknown): PerpBookMode | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'paper' || normalized === 'live' ? normalized : null;
+}
+
+function resolvePerpBookMode(config: ThufirConfig, toolInput: Record<string, unknown>): PerpBookMode {
+  const explicit = normalizePerpBookMode(toolInput.mode);
+  if (explicit) return explicit;
+
+  if (config.execution?.mode === 'paper') {
+    return 'paper';
+  }
+
+  const defaultMode = config.paper?.defaultMode ?? 'paper';
+  const requireExplicitLive = config.paper?.requireExplicitLive ?? true;
+  if (defaultMode === 'live' && !requireExplicitLive) {
+    return 'live';
+  }
+  return 'paper';
+}
+
+function validateLiveBookPolicy(config: ThufirConfig, symbol: string): string | null {
+  const allowlist = (config.paper?.liveSymbolsAllowlist ?? []).map((entry) => entry.trim().toUpperCase());
+  const normalizedSymbol = symbol.trim().toUpperCase();
+  if (allowlist.length > 0 && normalizedSymbol.length > 0 && !allowlist.includes(normalizedSymbol)) {
+    return `Live mode blocked for ${normalizedSymbol}. Allowed symbols: ${allowlist.join(', ')}`;
+  }
+  return null;
+}
+
+function resolvePerpExecutor(ctx: ToolExecutorContext, mode: PerpBookMode): ExecutionAdapter {
+  if (mode === 'live') {
+    if (ctx.config.execution?.provider !== 'hyperliquid') {
+      throw new Error('Live perp execution requires hyperliquid provider.');
+    }
+    if (ctx.config.execution?.mode === 'live' && ctx.executor) {
+      return ctx.executor;
+    }
+    return new HyperliquidLiveExecutor({ config: ctx.config });
+  }
+
+  if (ctx.config.execution?.mode !== 'live' && ctx.executor) {
+    return ctx.executor;
+  }
+  return new PaperExecutor();
 }
 
 type TradeArchetype = 'scalp' | 'intraday' | 'swing';
@@ -964,13 +1016,18 @@ export async function executeToolCall(
       }
 
       case 'perp_place_order': {
-        if (!ctx.executor) {
-          return { success: false, error: 'Trading is not enabled (no executor configured)' };
-        }
         if (!ctx.limiter) {
           return { success: false, error: 'Trading is not enabled (no spending limiter configured)' };
         }
         const symbol = String(toolInput.symbol ?? '');
+        const bookMode = resolvePerpBookMode(ctx.config, toolInput);
+        if (bookMode === 'live') {
+          const livePolicyError = validateLiveBookPolicy(ctx.config, symbol);
+          if (livePolicyError) {
+            return { success: false, error: livePolicyError };
+          }
+        }
+        const perpExecutor = resolvePerpExecutor(ctx, bookMode);
         const side = String(toolInput.side ?? '').toLowerCase();
         const requestedSize = Number(toolInput.size ?? 0);
         const orderTypeRaw = String(toolInput.order_type ?? 'market').toLowerCase();
@@ -1078,7 +1135,7 @@ export async function executeToolCall(
         }
         let size = requestedSize;
         let reduceOnlyPreflightNote: string | null = null;
-        if (reduceOnly && ctx.config.execution?.provider === 'hyperliquid') {
+        if (reduceOnly && bookMode === 'live' && ctx.config.execution?.provider === 'hyperliquid') {
           try {
             const position = await getReduceOnlyPositionSnapshot(ctx.config, symbol);
             if (!position) {
@@ -1382,7 +1439,7 @@ export async function executeToolCall(
         const executionStartMs = Date.now();
         const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
         const execution = await executePerpWithRetry({
-          executor: ctx.executor,
+          executor: perpExecutor,
           marketClient: ctx.marketClient,
           market,
           symbol,
@@ -1588,6 +1645,7 @@ export async function executeToolCall(
           success: true,
           data: {
             ...result,
+            mode: bookMode,
             policy: {
               reason_code: policyGate.reasonCode ?? null,
               reason: policyGate.reason ?? null,
@@ -1605,12 +1663,16 @@ export async function executeToolCall(
       }
 
       case 'perp_open_orders': {
-        if (!ctx.executor) {
-          return { success: false, error: 'Trading is not enabled (no executor configured)' };
+        const mode = resolvePerpBookMode(ctx.config, toolInput);
+        const executor = resolvePerpExecutor(ctx, mode);
+        if (mode === 'live') {
+          const symbol = String(toolInput.symbol ?? '').trim();
+          const livePolicyError = validateLiveBookPolicy(ctx.config, symbol);
+          if (livePolicyError) return { success: false, error: livePolicyError };
         }
         try {
-          const orders = await ctx.executor.getOpenOrders();
-          return { success: true, data: { orders } };
+          const orders = await executor.getOpenOrders();
+          return { success: true, data: { mode, orders } };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };
@@ -1618,16 +1680,25 @@ export async function executeToolCall(
       }
 
       case 'perp_cancel_order': {
-        if (!ctx.executor) {
-          return { success: false, error: 'Trading is not enabled (no executor configured)' };
-        }
+        const mode = resolvePerpBookMode(ctx.config, toolInput);
+        const executor = resolvePerpExecutor(ctx, mode);
         const orderId = String(toolInput.order_id ?? '').trim();
         if (!orderId) {
           return { success: false, error: 'Missing order_id' };
         }
+        if (mode === 'live') {
+          const symbol = String(toolInput.symbol ?? '').trim();
+          const livePolicyError = validateLiveBookPolicy(ctx.config, symbol);
+          if (livePolicyError) return { success: false, error: livePolicyError };
+        }
         try {
-          await ctx.executor.cancelOrder(orderId);
-          return { success: true, data: { cancelled: true, order_id: orderId } };
+          await executor.cancelOrder(orderId, {
+            symbol:
+              typeof toolInput.symbol === 'string' && toolInput.symbol.trim().length > 0
+                ? toolInput.symbol.trim()
+                : undefined,
+          });
+          return { success: true, data: { mode, cancelled: true, order_id: orderId } };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };
@@ -1635,11 +1706,26 @@ export async function executeToolCall(
       }
 
       case 'perp_positions': {
-        const { HyperliquidClient } = await import('../execution/hyperliquid/client.js');
+        const mode = resolvePerpBookMode(ctx.config, toolInput);
+        if (mode === 'paper') {
+          return {
+            success: true,
+            data: {
+              mode,
+              positions: [],
+              summary: { account_value: getCashBalance(), withdrawable: getCashBalance(), source: 'paper' },
+            },
+          };
+        }
+        const symbol = String(toolInput.symbol ?? '').trim();
+        const livePolicyError = validateLiveBookPolicy(ctx.config, symbol);
+        if (livePolicyError) return { success: false, error: livePolicyError };
         try {
           const client = new HyperliquidClient(ctx.config);
           const state = await client.getClearinghouseState();
-          return { success: true, data: state };
+          const stateObj =
+            state && typeof state === 'object' ? (state as Record<string, unknown>) : { state };
+          return { success: true, data: { mode, ...stateObj } };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };
@@ -2090,9 +2176,20 @@ export async function executeToolCall(
       }
 
       case 'get_positions': {
+        const mode = resolvePerpBookMode(ctx.config, toolInput);
+        if (mode === 'paper') {
+          return {
+            success: true,
+            data: {
+              mode,
+              positions: [],
+              summary: { account_value: getCashBalance(), withdrawable: getCashBalance(), source: 'paper' },
+            },
+          };
+        }
         try {
           const data = await loadPerpPositions(ctx);
-          return { success: true, data };
+          return { success: true, data: { mode, ...data } };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };
@@ -2100,12 +2197,11 @@ export async function executeToolCall(
       }
 
       case 'get_open_orders': {
-        if (!ctx.executor) {
-          return { success: false, error: 'Trading is not enabled (no executor configured)' };
-        }
+        const mode = resolvePerpBookMode(ctx.config, toolInput);
+        const executor = resolvePerpExecutor(ctx, mode);
         try {
-          const orders = await ctx.executor.getOpenOrders();
-          return { success: true, data: { orders } };
+          const orders = await executor.getOpenOrders();
+          return { success: true, data: { mode, orders } };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };

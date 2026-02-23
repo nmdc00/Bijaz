@@ -155,6 +155,15 @@ const ConfigSchema = z.object({
       webhookUrl: z.string().optional(),
     })
     .default({}),
+  paper: z
+    .object({
+      enabled: z.boolean().default(true),
+      initialCashUsdc: z.number().default(200),
+      defaultMode: z.enum(['paper', 'live']).default('paper'),
+      requireExplicitLive: z.boolean().default(true),
+      liveSymbolsAllowlist: z.array(z.string()).default(['BTC', 'ETH']),
+    })
+    .default({}),
   wallet: z
     .object({
       keystorePath: z.string().optional(),

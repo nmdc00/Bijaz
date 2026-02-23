@@ -541,6 +541,11 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['paper', 'live'],
+          description: 'Execution book mode override (default: paper unless explicitly set live).',
+        },
         symbol: { type: 'string', description: 'Perp symbol' },
         side: { type: 'string', enum: ['buy', 'sell'], description: 'Order side' },
         size: { type: 'number', description: 'Order size' },
@@ -638,7 +643,17 @@ export const THUFIR_TOOLS: Tool[] = [
   {
     name: 'perp_open_orders',
     description: 'List open perp orders for the configured exchange.',
-    input_schema: { type: 'object', properties: {}, required: [] },
+    input_schema: {
+      type: 'object',
+      properties: {
+        mode: {
+          type: 'string',
+          enum: ['paper', 'live'],
+          description: 'Book mode (paper|live). Default follows paper routing policy.',
+        },
+      },
+      required: [],
+    },
   },
   {
     name: 'perp_cancel_order',
@@ -646,6 +661,11 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['paper', 'live'],
+          description: 'Book mode (paper|live). Default follows paper routing policy.',
+        },
         order_id: { type: 'string', description: 'Order id to cancel' },
       },
       required: ['order_id'],
@@ -654,7 +674,17 @@ export const THUFIR_TOOLS: Tool[] = [
   {
     name: 'perp_positions',
     description: 'Get open perp positions for the configured exchange.',
-    input_schema: { type: 'object', properties: {}, required: [] },
+    input_schema: {
+      type: 'object',
+      properties: {
+        mode: {
+          type: 'string',
+          enum: ['paper', 'live'],
+          description: 'Book mode (paper|live). Default follows paper routing policy.',
+        },
+      },
+      required: [],
+    },
   },
   {
     name: 'perp_analyze',
