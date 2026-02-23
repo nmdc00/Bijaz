@@ -911,6 +911,21 @@ export const THUFIR_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'paper_promotion_report',
+    description: 'Evaluate mechanical paper->live promotion gates for a symbol/signal setup.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Perp symbol (e.g., BTC)' },
+        signal_class: {
+          type: 'string',
+          description: 'Signal class identifier used in journaling (e.g., breakout_15m)',
+        },
+      },
+      required: ['symbol', 'signal_class'],
+    },
+  },
+  {
     name: 'signal_price_vol_regime',
     description: 'Compute price/vol regime signals for a symbol.',
     input_schema: {

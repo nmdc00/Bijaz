@@ -745,4 +745,47 @@ describe('tool-executor perps', () => {
     expect(portfolio.success).toBe(true);
     expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
   });
+
+  it('paper_promotion_report returns gate evaluation', async () => {
+    const symbol = 'GATETEST';
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    for (const side of ['buy', 'buy', 'sell', 'sell'] as const) {
+      await executeToolCall(
+        'perp_place_order',
+        {
+          symbol,
+          side,
+          size: 0.001,
+          signal_class: 'breakout_15m',
+          thesis_invalidation_hit: side === 'sell',
+          exit_mode: side === 'sell' ? 'take_profit' : undefined,
+          reduce_only: side === 'sell',
+        },
+        { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+      );
+    }
+
+    const res = await executeToolCall(
+      'paper_promotion_report',
+      { symbol, signal_class: 'breakout_15m' },
+      {
+        config: { execution: { provider: 'hyperliquid' }, paper: { promotionGates: { minTrades: 1 } } } as any,
+        marketClient,
+      }
+    );
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect((res.data as any).setupKey).toBe(`${symbol}:breakout_15m`);
+      expect((res.data as any).sampleCount).toBeGreaterThanOrEqual(1);
+    }
+  });
 });

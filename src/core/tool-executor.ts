@@ -26,6 +26,7 @@ import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
 import { evaluateGlobalTradeGate } from './autonomy_policy.js';
+import { buildPaperPromotionReport } from './paper_promotion.js';
 import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
 import {
@@ -1817,6 +1818,30 @@ export async function executeToolCall(
         try {
           const entries = listPerpTradeJournals({ symbol: symbol || undefined, limit });
           return { success: true, data: { entries } };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          return { success: false, error: message };
+        }
+      }
+
+      case 'paper_promotion_report': {
+        const symbol = String(toolInput.symbol ?? '').trim().toUpperCase();
+        const signalClass = String(toolInput.signal_class ?? '').trim();
+        if (!symbol || !signalClass) {
+          return { success: false, error: 'Missing symbol or signal_class' };
+        }
+        try {
+          const entries = listPerpTradeJournals({ symbol, limit: 500 });
+          const setupKey = `${symbol}:${signalClass}`;
+          const gates = {
+            minTrades: Number(ctx.config.paper?.promotionGates?.minTrades ?? 25),
+            maxDrawdownR: Number(ctx.config.paper?.promotionGates?.maxDrawdownR ?? 6),
+            minHitRate: Number(ctx.config.paper?.promotionGates?.minHitRate ?? 0.5),
+            minPayoffRatio: Number(ctx.config.paper?.promotionGates?.minPayoffRatio ?? 1.2),
+            minExpectancyR: Number(ctx.config.paper?.promotionGates?.minExpectancyR ?? 0.1),
+          };
+          const report = buildPaperPromotionReport({ entries, setupKey, gates });
+          return { success: true, data: report };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           return { success: false, error: message };
