@@ -1684,6 +1684,14 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
   if (typeof normalized.side === 'string') {
     normalized.side = normalized.side.toLowerCase().trim();
   }
+  if (typeof normalized.mode === 'string') {
+    const mode = normalized.mode.toLowerCase().trim();
+    if (mode === 'paper' || mode === 'live') {
+      normalized.mode = mode;
+    } else {
+      delete normalized.mode;
+    }
+  }
   if (typeof normalized.order_type === 'string') {
     normalized.order_type = normalized.order_type.toLowerCase().trim();
   }

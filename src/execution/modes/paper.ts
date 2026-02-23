@@ -4,8 +4,21 @@ import { logWalletOperation } from '../../memory/audit.js';
 import { createPrediction, recordExecution } from '../../memory/predictions.js';
 import { recordTrade } from '../../memory/trades.js';
 import { recordPerpTrade } from '../../memory/perp_trades.js';
+import { cancelPaperPerpOrder, getPaperPerpBookSummary, listPaperPerpOpenOrders, placePaperPerpOrder } from '../../memory/paper_perps.js';
+
+export interface PaperExecutorOptions {
+  initialCashUsdc?: number;
+}
 
 export class PaperExecutor implements ExecutionAdapter {
+  private initialCashUsdc: number;
+
+  constructor(options?: PaperExecutorOptions) {
+    this.initialCashUsdc = Number.isFinite(Number(options?.initialCashUsdc))
+      ? Number(options?.initialCashUsdc)
+      : 200;
+  }
+
   async execute(market: Market, decision: TradeDecision): Promise<TradeResult> {
     if (decision.action === 'hold') {
       return { executed: false, message: 'Hold decision; no trade executed.' };
@@ -18,15 +31,41 @@ export class PaperExecutor implements ExecutionAdapter {
       if (!symbol || !side || !size) {
         return { executed: false, message: 'Invalid decision: missing symbol/side/size.' };
       }
+      const markPrice = Number(market.markPrice ?? NaN);
+      if (!Number.isFinite(markPrice) || markPrice <= 0) {
+        return { executed: false, message: `Invalid decision: missing mark price for ${symbol}.` };
+      }
+
+      const orderType = decision.orderType ?? 'market';
+      const limitPrice = orderType === 'limit' ? Number(decision.price ?? NaN) : undefined;
+      if (orderType === 'limit' && (!Number.isFinite(limitPrice) || (limitPrice ?? 0) <= 0)) {
+        return { executed: false, message: 'Invalid decision: missing or invalid price.' };
+      }
+
+      const fill = placePaperPerpOrder(
+        {
+          symbol,
+          side,
+          size,
+          orderType,
+          price: limitPrice,
+          markPrice,
+          leverage: decision.leverage ?? null,
+          reduceOnly: decision.reduceOnly ?? false,
+        },
+        { initialCashUsdc: this.initialCashUsdc }
+      );
+
       recordPerpTrade({
         symbol,
         side,
         size,
-        price: decision.price ?? null,
+        price: fill.fillPrice ?? limitPrice ?? markPrice,
         leverage: decision.leverage ?? null,
-        orderType: decision.orderType ?? 'market',
+        orderType,
         status: 'paper',
       });
+      const book = getPaperPerpBookSummary(this.initialCashUsdc);
       logWalletOperation({
         operation: 'paper',
         amount: size,
@@ -35,11 +74,14 @@ export class PaperExecutor implements ExecutionAdapter {
           symbol,
           side,
           leverage: decision.leverage,
+          order_id: fill.orderId,
+          paper_cash_usdc: book.cashBalanceUsdc,
+          realized_pnl_usdc: fill.realizedPnlUsd,
         },
       });
       return {
         executed: true,
-        message: `Paper perp trade executed for ${symbol} (${side})`,
+        message: `${fill.message} symbol=${symbol} side=${side} size=${size}`,
       };
     }
 
@@ -94,10 +136,18 @@ export class PaperExecutor implements ExecutionAdapter {
   }
 
   async getOpenOrders(): Promise<Order[]> {
-    return [];
+    return listPaperPerpOpenOrders(this.initialCashUsdc).map((order) => ({
+      id: order.id,
+      marketId: order.symbol,
+      side: order.side,
+      price: order.price,
+      amount: order.size,
+      status: 'open',
+      createdAt: order.createdAt,
+    }));
   }
 
   async cancelOrder(_id: string, _options?: { symbol?: string }): Promise<void> {
-    // Paper mode has no live orders to cancel.
+    cancelPaperPerpOrder(_id, this.initialCashUsdc);
   }
 }

@@ -183,6 +183,19 @@ execution:
   provider: hyperliquid
   webhookUrl: ""
 
+paper:
+  enabled: true
+  initialCashUsdc: 200
+  defaultMode: paper
+  requireExplicitLive: true
+  liveSymbolsAllowlist: ['BTC', 'ETH']
+  promotionGates:
+    minTrades: 25
+    maxDrawdownR: 6
+    minHitRate: 0.5
+    minPayoffRatio: 1.2
+    minExpectancyR: 0.1
+
 # Channel integrations
 channels:
   telegram:
