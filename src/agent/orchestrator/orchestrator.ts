@@ -979,7 +979,12 @@ export async function runOrchestrator(
   // Phase 3: Planning (unless skipped)
   if (!skipPlanning) {
     try {
-      const allowedTools = getAllowedTools(modeResult.mode);
+      const runtimeTools = new Set(ctx.toolRegistry.listNames());
+      const blockedAutonomousTools =
+        executionOrigin === 'autonomous' ? new Set(['system_exec', 'system_install']) : new Set<string>();
+      const allowedTools = getAllowedTools(modeResult.mode).filter(
+        (toolName) => runtimeTools.has(toolName) && !blockedAutonomousTools.has(toolName)
+      );
       const planResult = await createPlan(
         ctx.llm,
         {
@@ -1576,19 +1581,22 @@ function hasPlaceholderInputs(input: Record<string, unknown>): boolean {
     /to_be_determined/i,
     /to_be_set/i,
     /based_on_step/i,
+    /\bstep[_\s-]?\d+\b/i,
     /TBD/i,
     /placeholder/i,
     /\{.*step.*\}/i,
     /FILL_IN/i,
+    /^__.*__$/,
+    /__.*step.*__/i,
   ];
-  for (const value of Object.values(input)) {
-    if (typeof value === 'string') {
-      for (const pattern of PLACEHOLDER_PATTERNS) {
-        if (pattern.test(value)) return true;
-      }
-    }
-  }
-  return false;
+  const isPlaceholderString = (value: string): boolean => PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(value));
+  const visit = (value: unknown): boolean => {
+    if (typeof value === 'string') return isPlaceholderString(value.trim());
+    if (Array.isArray(value)) return value.some((entry) => visit(entry));
+    if (value && typeof value === 'object') return Object.values(value).some((entry) => visit(entry));
+    return false;
+  };
+  return visit(input);
 }
 
 const VALID_EXIT_MODES = new Set([
@@ -2052,6 +2060,34 @@ async function executeToolStep(
 ): Promise<ToolExecution> {
   const toolName = step.toolName!;
   let input = (step.toolInput ?? {}) as Record<string, unknown>;
+  const executionOrigin = options?.executionOrigin ?? 'system';
+  if (executionOrigin === 'autonomous' && (toolName === 'system_exec' || toolName === 'system_install')) {
+    return {
+      toolName,
+      input,
+      result: {
+        success: false,
+        error: `${toolName} is disabled for autonomous execution origin`,
+      },
+      timestamp: new Date().toISOString(),
+      durationMs: 0,
+      cached: false,
+    };
+  }
+  const availableTools = new Set(ctx.toolRegistry.listNames());
+  if (!availableTools.has(toolName)) {
+    return {
+      toolName,
+      input,
+      result: {
+        success: false,
+        error: `Tool not available in current runtime: ${toolName}`,
+      },
+      timestamp: new Date().toISOString(),
+      durationMs: 0,
+      cached: false,
+    };
+  }
 
   // Dynamic input resolution: if toolInput has placeholder values, ask LLM to fill them in
   // based on completed step results.
@@ -2079,17 +2115,23 @@ async function executeToolStep(
     toolCtx?.config?.hyperliquid?.symbols?.[0] ??
     (process.env.HYPERLIQUID_SYMBOLS ? process.env.HYPERLIQUID_SYMBOLS.split(',')[0] : undefined) ??
     'BTC';
+  const isPlaceholderSymbol = (value: string): boolean =>
+    /^__.*__$/.test(value) ||
+    /step[_\s-]?\d+/i.test(value) ||
+    /placeholder/i.test(value) ||
+    /to_be_/i.test(value) ||
+    /based_on_step/i.test(value);
 
   if (needsSymbol.has(toolName)) {
     const obj = input as Record<string, unknown>;
     const sym = typeof obj.symbol === 'string' ? obj.symbol.trim() : '';
-    if (!sym) {
+    if (!sym || isPlaceholderSymbol(sym)) {
       (obj as any).symbol = defaultSymbol;
     }
   } else if (symbolOptionalButUseful.has(toolName)) {
     const obj = input as Record<string, unknown>;
     const sym = typeof obj.symbol === 'string' ? obj.symbol.trim() : '';
-    if (!sym) {
+    if (!sym || isPlaceholderSymbol(sym)) {
       (obj as any).symbol = defaultSymbol;
     }
   }
