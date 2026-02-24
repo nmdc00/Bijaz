@@ -2476,7 +2476,9 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
             onchain_usdc: balances.usdc ?? 0,
             remaining_daily_limit: remainingDaily,
             positions_source: 'paper',
-            perp_enabled: false,
+            perp_enabled: true,
+            paper_perp_enabled: true,
+            live_perp_enabled: false,
             execution_mode: 'paper',
           },
           hyperliquid_balances: null,
@@ -2631,6 +2633,8 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
           remaining_daily_limit: remainingDaily,
           positions_source: 'none',
           perp_enabled: hasHyperliquid,
+          paper_perp_enabled: false,
+          live_perp_enabled: hasHyperliquid,
         },
         hyperliquid_balances: hasHyperliquid
           ? {

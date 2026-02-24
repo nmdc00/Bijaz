@@ -149,7 +149,9 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     expect(data.summary.execution_mode).toBe('paper');
     expect(data.summary.onchain_usdc).toBe(200);
     expect(data.summary.available_balance).toBe(200);
-    expect(data.summary.perp_enabled).toBe(false);
+    expect(data.summary.perp_enabled).toBe(true);
+    expect(data.summary.paper_perp_enabled).toBe(true);
+    expect(data.summary.live_perp_enabled).toBe(false);
     expect(data.hyperliquid_balances).toBeNull();
   });
 });
