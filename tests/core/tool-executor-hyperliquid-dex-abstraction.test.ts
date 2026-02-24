@@ -94,4 +94,15 @@ describe('get_portfolio paper mode semantics', () => {
     expect(data.summary.live_perp_enabled).toBe(false);
     expect(data.hyperliquid_balances).toBeNull();
   });
+
+  it('blocks hyperliquid_verify_live in paper mode', async () => {
+    const { executeToolCall } = await import('../../src/core/tool-executor.js');
+    const res = await executeToolCall(
+      'hyperliquid_verify_live',
+      { symbol: 'BTC' },
+      { config: { execution: { mode: 'paper' }, hyperliquid: { enabled: true } } as any } as any
+    );
+    expect(res.success).toBe(false);
+    expect(String((res as any).error ?? '')).toContain('paper mode');
+  });
 });

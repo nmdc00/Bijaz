@@ -847,6 +847,40 @@ describe('tool-executor perps', () => {
     expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
   });
 
+  it('ignores explicit live mode overrides when runtime execution mode is paper', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    const placeMarket = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.005, order_type: 'market' },
+      ctx
+    );
+    expect(placeMarket.success).toBe(true);
+
+    const positions = await executeToolCall('perp_positions', { mode: 'live' }, ctx);
+    expect(positions.success).toBe(true);
+    expect((positions as any).data?.mode).toBe('paper');
+
+    const getPositions = await executeToolCall('get_positions', { mode: 'live' }, ctx);
+    expect(getPositions.success).toBe(true);
+    expect((getPositions as any).data?.mode).toBe('paper');
+
+    const portfolio = await executeToolCall('get_portfolio', { mode: 'live' }, ctx);
+    expect(portfolio.success).toBe(true);
+    expect((portfolio as any).data?.summary?.execution_mode).toBe('paper');
+  });
+
   it('paper_promotion_report returns gate evaluation', async () => {
     const symbol = 'GATETEST';
     const executor = {
