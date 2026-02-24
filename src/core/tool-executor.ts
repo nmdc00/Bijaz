@@ -933,6 +933,12 @@ export async function executeToolCall(
       }
 
       case 'evm_erc20_balance': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: evm_erc20_balance.',
+          };
+        }
         const chain = String(toolInput.chain ?? '').trim().toLowerCase() as EvmChain;
         if (chain !== 'polygon' && chain !== 'arbitrum') {
           return { success: false, error: 'Invalid chain (use polygon|arbitrum)' };
@@ -960,6 +966,12 @@ export async function executeToolCall(
       }
 
       case 'evm_usdc_balances': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: evm_usdc_balances.',
+          };
+        }
         let address = String(toolInput.address ?? '').trim();
         if (!address) {
           // Read address from keystore without decrypting the private key.
@@ -1005,6 +1017,12 @@ export async function executeToolCall(
       }
 
       case 'cctp_bridge_usdc': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: cctp_bridge_usdc.',
+          };
+        }
         const fromChain = String(toolInput.from_chain ?? 'polygon').trim().toLowerCase() as EvmChain;
         const toChain = String(toolInput.to_chain ?? 'arbitrum').trim().toLowerCase() as EvmChain;
         const amountUsdc = Number(toolInput.amount_usdc ?? 0);
