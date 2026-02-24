@@ -835,9 +835,15 @@ describe('tool-executor perps', () => {
     expect(positions.success).toBe(true);
     const perpPositions = ((positions as any).data?.positions ?? []) as Array<Record<string, unknown>>;
     expect(perpPositions.length).toBeGreaterThan(0);
+    expect(Number((positions as any).data?.summary?.account_value)).toBeGreaterThan(
+      Number((positions as any).data?.summary?.withdrawable)
+    );
 
     const portfolio = await executeToolCall('get_portfolio', {}, ctx);
     expect(portfolio.success).toBe(true);
+    expect(Number((portfolio as any).data?.perp_summary?.account_value)).toBeGreaterThan(
+      Number((portfolio as any).data?.perp_summary?.withdrawable)
+    );
     expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
   });
 

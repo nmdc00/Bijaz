@@ -212,6 +212,43 @@ function resolvePerpExecutor(ctx: ToolExecutorContext, mode: PerpBookMode): Exec
   return new PaperExecutor();
 }
 
+function buildPaperPerpSnapshot(initialCashUsdc: number): {
+  cashBalanceUsdc: number;
+  totalNotionalUsdc: number;
+  accountValueUsdc: number;
+  positions: Array<{
+    symbol: string;
+    side: 'long' | 'short';
+    size: number;
+    entry_price: number;
+    leverage: number | null;
+    position_value: number;
+    unrealized_pnl: number | null;
+    liquidation_price: number | null;
+    margin_used: number | null;
+  }>;
+} {
+  const book = getPaperPerpBookSummary(initialCashUsdc);
+  const positions = listPaperPerpPositions(initialCashUsdc).map((position) => ({
+    symbol: position.symbol,
+    side: position.side,
+    size: position.size,
+    entry_price: position.entryPrice,
+    leverage: position.leverage,
+    position_value: position.entryPrice * position.size,
+    unrealized_pnl: null,
+    liquidation_price: null,
+    margin_used: null,
+  }));
+  const totalNotionalUsdc = positions.reduce((sum, position) => sum + Number(position.position_value ?? 0), 0);
+  return {
+    cashBalanceUsdc: book.cashBalanceUsdc,
+    totalNotionalUsdc,
+    accountValueUsdc: book.cashBalanceUsdc + totalNotionalUsdc,
+    positions,
+  };
+}
+
 type TradeArchetype = 'scalp' | 'intraday' | 'swing';
 
 function parseNewsSources(input: unknown): string[] | null {
@@ -1778,26 +1815,15 @@ export async function executeToolCall(
       case 'perp_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const book = getPaperPerpBookSummary(ctx.config.paper?.initialCashUsdc ?? 200);
-          const positions = listPaperPerpPositions(ctx.config.paper?.initialCashUsdc ?? 200).map((position) => ({
-            symbol: position.symbol,
-            side: position.side,
-            size: position.size,
-            entry_price: position.entryPrice,
-            leverage: position.leverage,
-            position_value: position.entryPrice * position.size,
-            unrealized_pnl: null,
-            liquidation_price: null,
-            margin_used: null,
-          }));
+          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
           return {
             success: true,
             data: {
               mode,
-              positions,
+              positions: snapshot.positions,
               summary: {
-                account_value: book.cashBalanceUsdc,
-                withdrawable: book.cashBalanceUsdc,
+                account_value: snapshot.accountValueUsdc,
+                withdrawable: snapshot.cashBalanceUsdc,
                 source: 'paper',
               },
             },
@@ -2288,26 +2314,15 @@ export async function executeToolCall(
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const book = getPaperPerpBookSummary(ctx.config.paper?.initialCashUsdc ?? 200);
-          const positions = listPaperPerpPositions(ctx.config.paper?.initialCashUsdc ?? 200).map((position) => ({
-            symbol: position.symbol,
-            side: position.side,
-            size: position.size,
-            entry_price: position.entryPrice,
-            leverage: position.leverage,
-            position_value: position.entryPrice * position.size,
-            unrealized_pnl: null,
-            liquidation_price: null,
-            margin_used: null,
-          }));
+          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
           return {
             success: true,
             data: {
               mode,
-              positions,
+              positions: snapshot.positions,
               summary: {
-                account_value: book.cashBalanceUsdc,
-                withdrawable: book.cashBalanceUsdc,
+                account_value: snapshot.accountValueUsdc,
+                withdrawable: snapshot.cashBalanceUsdc,
                 source: 'paper',
               },
             },
@@ -2525,7 +2540,8 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
         ? Math.max(0, dailyLimit - limiterState.todaySpent - limiterState.reserved)
         : null;
     if (isPaperMode) {
-      const availableBalance = balances.usdc ?? 0;
+      const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+      const availableBalance = snapshot.cashBalanceUsdc;
       return {
         success: true,
         data: {
@@ -2547,8 +2563,13 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
             execution_mode: 'paper',
           },
           hyperliquid_balances: null,
-          perp_positions: [],
-          perp_summary: null,
+          perp_positions: snapshot.positions,
+          perp_summary: {
+            account_value: snapshot.accountValueUsdc,
+            total_notional: snapshot.totalNotionalUsdc,
+            withdrawable: snapshot.cashBalanceUsdc,
+            source: 'paper',
+          },
           perp_error: null,
           spot_balances: [],
           spot_escrows: [],
