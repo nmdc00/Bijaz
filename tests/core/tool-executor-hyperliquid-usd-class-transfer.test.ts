@@ -93,7 +93,7 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     const res = await executeToolCall(
       'hyperliquid_usd_class_transfer',
       { amount_usdc: 1.23, to: 'perp' },
-      { config: { execution: { mode: 'paper' }, hyperliquid: { enabled: true } } as any } as any
+      { config: { execution: { mode: 'live' }, hyperliquid: { enabled: true } } as any } as any
     );
     expect(res.success).toBe(true);
     expect(mockState.usdClassTransferCalls.length).toBe(1);
@@ -106,10 +106,23 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     const res = await executeToolCall(
       'hyperliquid_usd_class_transfer',
       { amount_usdc: 2, to: 'spot' },
-      { config: { execution: { mode: 'paper' }, hyperliquid: { enabled: true } } as any } as any
+      { config: { execution: { mode: 'live' }, hyperliquid: { enabled: true } } as any } as any
     );
     expect(res.success).toBe(true);
     expect(mockState.usdClassTransferCalls[0]).toEqual({ amount: '2', toPerp: false });
+  });
+
+  it('blocks hyperliquid_usd_class_transfer in paper mode', async () => {
+    mockState.usdClassTransferCalls = [];
+    const { executeToolCall } = await import('../../src/core/tool-executor.js');
+    const res = await executeToolCall(
+      'hyperliquid_usd_class_transfer',
+      { amount_usdc: 1, to: 'perp' },
+      { config: { execution: { mode: 'paper' }, hyperliquid: { enabled: true } } as any } as any
+    );
+    expect(res.success).toBe(false);
+    expect(String((res as any).error ?? '')).toContain('paper mode');
+    expect(mockState.usdClassTransferCalls.length).toBe(0);
   });
 
   it('get_portfolio in paper mode reports paper bankroll without live Hyperliquid collateral blending', async () => {
@@ -149,7 +162,9 @@ describe('tool-executor hyperliquid_usd_class_transfer + portfolio semantics', (
     expect(data.summary.execution_mode).toBe('paper');
     expect(data.summary.onchain_usdc).toBe(200);
     expect(data.summary.available_balance).toBe(200);
-    expect(data.summary.perp_enabled).toBe(false);
+    expect(data.summary.perp_enabled).toBe(true);
+    expect(data.summary.paper_perp_enabled).toBe(true);
+    expect(data.summary.live_perp_enabled).toBe(false);
     expect(data.hyperliquid_balances).toBeNull();
   });
 });
