@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let incidentRows: Array<Record<string, unknown>> = [];
 let playbookRows: Record<string, Record<string, unknown>> = {};
@@ -103,6 +106,7 @@ import { upsertPlaybook, getPlaybook, searchPlaybooks } from '../../src/memory/p
 beforeEach(() => {
   incidentRows = [];
   playbookRows = {};
+  fakeDb.exec.mockClear();
 });
 
 describe('incidents + playbooks', () => {
@@ -138,5 +142,34 @@ describe('incidents + playbooks', () => {
     const results = searchPlaybooks({ query: 'deposit', limit: 5 });
     expect(results.length).toBe(1);
     expect(results[0]?.key).toBe('hyperliquid/funding');
+    expect(fakeDb.exec).toHaveBeenCalled();
+  });
+
+  it('loads HEARTBEAT.md from workspace filesystem when missing in DB', () => {
+    const prevWorkspace = process.env.THUFIR_WORKSPACE;
+    const tempDir = mkdtempSync(join(tmpdir(), 'thufir-playbook-fs-'));
+    const workspaceDir = join(tempDir, 'workspace');
+    mkdirSync(workspaceDir, { recursive: true });
+    writeFileSync(join(workspaceDir, 'HEARTBEAT.md'), '# Heartbeat\n\nTest file playbook.', 'utf8');
+    process.env.THUFIR_WORKSPACE = workspaceDir;
+
+    try {
+      const row = getPlaybook('HEARTBEAT.md');
+      expect(row).not.toBeNull();
+      expect(row?.key).toBe('HEARTBEAT.md');
+      expect(row?.content).toContain('Heartbeat');
+      expect(playbookRows['HEARTBEAT.md']).toBeDefined();
+
+      const search = searchPlaybooks({ query: 'HEARTBEAT', limit: 5 });
+      expect(search.length).toBeGreaterThan(0);
+      expect(search[0]?.key).toBe('HEARTBEAT.md');
+    } finally {
+      if (prevWorkspace === undefined) {
+        delete process.env.THUFIR_WORKSPACE;
+      } else {
+        process.env.THUFIR_WORKSPACE = prevWorkspace;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
