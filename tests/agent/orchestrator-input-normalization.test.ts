@@ -89,8 +89,15 @@ describe('normalizePerpPlaceOrderInput', () => {
       size: 0.1,
       reduce_only: true,
     });
+    const closeShortPhrase = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'close short',
+      size: 0.1,
+      reduce_only: true,
+    });
     expect(closeLong.side).toBe('sell');
     expect(closeShort.side).toBe('buy');
-    expect(slashAlias.side).toBe('buy');
+    expect(slashAlias.side).toBe('sell');
+    expect(closeShortPhrase.side).toBe('buy');
   });
 });

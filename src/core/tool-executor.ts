@@ -173,15 +173,14 @@ function canonicalizePerpSideInput(value: unknown): 'buy' | 'sell' | null {
   if (!raw) return null;
   if (raw === 'buy' || raw === 'sell') return raw;
 
+  if (/\b(close|exit|flatten|reduce)\s+long\b/.test(raw)) return 'sell';
+  if (/\b(close|exit|flatten|reduce)\s+short\b/.test(raw)) return 'buy';
+
   const tokens = raw.split(/[^a-z]+/).filter(Boolean);
   const hasLong = tokens.includes('long');
   const hasShort = tokens.includes('short');
   const hasBuy = tokens.includes('buy') || tokens.includes('bid');
   const hasSell = tokens.includes('sell') || tokens.includes('ask');
-  const isCloseIntent = tokens.some((t) => t === 'close' || t === 'exit' || t === 'flatten' || t === 'reduce');
-
-  if (isCloseIntent && hasLong && !hasShort) return 'sell';
-  if (isCloseIntent && hasShort && !hasLong) return 'buy';
 
   const buyish = hasBuy || hasLong;
   const sellish = hasSell || hasShort;

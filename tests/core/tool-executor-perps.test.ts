@@ -840,7 +840,7 @@ describe('tool-executor perps', () => {
     expect((openOrders as any).data?.mode).toBe('paper');
   });
 
-  it('closes paper positions when side is provided as close-alias text', async () => {
+  it('closes paper positions when side is provided as close/short alias text', async () => {
     const executor = new PaperExecutor({ initialCashUsdc: 200 });
     const limiter = {
       checkAndReserve: async () => ({ allowed: true }),
@@ -865,7 +865,7 @@ describe('tool-executor perps', () => {
       'perp_place_order',
       {
         symbol: 'BTC',
-        side: 'close long',
+        side: 'close/short',
         size: 0.005,
         reduce_only: true,
         order_type: 'market',
