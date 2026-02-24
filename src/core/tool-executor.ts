@@ -168,12 +168,13 @@ function normalizePerpBookMode(value: unknown): PerpBookMode | null {
 }
 
 function resolvePerpBookMode(config: ThufirConfig, toolInput: Record<string, unknown>): PerpBookMode {
-  const explicit = normalizePerpBookMode(toolInput.mode);
-  if (explicit) return explicit;
-
+  // Hard gate: paper runtime cannot be overridden by tool input.
   if (config.execution?.mode === 'paper') {
     return 'paper';
   }
+
+  const explicit = normalizePerpBookMode(toolInput.mode);
+  if (explicit) return explicit;
 
   const defaultMode = config.paper?.defaultMode ?? 'paper';
   const requireExplicitLive = config.paper?.requireExplicitLive ?? true;
