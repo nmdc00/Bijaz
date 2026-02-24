@@ -69,4 +69,28 @@ describe('normalizePerpPlaceOrderInput', () => {
     expect(normalized.market_regime).toBeUndefined();
     expect(normalized.entry_trigger).toBeUndefined();
   });
+
+  it('maps close-side aliases to canonical sides for exits', () => {
+    const closeLong = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'close long',
+      size: 0.1,
+      reduce_only: true,
+    });
+    const closeShort = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'close short',
+      size: 0.1,
+      reduce_only: true,
+    });
+    const slashAlias = normalizePerpPlaceOrderInput({
+      symbol: 'BTC',
+      side: 'close/short',
+      size: 0.1,
+      reduce_only: true,
+    });
+    expect(closeLong.side).toBe('sell');
+    expect(closeShort.side).toBe('buy');
+    expect(slashAlias.side).toBe('buy');
+  });
 });

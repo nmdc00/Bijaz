@@ -1703,6 +1703,29 @@ function normalizeAliasToken(value: string): string {
   return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
 }
 
+function canonicalizePerpSideInput(value: unknown): 'buy' | 'sell' | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'buy' || raw === 'sell') return raw;
+
+  const tokens = raw.split(/[^a-z]+/).filter(Boolean);
+  const hasLong = tokens.includes('long');
+  const hasShort = tokens.includes('short');
+  const hasBuy = tokens.includes('buy') || tokens.includes('bid');
+  const hasSell = tokens.includes('sell') || tokens.includes('ask');
+  const isCloseIntent = tokens.some((t) => t === 'close' || t === 'exit' || t === 'flatten' || t === 'reduce');
+
+  if (isCloseIntent && hasLong && !hasShort) return 'sell';
+  if (isCloseIntent && hasShort && !hasLong) return 'buy';
+
+  const buyish = hasBuy || hasLong;
+  const sellish = hasSell || hasShort;
+  if (buyish && !sellish) return 'buy';
+  if (sellish && !buyish) return 'sell';
+  return null;
+}
+
 function mapMarketRegimeAlias(raw: string): string | null {
   if (VALID_MARKET_REGIMES.has(raw)) return raw;
   if (raw === 'balanced_up' || raw === 'uptrend' || raw === 'trend_up') return 'trending';
@@ -1740,9 +1763,8 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
     return allowed.includes(mapped) ? mapped : undefined;
   };
 
-  if (typeof normalized.side === 'string') {
-    normalized.side = normalized.side.toLowerCase().trim();
-  }
+  const normalizedSide = canonicalizePerpSideInput(normalized.side);
+  if (normalizedSide) normalized.side = normalizedSide;
   if (typeof normalized.mode === 'string') {
     const mode = normalized.mode.toLowerCase().trim();
     if (mode === 'paper' || mode === 'live') {

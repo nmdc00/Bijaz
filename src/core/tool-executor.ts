@@ -167,6 +167,29 @@ function normalizePerpBookMode(value: unknown): PerpBookMode | null {
   return normalized === 'paper' || normalized === 'live' ? normalized : null;
 }
 
+function canonicalizePerpSideInput(value: unknown): 'buy' | 'sell' | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'buy' || raw === 'sell') return raw;
+
+  const tokens = raw.split(/[^a-z]+/).filter(Boolean);
+  const hasLong = tokens.includes('long');
+  const hasShort = tokens.includes('short');
+  const hasBuy = tokens.includes('buy') || tokens.includes('bid');
+  const hasSell = tokens.includes('sell') || tokens.includes('ask');
+  const isCloseIntent = tokens.some((t) => t === 'close' || t === 'exit' || t === 'flatten' || t === 'reduce');
+
+  if (isCloseIntent && hasLong && !hasShort) return 'sell';
+  if (isCloseIntent && hasShort && !hasLong) return 'buy';
+
+  const buyish = hasBuy || hasLong;
+  const sellish = hasSell || hasShort;
+  if (buyish && !sellish) return 'buy';
+  if (sellish && !buyish) return 'sell';
+  return null;
+}
+
 function resolvePerpBookMode(config: ThufirConfig, toolInput: Record<string, unknown>): PerpBookMode {
   // Hard gate: paper runtime cannot be overridden by tool input.
   if (config.execution?.mode === 'paper') {
@@ -1148,7 +1171,7 @@ export async function executeToolCall(
           }
         }
         const perpExecutor = resolvePerpExecutor(ctx, bookMode);
-        const side = String(toolInput.side ?? '').toLowerCase();
+        const side = canonicalizePerpSideInput(toolInput.side);
         const requestedSize = Number(toolInput.size ?? 0);
         const orderTypeRaw = String(toolInput.order_type ?? 'market').toLowerCase();
         const orderType: 'market' | 'limit' = orderTypeRaw === 'limit' ? 'limit' : 'market';
@@ -1250,7 +1273,7 @@ export async function executeToolCall(
           marketRegimeRaw === 'low_vol_compression'
             ? marketRegimeRaw
             : null;
-        if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
+        if (!symbol || !requestedSize || !side) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
         let size = requestedSize;

@@ -840,6 +840,47 @@ describe('tool-executor perps', () => {
     expect((openOrders as any).data?.mode).toBe('paper');
   });
 
+  it('closes paper positions when side is provided as close-alias text', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    const entry = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.005, order_type: 'market' },
+      ctx
+    );
+    expect(entry.success).toBe(true);
+
+    const close = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTC',
+        side: 'close long',
+        size: 0.005,
+        reduce_only: true,
+        order_type: 'market',
+        exit_mode: 'risk_reduction',
+      },
+      ctx
+    );
+    expect(close.success).toBe(true);
+
+    const positions = await executeToolCall('perp_positions', {}, ctx);
+    expect(positions.success).toBe(true);
+    const remaining = ((positions as any).data?.positions ?? []) as Array<Record<string, unknown>>;
+    expect(remaining.length).toBe(0);
+  });
+
   it('paper_promotion_report returns gate evaluation', async () => {
     const symbol = 'GATETEST';
     const executor = {
