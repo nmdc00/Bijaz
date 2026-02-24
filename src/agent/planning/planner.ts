@@ -146,6 +146,22 @@ function parseplanResponse(
   const now = new Date().toISOString();
   const available = new Set(availableTools);
 
+  const remapToolInput = (
+    requestedTool: string | undefined,
+    resolvedTool: string,
+    toolInput: Record<string, unknown> | undefined
+  ): Record<string, unknown> | undefined => {
+    const input = { ...(toolInput ?? {}) };
+    if (requestedTool === 'playbook_get' && resolvedTool === 'playbook_search') {
+      const key = typeof input.key === 'string' ? input.key.trim() : '';
+      if (key.length > 0 && (typeof input.query !== 'string' || input.query.trim().length === 0)) {
+        input.query = key;
+      }
+      delete input.key;
+    }
+    return input;
+  };
+
   const resolveAvailableTool = (toolName: string | undefined): string | null => {
     if (!toolName) return null;
     if (available.has(toolName)) return toolName;
@@ -222,13 +238,14 @@ function parseplanResponse(
           `Planner requested unavailable tool "${requestedTool}"; remapped to "${resolvedTool}" for step ${id}.`
         );
       }
+      const remappedToolInput = remapToolInput(requestedTool, resolvedTool, step.toolInput);
 
       return {
         id,
         description,
         requiresTool: true,
         toolName: resolvedTool,
-        toolInput: step.toolInput,
+        toolInput: remappedToolInput,
         status: 'pending',
         dependsOn: step.dependsOn,
       };
@@ -434,6 +451,44 @@ Respond with a JSON object:
       changes?: string[];
     };
 
+    const available = request.availableTools ? new Set(request.availableTools) : null;
+    const resolveAvailableTool = (toolName: string | undefined): string | null => {
+      if (!toolName) return null;
+      if (!available) return toolName;
+      if (available.has(toolName)) return toolName;
+      const underscored = toolName.replace(/\./g, '_');
+      if (available.has(underscored)) return underscored;
+      const dotted = toolName.replace(/_/g, '.');
+      if (available.has(dotted)) return dotted;
+      if ((toolName === 'symbol_resolve' || toolName === 'symbol_lookup') && available.has('perp_market_list')) {
+        return 'perp_market_list';
+      }
+      if (toolName === 'perp_risk_action_router') {
+        if (available.has('position_analysis')) return 'position_analysis';
+        if (available.has('perp_positions')) return 'perp_positions';
+      }
+      if (toolName === 'playbook_get' && available.has('playbook_search')) {
+        return 'playbook_search';
+      }
+      return null;
+    };
+    const remapToolInput = (
+      requestedTool: string | undefined,
+      resolvedTool: string,
+      toolInput: Record<string, unknown> | undefined
+    ): Record<string, unknown> | undefined => {
+      const input = { ...(toolInput ?? {}) };
+      if (requestedTool === 'playbook_get' && resolvedTool === 'playbook_search') {
+        const key = typeof input.key === 'string' ? input.key.trim() : '';
+        if (key.length > 0 && (typeof input.query !== 'string' || input.query.trim().length === 0)) {
+          input.query = key;
+        }
+        delete input.key;
+      }
+      return input;
+    };
+
+    const revisionChanges: string[] = [];
     const previousById = new Map(request.plan.steps.map((step) => [step.id, step] as const));
     const steps: PlanStep[] = (parsed.steps ?? request.plan.steps).map((step, index) => {
       const id = step.id ?? String(index + 1);
@@ -456,6 +511,26 @@ Respond with a JSON object:
       if (status === 'failed' && previous?.error && step.status === undefined) {
         revised.error = previous.error;
       }
+      if (revised.requiresTool) {
+        const requestedTool = revised.toolName;
+        const resolvedTool = resolveAvailableTool(requestedTool);
+        if (!resolvedTool) {
+          revised.requiresTool = false;
+          delete revised.toolName;
+          delete revised.toolInput;
+          revisionChanges.push(
+            `Step ${id} downgraded to non-tool because "${requestedTool ?? 'undefined'}" is unavailable`
+          );
+        } else {
+          if (requestedTool !== resolvedTool) {
+            revisionChanges.push(
+              `Step ${id} remapped tool "${requestedTool}" -> "${resolvedTool}" during revision`
+            );
+          }
+          revised.toolName = resolvedTool;
+          revised.toolInput = remapToolInput(requestedTool, resolvedTool, revised.toolInput);
+        }
+      }
       return revised;
     });
 
@@ -469,7 +544,7 @@ Respond with a JSON object:
 
     return {
       plan: revisedPlan,
-      changes: parsed.changes ?? ['Plan revised'],
+      changes: [...(parsed.changes ?? ['Plan revised']), ...revisionChanges],
       confidence: revisedPlan.confidence,
     };
   } catch {

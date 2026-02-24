@@ -136,6 +136,9 @@ export interface PlanRevisionRequest {
 
   /** Step that triggered revision */
   triggerStepId?: string;
+
+  /** Runtime-available tools to enforce during revision */
+  availableTools?: string[];
 }
 
 /**

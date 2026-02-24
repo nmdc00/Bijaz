@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runOrchestrator } from '../../src/agent/orchestrator/orchestrator.js';
 import type { ToolExecution } from '../../src/agent/tools/types.js';
@@ -19,6 +23,25 @@ function mkExecution(
 }
 
 describe('orchestrator routing guards', () => {
+  const originalDbPath = process.env.THUFIR_DB_PATH;
+
+  beforeEach(() => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'thufir-orchestrator-routing-guard-'));
+    process.env.THUFIR_DB_PATH = join(tempDir, 'thufir.sqlite');
+  });
+
+  afterEach(() => {
+    if (process.env.THUFIR_DB_PATH) {
+      rmSync(process.env.THUFIR_DB_PATH, { force: true });
+      rmSync(dirname(process.env.THUFIR_DB_PATH), { recursive: true, force: true });
+    }
+    if (originalDbPath === undefined) {
+      delete process.env.THUFIR_DB_PATH;
+    } else {
+      process.env.THUFIR_DB_PATH = originalDbPath;
+    }
+  });
+
   it('does not invoke registry.execute for unavailable planner tools', async () => {
     const calls: string[] = [];
     const llm = {
@@ -248,5 +271,79 @@ describe('orchestrator routing guards', () => {
 
     expect(calls).toEqual([]);
     expect(result.state.toolExecutions.some((e) => e.toolName === 'system_exec')).toBe(false);
+  });
+
+  it('prevents invalid playbook_search calls with missing query', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Search playbook',
+                  requiresTool: true,
+                  toolName: 'playbook_search',
+                  toolInput: {},
+                },
+              ],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return { content: 'done' };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['playbook_search'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, { success: true, data: {} });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Search for heartbeat playbook',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(calls).toEqual([]);
+    const failedStep = result.state.toolExecutions.find((e) => e.toolName === 'playbook_search');
+    expect(failedStep?.result.success).toBe(false);
+    expect((failedStep?.result as any)?.error).toMatch(/requires non-empty query/i);
   });
 });
