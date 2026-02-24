@@ -168,12 +168,14 @@ function normalizePerpBookMode(value: unknown): PerpBookMode | null {
 }
 
 function resolvePerpBookMode(config: ThufirConfig, toolInput: Record<string, unknown>): PerpBookMode {
-  const explicit = normalizePerpBookMode(toolInput.mode);
-  if (explicit) return explicit;
-
+  // Hard gate: when runtime execution mode is paper, all perp/account tools
+  // must stay on the paper book regardless of tool input overrides.
   if (config.execution?.mode === 'paper') {
     return 'paper';
   }
+
+  const explicit = normalizePerpBookMode(toolInput.mode);
+  if (explicit) return explicit;
 
   const defaultMode = config.paper?.defaultMode ?? 'paper';
   const requireExplicitLive = config.paper?.requireExplicitLive ?? true;
@@ -669,6 +671,12 @@ export async function executeToolCall(
       }
 
       case 'hyperliquid_verify_live': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: hyperliquid_verify_live.',
+          };
+        }
         const symbol = String(toolInput.symbol ?? 'BTC').trim().toUpperCase();
         const client = new HyperliquidClient(ctx.config);
         const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
@@ -790,6 +798,12 @@ export async function executeToolCall(
       }
 
       case 'hyperliquid_order_roundtrip': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: hyperliquid_order_roundtrip.',
+          };
+        }
         const symbol = String(toolInput.symbol ?? 'BTC').trim().toUpperCase();
         const size = Number(toolInput.size ?? 0);
         const side = String(toolInput.side ?? 'buy').trim().toLowerCase() === 'sell' ? 'sell' : 'buy';
@@ -880,6 +894,12 @@ export async function executeToolCall(
       }
 
       case 'hyperliquid_usd_class_transfer': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: hyperliquid_usd_class_transfer.',
+          };
+        }
         const amountUsdc = Number(toolInput.amount_usdc ?? 0);
         const to = String(toolInput.to ?? '').trim().toLowerCase();
         if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
