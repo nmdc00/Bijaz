@@ -399,6 +399,56 @@ function shouldSkipRedundantToolsList(state: AgentState, step: PlanStep): boolea
   return true;
 }
 
+function resolveRuntimeToolAlias(
+  toolName: string,
+  availableTools: Set<string>
+): string | null {
+  if (availableTools.has(toolName)) return toolName;
+  const underscored = toolName.replace(/\./g, '_');
+  if (availableTools.has(underscored)) return underscored;
+  const dotted = toolName.replace(/_/g, '.');
+  if (availableTools.has(dotted)) return dotted;
+  if ((toolName === 'symbol_resolve' || toolName === 'symbol_lookup') && availableTools.has('perp_market_list')) {
+    return 'perp_market_list';
+  }
+  if (toolName === 'perp_risk_action_router') {
+    if (availableTools.has('position_analysis')) return 'position_analysis';
+    if (availableTools.has('perp_positions')) return 'perp_positions';
+  }
+  if (toolName === 'playbook_get' && availableTools.has('playbook_search')) {
+    return 'playbook_search';
+  }
+  return null;
+}
+
+function remapRuntimeToolInput(
+  requestedTool: string,
+  resolvedTool: string,
+  toolInput: Record<string, unknown>
+): Record<string, unknown> {
+  const input = { ...toolInput };
+  if (requestedTool === 'playbook_get' && resolvedTool === 'playbook_search') {
+    const key = typeof input.key === 'string' ? input.key.trim() : '';
+    if (key.length > 0 && (typeof input.query !== 'string' || input.query.trim().length === 0)) {
+      input.query = key;
+    }
+    delete input.key;
+  }
+  return input;
+}
+
+function validateToolInputContract(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName === 'playbook_search') {
+    const query = typeof input.query === 'string' ? input.query.trim() : '';
+    if (!query) return 'Invalid tool input: playbook_search requires non-empty query';
+  }
+  if (toolName === 'playbook_get') {
+    const key = typeof input.key === 'string' ? input.key.trim() : '';
+    if (!key) return 'Invalid tool input: playbook_get requires non-empty key';
+  }
+  return null;
+}
+
 function goalRequestsTradeMutation(goal: string): boolean {
   const normalized = goal.toLowerCase();
   if (normalized.includes('perp_place_order') || normalized.includes('perp_cancel_order')) return true;
@@ -882,6 +932,12 @@ export async function runOrchestrator(
   // Extract config from toolContext for mode configuration overrides
   const thufirConfig = ctx.toolContext?.config as import('../../core/config.js').ThufirConfig | undefined;
   const modeConfig = getModeConfig(modeResult.mode, thufirConfig);
+  const runtimeTools = new Set(ctx.toolRegistry.listNames());
+  const blockedAutonomousTools =
+    executionOrigin === 'autonomous' ? new Set(['system_exec', 'system_install']) : new Set<string>();
+  const allowedRuntimeTools = getAllowedTools(modeResult.mode).filter(
+    (toolName) => runtimeTools.has(toolName) && !blockedAutonomousTools.has(toolName)
+  );
   const maxIterations = options?.maxIterations ?? modeConfig.maxIterations;
   const canResumePlan = Boolean(
     options?.resumePlan && options?.initialPlan && options.initialPlan.goal === goal
@@ -979,17 +1035,11 @@ export async function runOrchestrator(
   // Phase 3: Planning (unless skipped)
   if (!skipPlanning) {
     try {
-      const runtimeTools = new Set(ctx.toolRegistry.listNames());
-      const blockedAutonomousTools =
-        executionOrigin === 'autonomous' ? new Set(['system_exec', 'system_install']) : new Set<string>();
-      const allowedTools = getAllowedTools(modeResult.mode).filter(
-        (toolName) => runtimeTools.has(toolName) && !blockedAutonomousTools.has(toolName)
-      );
       const planResult = await createPlan(
         ctx.llm,
         {
           goal,
-          availableTools: allowedTools,
+          availableTools: allowedRuntimeTools,
           memoryContext: state.memoryContext ?? undefined,
           assumptions: state.assumptions.map((a) => a.statement),
           hypotheses: state.hypotheses.map((h) => h.statement),
@@ -1134,6 +1184,7 @@ export async function runOrchestrator(
           context: reflection.revisionReason,
           toolResult: execution.result,
           triggerStepId: step.id,
+          availableTools: allowedRuntimeTools,
         });
 
         state = setPlan(state, revisionResult.plan);
@@ -2058,7 +2109,7 @@ async function executeToolStep(
   },
   options?: Pick<OrchestratorOptions, 'executionOrigin' | 'allowTradeMutations'>
 ): Promise<ToolExecution> {
-  const toolName = step.toolName!;
+  let toolName = step.toolName!;
   let input = (step.toolInput ?? {}) as Record<string, unknown>;
   const executionOrigin = options?.executionOrigin ?? 'system';
   if (executionOrigin === 'autonomous' && (toolName === 'system_exec' || toolName === 'system_install')) {
@@ -2076,17 +2127,25 @@ async function executeToolStep(
   }
   const availableTools = new Set(ctx.toolRegistry.listNames());
   if (!availableTools.has(toolName)) {
-    return {
-      toolName,
-      input,
-      result: {
-        success: false,
-        error: `Tool not available in current runtime: ${toolName}`,
-      },
-      timestamp: new Date().toISOString(),
-      durationMs: 0,
-      cached: false,
-    };
+    const remapped = resolveRuntimeToolAlias(toolName, availableTools);
+    if (remapped) {
+      input = remapRuntimeToolInput(toolName, remapped, input);
+      toolName = remapped;
+      step.toolName = remapped;
+      step.toolInput = input;
+    } else {
+      return {
+        toolName,
+        input,
+        result: {
+          success: false,
+          error: `Tool not available in current runtime: ${toolName}`,
+        },
+        timestamp: new Date().toISOString(),
+        durationMs: 0,
+        cached: false,
+      };
+    }
   }
 
   // Dynamic input resolution: if toolInput has placeholder values, ask LLM to fill them in
@@ -2143,6 +2202,21 @@ async function executeToolStep(
       (input as Record<string, unknown>).plan_context = planContext;
     }
     input = normalizePerpPlaceOrderInput(input as Record<string, unknown>);
+  }
+
+  const inputContractError = validateToolInputContract(toolName, input);
+  if (inputContractError) {
+    return {
+      toolName,
+      input,
+      result: {
+        success: false,
+        error: inputContractError,
+      },
+      timestamp: new Date().toISOString(),
+      durationMs: 0,
+      cached: false,
+    };
   }
 
   const shortLivedCacheKey = buildShortLivedReadCacheKey({ ...step, toolInput: input });
