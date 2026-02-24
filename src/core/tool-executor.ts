@@ -248,6 +248,11 @@ type ReduceOnlyPositionSnapshot = {
   size: number;
 };
 
+type PositionSnapshot = {
+  side: 'long' | 'short';
+  size: number;
+};
+
 async function getReduceOnlyPositionSnapshot(
   config: ThufirConfig,
   symbol: string
@@ -274,6 +279,41 @@ async function getReduceOnlyPositionSnapshot(
       size: Math.abs(rawSize),
     };
   }
+  return null;
+}
+
+async function getPositionSnapshotForScoring(
+  ctx: ToolExecutorContext,
+  mode: PerpBookMode,
+  symbol: string
+): Promise<PositionSnapshot | null> {
+  if (mode === 'paper') {
+    const target = symbol.trim().toUpperCase();
+    let paperPosition: ReturnType<typeof listPaperPerpPositions>[number] | undefined;
+    try {
+      paperPosition = listPaperPerpPositions(ctx.config.paper?.initialCashUsdc ?? 200).find(
+        (position) => position.symbol.trim().toUpperCase() === target
+      );
+    } catch {
+      return null;
+    }
+    if (!paperPosition || !Number.isFinite(paperPosition.size) || paperPosition.size <= 0) {
+      return null;
+    }
+    return {
+      side: paperPosition.side === 'short' ? 'short' : 'long',
+      size: paperPosition.size,
+    };
+  }
+
+  if (ctx.config.execution?.provider === 'hyperliquid') {
+    try {
+      return await getReduceOnlyPositionSnapshot(ctx.config, symbol);
+    } catch {
+      return null;
+    }
+  }
+
   return null;
 }
 
@@ -1139,6 +1179,32 @@ export async function executeToolCall(
           return { success: false, error: 'Missing or invalid order fields' };
         }
         let size = requestedSize;
+        const preOrderPosition = await getPositionSnapshotForScoring(ctx, bookMode, symbol);
+        let scoreHistory: ReturnType<typeof listPerpTradeJournals> = [];
+        try {
+          scoreHistory = listPerpTradeJournals({ symbol, limit: 200 });
+        } catch {
+          scoreHistory = [];
+        }
+        const inferredCloseReference = resolveClosedTradeReference({
+          entries: scoreHistory,
+          symbol,
+          hypothesisId,
+          closeSide: side as 'buy' | 'sell',
+        });
+        const isOppositeSideClose = Boolean(
+          preOrderPosition &&
+            ((preOrderPosition.side === 'long' && side === 'sell') ||
+              (preOrderPosition.side === 'short' && side === 'buy'))
+        );
+        const hasOppositeSideReference = Boolean(
+          inferredCloseReference?.side &&
+            ((inferredCloseReference.side === 'buy' && side === 'sell') ||
+              (inferredCloseReference.side === 'sell' && side === 'buy'))
+        );
+        const inferredClosingAction =
+          (isOppositeSideClose && Number.isFinite(preOrderPosition?.size)) || hasOppositeSideReference;
+        const effectiveCloseForScoring = reduceOnly || inferredClosingAction;
         let reduceOnlyPreflightNote: string | null = null;
         if (reduceOnly && bookMode === 'live' && ctx.config.execution?.provider === 'hyperliquid') {
           try {
@@ -1191,7 +1257,7 @@ export async function executeToolCall(
           return { success: false, error: contractError };
         }
         const exitAssessment = evaluateReduceOnlyExitAssessment({
-          reduceOnly,
+          reduceOnly: effectiveCloseForScoring,
           thesisInvalidationHit,
           exitMode,
         });
@@ -1535,11 +1601,10 @@ export async function executeToolCall(
               wouldHit3R: boolean | null;
             }
           | null = null;
-        if (reduceOnly) {
+        if (effectiveCloseForScoring) {
           try {
-            const history = listPerpTradeJournals({ symbol, limit: 200 });
             const reference = resolveClosedTradeReference({
-              entries: history,
+              entries: scoreHistory,
               symbol,
               hypothesisId,
               closeSide: side as 'buy' | 'sell',
@@ -1549,7 +1614,7 @@ export async function executeToolCall(
             componentScores = computeClosedTradeComponentScores({
               entrySide,
               thesisCorrect: exitAssessment.thesisCorrect,
-              size: reference?.size ?? size,
+              size: reference?.size ?? (preOrderPosition ? Math.min(size, preOrderPosition.size) : size),
               expectedEdge: reference?.expectedEdge ?? expectedEdge,
               entryPrice: closeEntryPriceOverride ?? reference?.markPrice ?? null,
               exitPrice: market.markPrice ?? null,

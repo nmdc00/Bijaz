@@ -537,7 +537,7 @@ describe('tool-executor perps', () => {
         hypothesis_id: hypothesisId,
       },
       {
-        config: { execution: { provider: 'hyperliquid' } } as any,
+        config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
         marketClient: dynamicMarketClient as any,
         executor,
         limiter,
@@ -560,7 +560,7 @@ describe('tool-executor perps', () => {
         price_path_low: 90,
       },
       {
-        config: { execution: { provider: 'hyperliquid' } } as any,
+        config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
         marketClient: dynamicMarketClient as any,
         executor,
         limiter,
@@ -572,7 +572,7 @@ describe('tool-executor perps', () => {
       'perp_trade_journal_list',
       { symbol, limit: 20 },
       {
-        config: { execution: { provider: 'hyperliquid' } } as any,
+        config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
         marketClient: dynamicMarketClient as any,
       }
     );
@@ -593,6 +593,101 @@ describe('tool-executor perps', () => {
     expect(Number(closed?.timing_score)).toBeCloseTo(2 / 3, 8);
     expect(Number(closed?.sizing_score)).toBeCloseTo(0.6857142857, 8);
     expect(Number(closed?.exit_score)).toBeCloseTo(0.5, 8);
+  });
+
+  it('persists deterministic scores for inferred close actions without reduce_only=true', async () => {
+    let markPrice = 100;
+    const dynamicMarketClient = {
+      getMarket: async (symbol: string) => ({
+        id: symbol,
+        question: `Perp: ${symbol}`,
+        outcomes: ['LONG', 'SHORT'],
+        prices: {},
+        platform: 'hyperliquid',
+        kind: 'perp',
+        symbol,
+        markPrice,
+        metadata: { maxLeverage: 10 },
+      }),
+      listMarkets: async () => [],
+      searchMarkets: async () => [],
+    };
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+
+    const symbol = 'SCORETESTBTC2';
+    const hypothesisId = 'hyp_component_scoring_test_2';
+    const entryRes = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'buy',
+        size: 0.4,
+        expected_edge: 0.6,
+        hypothesis_id: hypothesisId,
+      },
+      {
+        config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
+        marketClient: dynamicMarketClient as any,
+        executor,
+        limiter,
+      }
+    );
+    expect(entryRes.success).toBe(true);
+
+    markPrice = 110;
+    const closeRes = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'sell',
+        size: 0.4,
+        hypothesis_id: hypothesisId,
+        price_path_high: 120,
+        price_path_low: 90,
+      },
+      {
+        config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
+        marketClient: dynamicMarketClient as any,
+        executor,
+        limiter,
+      }
+    );
+    expect(closeRes.success).toBe(true);
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 20 },
+      {
+        config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
+        marketClient: dynamicMarketClient as any,
+      }
+    );
+    expect(listRes.success).toBe(true);
+    const entries = ((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>;
+    const inferredClose = entries.find(
+      (entry) =>
+        entry.hypothesisId === hypothesisId &&
+        entry.reduceOnly === false &&
+        entry.side === 'sell' &&
+        entry.outcome === 'executed'
+    );
+    expect(inferredClose).toBeDefined();
+    const directionScore = Number(inferredClose?.directionScore);
+    expect(Number.isFinite(directionScore)).toBe(true);
+    expect(directionScore).toBeGreaterThanOrEqual(0);
+    expect(directionScore).toBeLessThanOrEqual(1);
+    expect(Number(inferredClose?.timingScore)).toBeCloseTo(2 / 3, 8);
+    expect(Number(inferredClose?.sizingScore)).toBeCloseTo(0.6857142857, 8);
+    expect(Number(inferredClose?.exitScore)).toBeCloseTo(0.5, 8);
   });
 
   it('accepts news provenance metadata on news-triggered entries', async () => {
