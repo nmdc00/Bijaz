@@ -163,19 +163,21 @@ describe('ConversationHandler cooldown fallback', () => {
 
   it('allows autonomous reduce-only trade confirmations when full auto is disabled', async () => {
     runOrchestratorMock.mockClear();
+    let observedReduceOnly = false;
+    let observedIncrease = true;
     runOrchestratorMock.mockImplementationOnce(async (_goal: string, ctx: any) => {
-      const allowReduceOnly = await ctx.onConfirmation(
+      observedReduceOnly = await ctx.onConfirmation(
         'Execute perp_place_order?',
         'perp_place_order',
         { symbol: 'BTC', side: 'sell', size: 0.1, reduce_only: true }
       );
-      const allowIncrease = await ctx.onConfirmation(
+      observedIncrease = await ctx.onConfirmation(
         'Execute perp_place_order?',
         'perp_place_order',
         { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: false }
       );
       return {
-        response: JSON.stringify({ allowReduceOnly, allowIncrease }),
+        response: 'ok',
         state: {
           plan: null,
           toolExecutions: [],
@@ -196,10 +198,9 @@ describe('ConversationHandler cooldown fallback', () => {
     } as any;
 
     const handler = new ConversationHandler(llm, marketClient, config);
-    const reply = await handler.chat('__heartbeat__', 'Manage position risk.');
-    const parsed = JSON.parse(reply) as { allowReduceOnly: boolean; allowIncrease: boolean };
-    expect(parsed.allowReduceOnly).toBe(true);
-    expect(parsed.allowIncrease).toBe(false);
+    await handler.chat('__heartbeat__', 'Manage position risk.');
+    expect(observedReduceOnly).toBe(true);
+    expect(observedIncrease).toBe(false);
   });
 
   it('suppresses repeated planning progress updates while preserving stage transitions', async () => {
@@ -248,5 +249,76 @@ describe('ConversationHandler cooldown fallback', () => {
     expect(progressMessages.filter((m) => m.includes('building execution plan')).length).toBe(1);
     expect(progressMessages.some((m) => m.includes('running perp_market_get'))).toBe(true);
     expect(progressMessages.filter((m) => m.includes('finalizing response')).length).toBe(1);
+  });
+  it('forces heartbeat to HEARTBEAT_OK when no verified mutating tool execution exists', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockResolvedValueOnce({
+      response: 'HEARTBEAT_ACTION: Opened BTC long in paper mode.',
+      state: {
+        plan: null,
+        toolExecutions: [
+          {
+            toolName: 'perp_analyze',
+            input: { symbol: 'BTC' },
+            result: { success: true, data: { direction: 'up' } },
+            timestamp: new Date().toISOString(),
+            durationMs: 1,
+            cached: false,
+          },
+        ],
+        criticResult: null,
+        mode: 'trade',
+      },
+      summary: { fragility: null },
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: true },
+    } as any;
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    const reply = await handler.chat('__heartbeat__', 'Read HEARTBEAT.md if it exists.');
+    expect(reply.trim()).toBe('HEARTBEAT_OK');
+  });
+
+  it('keeps HEARTBEAT_ACTION when mutating tool execution is verified', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockResolvedValueOnce({
+      response: 'Opened BTC long in paper mode.',
+      state: {
+        plan: null,
+        toolExecutions: [
+          {
+            toolName: 'perp_place_order',
+            input: { symbol: 'BTC', side: 'buy', size: 0.01 },
+            result: { success: true, data: { message: 'Paper order filled (oid=123).' } },
+            timestamp: new Date().toISOString(),
+            durationMs: 1,
+            cached: false,
+          },
+        ],
+        criticResult: null,
+        mode: 'trade',
+      },
+      summary: { fragility: null },
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: true },
+    } as any;
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    const reply = await handler.chat('__heartbeat__', 'Read HEARTBEAT.md if it exists.');
+    expect(reply.startsWith('HEARTBEAT_ACTION:')).toBe(true);
   });
 });
