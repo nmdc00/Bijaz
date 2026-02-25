@@ -81,6 +81,8 @@ const TRADE_PATTERNS = [
   /\b(reduce|trim|cut)\b.*\b(position|exposure|size|short|long)\b/i,
   /\b(stop.?loss|take.?profit|tp|sl)\b/i,
   /\b(place|set|add)\s+(a\s+)?(limit|market|stop)\b/i,
+  // Terse imperative close commands common in chat interfaces.
+  /^\s*(close|exit|flatten|unwind)(\s+(it|this|that))?(\s+(now|please))?\s*$/i,
 ];
 
 /**
