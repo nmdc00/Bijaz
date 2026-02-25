@@ -15,6 +15,37 @@ export type DashboardFilters = {
   to: string | null;
 };
 
+type TimeRange = {
+  fromMs: number | null;
+  toMs: number | null;
+};
+
+type PaperPerpFillRow = {
+  symbol: string;
+  side: 'buy' | 'sell';
+  size: number;
+  fillPrice: number;
+  markPrice: number;
+  realizedPnlUsd: number;
+  feeUsd: number;
+  createdAt: string;
+};
+
+type PositionState = {
+  side: 'long' | 'short';
+  size: number;
+  entryPrice: number;
+};
+
+type EquityPoint = {
+  timestamp: string;
+  cashBalance: number;
+  unrealizedPnl: number;
+  equity: number;
+  cumulativeRealizedPnl: number;
+  cumulativeFees: number;
+};
+
 function normalizeIso(input: string | null): string | null {
   if (!input) return null;
   const value = input.trim();
@@ -83,6 +114,55 @@ export function parseDashboardFilters(url: URL, now = new Date()): DashboardFilt
   };
 }
 
+function resolvePeriodWindow(periodRaw: string | null, nowMs: number): TimeRange {
+  const period = (periodRaw ?? '30d').trim().toLowerCase();
+  const match = period.match(/^(\d+)([dhwm])$/);
+  if (!match) {
+    return { fromMs: null, toMs: null };
+  }
+  const value = Number(match[1]);
+  const unit = match[2];
+  if (!Number.isFinite(value) || value <= 0) {
+    return { fromMs: null, toMs: null };
+  }
+  const multiplier =
+    unit === 'd'
+      ? 24 * 60 * 60 * 1000
+      : unit === 'h'
+        ? 60 * 60 * 1000
+        : unit === 'w'
+          ? 7 * 24 * 60 * 60 * 1000
+          : 30 * 24 * 60 * 60 * 1000;
+  return { fromMs: nowMs - value * multiplier, toMs: nowMs };
+}
+
+function resolveTimeRange(filters: DashboardFilters, now = new Date()): TimeRange {
+  const nowMs = now.getTime();
+  if (filters.timeframe === 'all') {
+    return { fromMs: null, toMs: null };
+  }
+
+  if (filters.timeframe === 'day') {
+    const fromMs = Date.parse(filters.from ?? '');
+    const toMs = Date.parse(filters.to ?? '');
+    return {
+      fromMs: Number.isFinite(fromMs) ? fromMs : null,
+      toMs: Number.isFinite(toMs) ? toMs : nowMs,
+    };
+  }
+
+  if (filters.timeframe === 'period') {
+    return resolvePeriodWindow(filters.period, nowMs);
+  }
+
+  const fromMs = Date.parse(filters.from ?? '');
+  const toMs = Date.parse(filters.to ?? '');
+  return {
+    fromMs: Number.isFinite(fromMs) ? fromMs : null,
+    toMs: Number.isFinite(toMs) ? toMs : null,
+  };
+}
+
 function tableExists(db: Database.Database, tableName: string): boolean {
   const row = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
@@ -101,6 +181,205 @@ function safeCount(
   } catch {
     return 0;
   }
+}
+
+function listPaperPerpFills(db: Database.Database): PaperPerpFillRow[] {
+  if (!tableExists(db, 'paper_perp_fills')) {
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `
+        SELECT symbol,
+               side,
+               size,
+               fill_price as fillPrice,
+               mark_price as markPrice,
+               realized_pnl_usd as realizedPnlUsd,
+               fee_usd as feeUsd,
+               created_at as createdAt
+        FROM paper_perp_fills
+        ORDER BY created_at ASC, id ASC
+      `
+    )
+    .all() as Array<Record<string, unknown>>;
+  return rows.map((row) => ({
+    symbol: String(row.symbol ?? '').toUpperCase(),
+    side: String(row.side ?? 'buy') === 'sell' ? 'sell' : 'buy',
+    size: Number(row.size ?? 0),
+    fillPrice: Number(row.fillPrice ?? 0),
+    markPrice: Number(row.markPrice ?? row.fillPrice ?? 0),
+    realizedPnlUsd: Number(row.realizedPnlUsd ?? 0),
+    feeUsd: Number(row.feeUsd ?? 0),
+    createdAt: String(row.createdAt ?? ''),
+  }));
+}
+
+function applyFillToPositionState(
+  map: Map<string, PositionState>,
+  fill: PaperPerpFillRow
+): void {
+  const size = Number(fill.size);
+  const price = Number(fill.fillPrice);
+  if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(price) || price <= 0) {
+    return;
+  }
+
+  const symbol = fill.symbol;
+  const existing = map.get(symbol);
+  const existingSigned =
+    existing == null ? 0 : existing.side === 'long' ? existing.size : -existing.size;
+  const fillSigned = fill.side === 'buy' ? size : -size;
+  const nextSigned = existingSigned + fillSigned;
+
+  if (existingSigned === 0) {
+    map.set(symbol, {
+      side: fillSigned >= 0 ? 'long' : 'short',
+      size: Math.abs(fillSigned),
+      entryPrice: price,
+    });
+    return;
+  }
+
+  if (Math.sign(existingSigned) === Math.sign(fillSigned)) {
+    const nextSize = Math.abs(nextSigned);
+    const weightedEntry =
+      (Math.abs(existingSigned) * existing.entryPrice + Math.abs(fillSigned) * price) / nextSize;
+    map.set(symbol, {
+      side: nextSigned >= 0 ? 'long' : 'short',
+      size: nextSize,
+      entryPrice: weightedEntry,
+    });
+    return;
+  }
+
+  if (Math.abs(fillSigned) < Math.abs(existingSigned)) {
+    map.set(symbol, {
+      side: existing.side,
+      size: Math.abs(nextSigned),
+      entryPrice: existing.entryPrice,
+    });
+    return;
+  }
+
+  if (Math.abs(fillSigned) === Math.abs(existingSigned)) {
+    map.delete(symbol);
+    return;
+  }
+
+  map.set(symbol, {
+    side: nextSigned >= 0 ? 'long' : 'short',
+    size: Math.abs(nextSigned),
+    entryPrice: price,
+  });
+}
+
+function computeUnrealizedPnl(
+  positions: Map<string, PositionState>,
+  lastMarkBySymbol: Map<string, number>
+): number {
+  let total = 0;
+  for (const [symbol, position] of positions.entries()) {
+    const mark = lastMarkBySymbol.get(symbol) ?? position.entryPrice;
+    const delta =
+      position.side === 'long'
+        ? (mark - position.entryPrice) * position.size
+        : (position.entryPrice - mark) * position.size;
+    total += Number.isFinite(delta) ? delta : 0;
+  }
+  return total;
+}
+
+function buildPaperEquitySeries(
+  db: Database.Database,
+  filters: DashboardFilters
+): {
+  points: EquityPoint[];
+  summary: {
+    startEquity: number | null;
+    endEquity: number | null;
+    returnPct: number | null;
+    maxDrawdownPct: number | null;
+  };
+} {
+  const startingCash = safeCount(
+    db,
+    'SELECT COALESCE(starting_cash_usdc, 200) AS c FROM paper_perp_book WHERE id = 1'
+  );
+  const fills = listPaperPerpFills(db);
+  const { fromMs, toMs } = resolveTimeRange(filters);
+  const positions = new Map<string, PositionState>();
+  const lastMarkBySymbol = new Map<string, number>();
+  const points: EquityPoint[] = [];
+  let cashBalance = startingCash > 0 ? startingCash : 200;
+  let cumulativeRealized = 0;
+  let cumulativeFees = 0;
+
+  for (const fill of fills) {
+    const fillMs = Date.parse(fill.createdAt);
+    if (!Number.isFinite(fillMs)) {
+      continue;
+    }
+    applyFillToPositionState(positions, fill);
+    lastMarkBySymbol.set(fill.symbol, fill.markPrice);
+
+    cumulativeRealized += fill.realizedPnlUsd;
+    cumulativeFees += fill.feeUsd;
+    cashBalance += fill.realizedPnlUsd - fill.feeUsd;
+    const unrealizedPnl = computeUnrealizedPnl(positions, lastMarkBySymbol);
+    const equity = cashBalance + unrealizedPnl;
+
+    const inRange =
+      (fromMs == null || fillMs >= fromMs) &&
+      (toMs == null || fillMs <= toMs);
+    if (inRange) {
+      points.push({
+        timestamp: new Date(fillMs).toISOString(),
+        cashBalance,
+        unrealizedPnl,
+        equity,
+        cumulativeRealizedPnl: cumulativeRealized,
+        cumulativeFees,
+      });
+    }
+  }
+
+  if (points.length === 0) {
+    points.push({
+      timestamp: new Date().toISOString(),
+      cashBalance,
+      unrealizedPnl: 0,
+      equity: cashBalance,
+      cumulativeRealizedPnl: cumulativeRealized,
+      cumulativeFees,
+    });
+  }
+
+  const startEquity = points[0]?.equity ?? null;
+  const endEquity = points[points.length - 1]?.equity ?? null;
+  const returnPct =
+    startEquity != null && endEquity != null && Math.abs(startEquity) > 1e-9
+      ? ((endEquity - startEquity) / startEquity) * 100
+      : null;
+  let peak = Number.NEGATIVE_INFINITY;
+  let maxDrawdownPct = 0;
+  for (const point of points) {
+    peak = Math.max(peak, point.equity);
+    if (peak > 0) {
+      const dd = ((peak - point.equity) / peak) * 100;
+      maxDrawdownPct = Math.max(maxDrawdownPct, dd);
+    }
+  }
+
+  return {
+    points,
+    summary: {
+      startEquity,
+      endEquity,
+      returnPct,
+      maxDrawdownPct,
+    },
+  };
 }
 
 export function buildDashboardApiPayload(params?: {
@@ -123,7 +402,7 @@ export function buildDashboardApiPayload(params?: {
   };
   sections: {
     equityCurve: {
-      points: unknown[];
+      points: EquityPoint[];
       summary: {
         startEquity: number | null;
         endEquity: number | null;
@@ -178,6 +457,7 @@ export function buildDashboardApiPayload(params?: {
   const openPaperPositions = tableExists(db, 'paper_perp_positions')
     ? safeCount(db, 'SELECT COUNT(*) AS c FROM paper_perp_positions')
     : 0;
+  const equityCurve = buildPaperEquitySeries(db, filters);
 
   return {
     meta: {
@@ -195,15 +475,7 @@ export function buildDashboardApiPayload(params?: {
       },
     },
     sections: {
-      equityCurve: {
-        points: [],
-        summary: {
-          startEquity: null,
-          endEquity: null,
-          returnPct: null,
-          maxDrawdownPct: null,
-        },
-      },
+      equityCurve,
       openPositions: {
         rows: [],
         summary: {
