@@ -161,7 +161,7 @@ describe('ConversationHandler cooldown fallback', () => {
     });
   });
 
-  it('treats imperative close commands as manual trade overrides', async () => {
+  it('handles imperative close commands via direct deterministic close path', async () => {
     runOrchestratorMock.mockClear();
     runOrchestratorMock.mockResolvedValue({
       response: 'ok',
@@ -184,13 +184,11 @@ describe('ConversationHandler cooldown fallback', () => {
     } as any;
 
     const handler = new ConversationHandler(llm, marketClient, config);
-    await handler.chat('user', 'Close it');
+    const reply = await handler.chat('user', 'Close it');
 
-    expect(runOrchestratorMock).toHaveBeenCalledTimes(1);
-    expect(runOrchestratorMock.mock.calls[0]?.[2]).toMatchObject({
-      executionOrigin: 'manual_override',
-      allowTradeMutations: true,
-    });
+    expect(runOrchestratorMock).toHaveBeenCalledTimes(0);
+    expect(reply).toContain('Action:');
+    expect(reply).toContain('Book State:');
   });
 
   it('keeps status questions in chat analysis mode', async () => {
