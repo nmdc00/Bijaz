@@ -313,6 +313,61 @@ async function buildPaperPerpSnapshot(ctx: ToolExecutorContext): Promise<{
   };
 }
 
+function getPaperPositionSnapshot(
+  symbol: string,
+  initialCashUsdc: number
+): { symbol: string; side: 'long' | 'short'; size: number } | null {
+  const normalized = symbol.trim().toUpperCase();
+  if (!normalized) return null;
+  const position = listPaperPerpPositions(initialCashUsdc).find(
+    (entry) => entry.symbol.trim().toUpperCase() === normalized
+  );
+  if (!position) return null;
+  return {
+    symbol: position.symbol,
+    side: position.side,
+    size: position.size,
+  };
+}
+
+function evaluatePaperReduceOnlyPostcondition(params: {
+  symbol: string;
+  before: { symbol: string; side: 'long' | 'short'; size: number } | null;
+  after: { symbol: string; side: 'long' | 'short'; size: number } | null;
+}) {
+  const beforeSize = params.before?.size ?? 0;
+  const afterSize = params.after?.size ?? 0;
+  const sideFlipped =
+    params.before != null &&
+    params.after != null &&
+    params.before.side !== params.after.side &&
+    afterSize > 0;
+  const reduced = afterSize < beforeSize;
+  const closeComplete = beforeSize > 0 && afterSize === 0;
+  const verified = reduced && !sideFlipped;
+  const reason = verified
+    ? closeComplete
+      ? 'position_flat'
+      : 'position_reduced'
+    : sideFlipped
+      ? 'side_flip_detected'
+      : beforeSize <= 0
+        ? 'no_position_before'
+        : 'size_not_reduced';
+
+  return {
+    verified,
+    reason,
+    close_complete: closeComplete,
+    reduced,
+    before_size: beforeSize,
+    after_size: afterSize,
+    before_side: params.before?.side ?? null,
+    after_side: params.after?.side ?? null,
+    symbol: params.symbol,
+  };
+}
+
 type TradeArchetype = 'scalp' | 'intraday' | 'swing';
 
 function parseNewsSources(input: unknown): string[] | null {
@@ -1170,6 +1225,7 @@ export async function executeToolCall(
           }
         }
         const perpExecutor = resolvePerpExecutor(ctx, bookMode);
+        const isNativePaperExecutor = perpExecutor instanceof PaperExecutor;
         const side = canonicalizePerpSideInput(toolInput.side);
         const requestedSize = Number(toolInput.size ?? 0);
         const orderTypeRaw = String(toolInput.order_type ?? 'market').toLowerCase();
@@ -1578,6 +1634,11 @@ export async function executeToolCall(
           reduceOnly,
           confidence: 'medium' as const,
         };
+        const paperInitialCashUsdc = ctx.config.paper?.initialCashUsdc ?? 200;
+        const paperReduceOnlyBefore =
+          bookMode === 'paper' && isNativePaperExecutor && reduceOnly
+            ? getPaperPositionSnapshot(symbol, paperInitialCashUsdc)
+            : null;
         const executionStartMs = Date.now();
         const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
         const execution = await executePerpWithRetry({
@@ -1651,6 +1712,22 @@ export async function executeToolCall(
             // Best-effort journaling: never block trading due to local DB issues.
           }
           return { success: false, error: `${result.message}${retrySummary}` };
+        }
+        const paperReduceOnlyPostcondition =
+          bookMode === 'paper' && isNativePaperExecutor && reduceOnly
+            ? evaluatePaperReduceOnlyPostcondition({
+                symbol,
+                before: paperReduceOnlyBefore,
+                after: getPaperPositionSnapshot(symbol, paperInitialCashUsdc),
+              })
+            : null;
+        if (paperReduceOnlyPostcondition && !paperReduceOnlyPostcondition.verified) {
+          return {
+            success: false,
+            error:
+              `Paper reduce-only postcondition failed for ${symbol}: ${paperReduceOnlyPostcondition.reason} ` +
+              `(before_size=${paperReduceOnlyPostcondition.before_size}, after_size=${paperReduceOnlyPostcondition.after_size}).`,
+          };
         }
         ctx.limiter.confirm(size);
         const inferredOrderId = parseOrderIdFromResultMessage(result.message);
@@ -1788,6 +1865,7 @@ export async function executeToolCall(
           data: {
             ...result,
             mode: bookMode,
+            reduce_only_postcondition: paperReduceOnlyPostcondition,
             policy: {
               reason_code: policyGate.reasonCode ?? null,
               reason: policyGate.reason ?? null,
