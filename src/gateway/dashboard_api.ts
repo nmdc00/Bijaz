@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
 
 import { buildPaperPromotionReport } from '../core/paper_promotion.js';
+import type { ThufirConfig } from '../core/config.js';
+import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { openDatabase } from '../memory/db.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
 
@@ -426,6 +428,108 @@ function buildEmptyEquitySeries(): EquityCurveSection {
       maxDrawdownPct: null,
     },
   };
+}
+
+type LiveWalletSnapshot = {
+  equityCurve: EquityCurveSection;
+  openPositions: {
+    rows: OpenPositionRow[];
+    summary: {
+      totalUnrealizedPnlUsd: number;
+      longCount: number;
+      shortCount: number;
+    };
+  };
+};
+
+async function tryBuildLiveWalletSnapshot(config: ThufirConfig): Promise<LiveWalletSnapshot | null> {
+  try {
+    const client = new HyperliquidClient(config);
+    const state = (await client.getClearinghouseState()) as {
+      assetPositions?: Array<{ position?: Record<string, unknown> }>;
+      marginSummary?: Record<string, unknown>;
+      crossMarginSummary?: Record<string, unknown>;
+    };
+
+    const toNumber = (value: unknown): number | null => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    const nowIso = new Date().toISOString();
+    const rows: OpenPositionRow[] = [];
+    let totalUnrealizedPnlUsd = 0;
+    let longCount = 0;
+    let shortCount = 0;
+
+    for (const entry of state.assetPositions ?? []) {
+      const position = entry?.position ?? {};
+      const signedSize = toNumber((position as { szi?: unknown }).szi);
+      if (signedSize == null || signedSize === 0) continue;
+      const size = Math.abs(signedSize);
+      const side: 'long' | 'short' = signedSize > 0 ? 'long' : 'short';
+      const entryPrice = toNumber((position as { entryPx?: unknown }).entryPx) ?? 0;
+      const unrealizedPnlUsd = toNumber((position as { unrealizedPnl?: unknown }).unrealizedPnl) ?? 0;
+      const impliedCurrent =
+        size > 0
+          ? side === 'long'
+            ? entryPrice + unrealizedPnlUsd / size
+            : entryPrice - unrealizedPnlUsd / size
+          : entryPrice;
+      rows.push({
+        symbol: String((position as { coin?: unknown }).coin ?? '').toUpperCase(),
+        side,
+        entryPrice,
+        currentPrice: Number.isFinite(impliedCurrent) ? impliedCurrent : entryPrice,
+        size,
+        unrealizedPnlUsd,
+        heldSeconds: 0,
+        openedAt: '',
+        updatedAt: nowIso,
+      });
+      totalUnrealizedPnlUsd += unrealizedPnlUsd;
+      if (side === 'long') longCount += 1;
+      if (side === 'short') shortCount += 1;
+    }
+
+    const marginSummary = state.marginSummary ?? state.crossMarginSummary ?? {};
+    const accountValue = toNumber((marginSummary as { accountValue?: unknown }).accountValue);
+    const equityCurve =
+      accountValue != null
+        ? {
+            points: [
+              {
+                timestamp: nowIso,
+                cashBalance: accountValue - totalUnrealizedPnlUsd,
+                unrealizedPnl: totalUnrealizedPnlUsd,
+                equity: accountValue,
+                cumulativeRealizedPnl: 0,
+                cumulativeFees: 0,
+              },
+            ],
+            summary: {
+              startEquity: accountValue,
+              endEquity: accountValue,
+              returnPct: 0,
+              maxDrawdownPct: 0,
+            },
+          }
+        : buildEmptyEquitySeries();
+
+    return {
+      equityCurve,
+      openPositions: {
+        rows,
+        summary: {
+          totalUnrealizedPnlUsd,
+          longCount,
+          shortCount,
+        },
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 type OpenPositionRow = {
   symbol: string;
@@ -1087,7 +1191,36 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
   if (path === '/api/dashboard' || path === '/api/dashboard/summary') {
     const filters = parseDashboardFilters(url);
     const payload = buildDashboardApiPayload({ filters });
-    writeJson(res, 200, payload);
+    if (!isLiveMode(filters)) {
+      writeJson(res, 200, payload);
+      return true;
+    }
+
+    // Live mode: overlay latest wallet snapshot from Hyperliquid when credentials are available.
+    // If unavailable, return the DB-backed payload as-is.
+    const baseConfig = (req as IncomingMessage & { thufirConfig?: ThufirConfig }).thufirConfig;
+    if (!baseConfig) {
+      writeJson(res, 200, payload);
+      return true;
+    }
+    void tryBuildLiveWalletSnapshot(baseConfig)
+      .then((snapshot) => {
+        if (!snapshot) {
+          writeJson(res, 200, payload);
+          return;
+        }
+        writeJson(res, 200, {
+          ...payload,
+          sections: {
+            ...payload.sections,
+            equityCurve: snapshot.equityCurve,
+            openPositions: snapshot.openPositions,
+          },
+        });
+      })
+      .catch(() => {
+        writeJson(res, 200, payload);
+      });
     return true;
   }
 
