@@ -847,10 +847,17 @@ function enforceTradeResponseContract(
   state: AgentState,
   executionOrigin: 'chat' | 'autonomous' | 'manual_override' | 'system' = 'system'
 ): string {
+  if (state.mode !== 'trade') {
+    return response;
+  }
+
+  const responseLooksLikeExecutionClaim =
+    /\bAction:\s*/i.test(response) ||
+    /\b(i|we)\s+(closed|flattened|executed|placed|bought|sold|reduced|cancelled)\b/i.test(response);
   const shouldEnforce =
-    state.mode === 'trade' &&
-    (isTradeExecutionIntent(state.goal) ||
-      state.toolExecutions.some((execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName)));
+    isTradeExecutionIntent(state.goal) ||
+    state.toolExecutions.some((execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName)) ||
+    (executionOrigin === 'chat' && responseLooksLikeExecutionClaim);
   if (!shouldEnforce) {
     return response;
   }
@@ -879,7 +886,16 @@ function enforceTradeResponseContract(
     );
     // Strip permission-seeking phrases if the synthesizer emitted them.
     const sanitizedResponse = response.replace(/\bif you want\b[^.!?]*[.!?]?/gi, '').trim();
+    const looksLikeExecutionClaim =
+      /\bAction:\s*/i.test(sanitizedResponse) ||
+      /\b(i|we)\s+(closed|flattened|executed|placed|bought|sold|reduced|cancelled)\b/i.test(sanitizedResponse);
     if (!hasTerminalTradeExecution) {
+      if (looksLikeExecutionClaim) {
+        if (hasContractShape) {
+          return rewriteActionLine(response);
+        }
+        return `${sanitizedResponse || response}\n\n${deterministicContract}`;
+      }
       return sanitizedResponse || response;
     }
     if (hasContractShape) {
@@ -1703,6 +1719,28 @@ function normalizeAliasToken(value: string): string {
   return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
 }
 
+function canonicalizePerpSideInput(value: unknown): 'buy' | 'sell' | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'buy' || raw === 'sell') return raw;
+
+  if (/\b(close|exit|flatten|reduce)\s+long\b/.test(raw)) return 'sell';
+  if (/\b(close|exit|flatten|reduce)\s+short\b/.test(raw)) return 'buy';
+
+  const tokens = raw.split(/[^a-z]+/).filter(Boolean);
+  const hasLong = tokens.includes('long');
+  const hasShort = tokens.includes('short');
+  const hasBuy = tokens.includes('buy') || tokens.includes('bid');
+  const hasSell = tokens.includes('sell') || tokens.includes('ask');
+
+  const buyish = hasBuy || hasLong;
+  const sellish = hasSell || hasShort;
+  if (buyish && !sellish) return 'buy';
+  if (sellish && !buyish) return 'sell';
+  return null;
+}
+
 function mapMarketRegimeAlias(raw: string): string | null {
   if (VALID_MARKET_REGIMES.has(raw)) return raw;
   if (raw === 'balanced_up' || raw === 'uptrend' || raw === 'trend_up') return 'trending';
@@ -1740,8 +1778,15 @@ export function normalizePerpPlaceOrderInput(input: Record<string, unknown>): Re
     return allowed.includes(mapped) ? mapped : undefined;
   };
 
-  if (typeof normalized.side === 'string') {
-    normalized.side = normalized.side.toLowerCase().trim();
+  const normalizedSide = canonicalizePerpSideInput(normalized.side);
+  if (normalizedSide) normalized.side = normalizedSide;
+  if (typeof normalized.mode === 'string') {
+    const mode = normalized.mode.toLowerCase().trim();
+    if (mode === 'paper' || mode === 'live') {
+      normalized.mode = mode;
+    } else {
+      delete normalized.mode;
+    }
   }
   if (typeof normalized.mode === 'string') {
     const mode = normalized.mode.toLowerCase().trim();

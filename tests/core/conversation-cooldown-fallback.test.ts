@@ -161,6 +161,47 @@ describe('ConversationHandler cooldown fallback', () => {
     });
   });
 
+  it('allows autonomous reduce-only trade confirmations when full auto is disabled', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockImplementationOnce(async (_goal: string, ctx: any) => {
+      const allowReduceOnly = await ctx.onConfirmation(
+        'Execute perp_place_order?',
+        'perp_place_order',
+        { symbol: 'BTC', side: 'sell', size: 0.1, reduce_only: true }
+      );
+      const allowIncrease = await ctx.onConfirmation(
+        'Execute perp_place_order?',
+        'perp_place_order',
+        { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: false }
+      );
+      return {
+        response: JSON.stringify({ allowReduceOnly, allowIncrease }),
+        state: {
+          plan: null,
+          toolExecutions: [],
+          criticResult: null,
+          mode: 'trade',
+        },
+        summary: { fragility: null },
+      };
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'live', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: false },
+    } as any;
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    const reply = await handler.chat('__heartbeat__', 'Manage position risk.');
+    const parsed = JSON.parse(reply) as { allowReduceOnly: boolean; allowIncrease: boolean };
+    expect(parsed.allowReduceOnly).toBe(true);
+    expect(parsed.allowIncrease).toBe(false);
+  });
+
   it('suppresses repeated planning progress updates while preserving stage transitions', async () => {
     runOrchestratorMock.mockClear();
     runOrchestratorMock.mockImplementationOnce(async (_goal: string, ctx: any) => {

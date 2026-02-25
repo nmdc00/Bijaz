@@ -1009,6 +1009,89 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(result.response).not.toContain('Action:');
   });
 
+  it('overrides chat execution claims when no terminal trade tool ran', async () => {
+    const calls: string[] = [];
+    const llm = {
+      complete: async (messages: Array<{ role: string; content: string }>) => {
+        const system = messages[0]?.content ?? '';
+        if (system.includes('You are a planning agent')) {
+          return {
+            content: JSON.stringify({
+              steps: [
+                {
+                  id: '1',
+                  description: 'Check positions',
+                  requiresTool: true,
+                  toolName: 'get_positions',
+                  toolInput: {},
+                },
+              ],
+              confidence: 0.7,
+              blockers: [],
+              reasoning: 'verify before action',
+              warnings: [],
+            }),
+          };
+        }
+        if (system.includes('You are a reflection agent')) {
+          return {
+            content: JSON.stringify({
+              hypothesisUpdates: [],
+              assumptionUpdates: [],
+              confidenceChange: 0,
+              newInformation: [],
+              nextStep: 'continue',
+              suggestRevision: false,
+              revisionReason: null,
+            }),
+          };
+        }
+        if (system.includes('You are synthesizing a response')) {
+          return {
+            content:
+              'Action: I closed the entire BTC long perp.\nBook State: flat.\nRisk: low.\nNext Action: hold.',
+          };
+        }
+        return { content: '{}' };
+      },
+    };
+
+    const toolRegistry = {
+      listNames: () => ['get_positions'],
+      getLlmSchemas: () => [],
+      get: () => undefined,
+      execute: async (name: string, input: unknown) => {
+        calls.push(name);
+        return mkExecution(name, input as Record<string, unknown>, {
+          success: true,
+          data: { positions: [{ symbol: 'BTC', side: 'long', size: 0.1 }] },
+        });
+      },
+    };
+
+    const result = await runOrchestrator(
+      'Close it',
+      {
+        llm: llm as any,
+        toolRegistry: toolRegistry as any,
+        identity: {
+          name: 'Thufir',
+          role: 'Trader',
+          traits: ['tool-first'],
+          marker: 'THUFIR_HAWAT',
+          rawContent: {},
+          missingFiles: [],
+        } as any,
+        toolContext: {} as any,
+      },
+      { forceMode: 'trade', executionOrigin: 'chat', skipCritic: true, maxIterations: 4 }
+    );
+
+    expect(calls).toEqual(['get_positions']);
+    expect(result.response).toContain('Action: I did not place a new perp order in this cycle.');
+    expect(result.response).not.toContain('Action: I closed the entire BTC long perp.');
+  });
+
   it('prefetches trade_review and journal tools for retrospective/loss trade diagnostics', async () => {
     const calls: string[] = [];
     const llm = {
@@ -1519,6 +1602,8 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(
       ((placeExec?.result as { success: true; data: { reason?: string } }).data.reason ?? '').toLowerCase()
     ).toContain('chat-origin requests are analysis-only');
+    expect(result.response).toContain('Action: I did not place a new perp order in this cycle.');
+    expect(result.response).not.toContain('Action: I executed a buy.');
   });
 
   it('allows mutating trade tools for explicit manual_override origin', async () => {

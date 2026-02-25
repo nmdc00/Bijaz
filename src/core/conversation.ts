@@ -404,8 +404,20 @@ export class ConversationHandler {
               agentToolRegistry: this.orchestratorRegistry,
             },
             memorySystem,
-            onConfirmation: async (_prompt, toolName) => {
+            onConfirmation: async (_prompt, toolName, input) => {
               if (tradeToolNames.has(toolName)) {
+                if (
+                  executionOrigin === 'autonomous' &&
+                  toolName === 'perp_place_order' &&
+                  input &&
+                  typeof input === 'object' &&
+                  (input as Record<string, unknown>).reduce_only === true
+                ) {
+                  return true;
+                }
+                if (executionOrigin === 'autonomous' && toolName === 'perp_cancel_order') {
+                  return true;
+                }
                 return allowTradeMutations;
               }
               if (fundingToolNames.has(toolName)) {

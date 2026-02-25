@@ -17,8 +17,13 @@ import {
   signalHyperliquidFundingOISkew,
   signalHyperliquidOrderflowImbalance,
 } from '../discovery/signals.js';
-import { listPerpTrades } from '../memory/perp_trades.js';
-import { recordPerpTrade } from '../memory/perp_trades.js';
+import {
+  clearActivePerpPositionLifecycle,
+  getActivePerpPositionTradeId,
+  listPerpTrades,
+  recordPerpTrade,
+  setActivePerpPositionLifecycle,
+} from '../memory/perp_trades.js';
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
@@ -168,13 +173,12 @@ function normalizePerpBookMode(value: unknown): PerpBookMode | null {
 }
 
 function resolvePerpBookMode(config: ThufirConfig, toolInput: Record<string, unknown>): PerpBookMode {
-  // Hard gate: paper runtime cannot be overridden by tool input.
+  const explicit = normalizePerpBookMode(toolInput.mode);
+  if (explicit) return explicit;
+
   if (config.execution?.mode === 'paper') {
     return 'paper';
   }
-
-  const explicit = normalizePerpBookMode(toolInput.mode);
-  if (explicit) return explicit;
 
   const defaultMode = config.paper?.defaultMode ?? 'paper';
   const requireExplicitLive = config.paper?.requireExplicitLive ?? true;
@@ -213,81 +217,101 @@ function resolvePerpExecutor(ctx: ToolExecutorContext, mode: PerpBookMode): Exec
   return new PaperExecutor();
 }
 
-async function buildPaperPerpSnapshot(ctx: ToolExecutorContext): Promise<{
+function buildPaperPerpSnapshot(initialCashUsdc: number): {
+  cashBalanceUsdc: number;
+  totalNotionalUsdc: number;
+  accountValueUsdc: number;
   positions: Array<{
     symbol: string;
     side: 'long' | 'short';
     size: number;
     entry_price: number;
     leverage: number | null;
-    mark_price: number | null;
     position_value: number;
     unrealized_pnl: number | null;
-    liquidation_price: null;
-    margin_used: null;
+    return_on_equity: number | null;
+    liquidation_price: number | null;
+    margin_used: number | null;
+    leverage_type: string | null;
+    max_leverage: number | null;
   }>;
-  summary: {
-    account_value: number;
-    withdrawable: number;
-    total_unrealized_pnl: number;
-    total_notional: number;
-    source: 'paper';
+} {
+  const book = getPaperPerpBookSummary(initialCashUsdc);
+  const positions = listPaperPerpPositions(initialCashUsdc).map((position) => ({
+    symbol: position.symbol,
+    side: position.side,
+    size: position.size,
+    entry_price: position.entryPrice,
+    leverage: position.leverage,
+    position_value: position.entryPrice * position.size,
+    unrealized_pnl: null,
+    return_on_equity: null,
+    liquidation_price: null,
+    margin_used: null,
+    leverage_type: null,
+    max_leverage: null,
+  }));
+  const totalNotionalUsdc = positions.reduce((sum, position) => sum + Number(position.position_value ?? 0), 0);
+  return {
+    cashBalanceUsdc: book.cashBalanceUsdc,
+    totalNotionalUsdc,
+    accountValueUsdc: book.cashBalanceUsdc + totalNotionalUsdc,
+    positions,
   };
-}> {
-  const initialCash = ctx.config.paper?.initialCashUsdc ?? 200;
-  const book = getPaperPerpBookSummary(initialCash);
-  const basePositions = listPaperPerpPositions(initialCash);
+}
 
-  const positions = await Promise.all(
-    basePositions.map(async (position) => {
-      let markPrice: number | null = null;
-      try {
-        const market = await ctx.marketClient.getMarket(position.symbol);
-        const parsed = Number(market?.markPrice ?? NaN);
-        markPrice = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-      } catch {
-        markPrice = null;
-      }
-
-      const referencePrice = markPrice ?? position.entryPrice;
-      const unrealizedPnl =
-        markPrice == null
-          ? null
-          : position.side === 'long'
-            ? (markPrice - position.entryPrice) * position.size
-            : (position.entryPrice - markPrice) * position.size;
-
-      return {
-        symbol: position.symbol,
-        side: position.side,
-        size: position.size,
-        entry_price: position.entryPrice,
-        leverage: position.leverage,
-        mark_price: markPrice,
-        position_value: referencePrice * position.size,
-        unrealized_pnl: unrealizedPnl,
-        liquidation_price: null,
-        margin_used: null,
-      };
-    })
+function getPaperPositionSnapshot(
+  symbol: string,
+  initialCashUsdc: number
+): { symbol: string; side: 'long' | 'short'; size: number } | null {
+  const normalized = symbol.trim().toUpperCase();
+  if (!normalized) return null;
+  const position = listPaperPerpPositions(initialCashUsdc).find(
+    (entry) => entry.symbol.trim().toUpperCase() === normalized
   );
+  if (!position) return null;
+  return {
+    symbol: position.symbol,
+    side: position.side,
+    size: position.size,
+  };
+}
 
-  const totalUnrealizedPnl = positions.reduce(
-    (acc, position) => acc + (typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0),
-    0
-  );
-  const totalNotional = positions.reduce((acc, position) => acc + position.position_value, 0);
-  const accountValue = book.cashBalanceUsdc + totalUnrealizedPnl;
+function evaluatePaperReduceOnlyPostcondition(params: {
+  symbol: string;
+  before: { symbol: string; side: 'long' | 'short'; size: number } | null;
+  after: { symbol: string; side: 'long' | 'short'; size: number } | null;
+}) {
+  const beforeSize = params.before?.size ?? 0;
+  const afterSize = params.after?.size ?? 0;
+  const sideFlipped =
+    params.before != null &&
+    params.after != null &&
+    params.before.side !== params.after.side &&
+    afterSize > 0;
+  const reduced = afterSize < beforeSize;
+  const closeComplete = beforeSize > 0 && afterSize === 0;
+  const verified = reduced && !sideFlipped;
+  const reason = verified
+    ? closeComplete
+      ? 'position_flat'
+      : 'position_reduced'
+    : sideFlipped
+      ? 'side_flip_detected'
+      : beforeSize <= 0
+        ? 'no_position_before'
+        : 'size_not_reduced';
 
   return {
-    positions,
-    summary: {
-      account_value: accountValue,
-      withdrawable: book.cashBalanceUsdc,
-      total_unrealized_pnl: totalUnrealizedPnl,
-      total_notional: totalNotional,
-      source: 'paper',
-    },
+    verified,
+    reason,
+    close_complete: closeComplete,
+    reduced,
+    before_size: beforeSize,
+    after_size: afterSize,
+    before_side: params.before?.side ?? null,
+    after_side: params.after?.side ?? null,
+    symbol: params.symbol,
   };
 }
 
@@ -327,6 +351,24 @@ type ReduceOnlyPositionSnapshot = {
   size: number;
 };
 
+async function getPerpPositionSnapshotForLifecycle(params: {
+  config: ThufirConfig;
+  symbol: string;
+  mode: 'live' | 'paper';
+  isNativePaperExecutor: boolean;
+  paperInitialCashUsdc: number;
+}): Promise<ReduceOnlyPositionSnapshot | null> {
+  const { config, symbol, mode, isNativePaperExecutor, paperInitialCashUsdc } = params;
+  if (mode === 'paper' && isNativePaperExecutor) {
+    return getPaperPositionSnapshot(symbol, paperInitialCashUsdc);
+  }
+  try {
+    return await getReduceOnlyPositionSnapshot(config, symbol);
+  } catch {
+    return null;
+  }
+}
+
 async function getReduceOnlyPositionSnapshot(
   config: ThufirConfig,
   symbol: string
@@ -353,6 +395,63 @@ async function getReduceOnlyPositionSnapshot(
       size: Math.abs(rawSize),
     };
   }
+  return null;
+}
+
+async function resolvePerpLifecycleTradeId(params: {
+  symbol: string;
+  hypothesisId: string | null;
+  leverage: number | null;
+  orderType: 'market' | 'limit';
+  markPrice: number | null;
+  before: ReduceOnlyPositionSnapshot | null;
+  after: ReduceOnlyPositionSnapshot | null;
+}): Promise<number | null> {
+  const symbol = params.symbol.trim().toUpperCase();
+  if (!symbol) return null;
+
+  const openSide = (side: 'long' | 'short'): 'buy' | 'sell' => (side === 'long' ? 'buy' : 'sell');
+  const ensureActiveTradeId = (side: 'long' | 'short'): number => {
+    const existing = getActivePerpPositionTradeId(symbol);
+    if (existing && existing > 0) {
+      return existing;
+    }
+    const tradeId = recordPerpTrade({
+      hypothesisId: params.hypothesisId,
+      symbol,
+      side: openSide(side),
+      size: params.after?.size ?? params.before?.size ?? 0,
+      price: params.markPrice,
+      leverage: params.leverage,
+      orderType: params.orderType,
+      status: 'position_open',
+    });
+    setActivePerpPositionLifecycle({ symbol, tradeId, side });
+    return tradeId;
+  };
+
+  const before = params.before;
+  const after = params.after;
+
+  if (before && after && before.side !== after.side) {
+    clearActivePerpPositionLifecycle(symbol);
+    return ensureActiveTradeId(after.side);
+  }
+
+  if (after) {
+    return ensureActiveTradeId(after.side);
+  }
+
+  if (before) {
+    const existing = getActivePerpPositionTradeId(symbol);
+    if (existing && existing > 0) {
+      clearActivePerpPositionLifecycle(symbol);
+      return existing;
+    }
+    return null;
+  }
+
+  clearActivePerpPositionLifecycle(symbol);
   return null;
 }
 
@@ -1148,6 +1247,7 @@ export async function executeToolCall(
           }
         }
         const perpExecutor = resolvePerpExecutor(ctx, bookMode);
+        const isNativePaperExecutor = perpExecutor instanceof PaperExecutor;
         const side = String(toolInput.side ?? '').toLowerCase();
         const requestedSize = Number(toolInput.size ?? 0);
         const orderTypeRaw = String(toolInput.order_type ?? 'market').toLowerCase();
@@ -1556,6 +1656,18 @@ export async function executeToolCall(
           reduceOnly,
           confidence: 'medium' as const,
         };
+        const paperInitialCashUsdc = ctx.config.paper?.initialCashUsdc ?? 200;
+        const positionBefore = await getPerpPositionSnapshotForLifecycle({
+          config: ctx.config,
+          symbol,
+          mode: bookMode,
+          isNativePaperExecutor,
+          paperInitialCashUsdc,
+        });
+        const paperReduceOnlyBefore =
+          bookMode === 'paper' && isNativePaperExecutor && reduceOnly
+            ? getPaperPositionSnapshot(symbol, paperInitialCashUsdc)
+            : null;
         const executionStartMs = Date.now();
         const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
         const execution = await executePerpWithRetry({
@@ -1630,7 +1742,39 @@ export async function executeToolCall(
           }
           return { success: false, error: `${result.message}${retrySummary}` };
         }
+        const paperReduceOnlyPostcondition =
+          bookMode === 'paper' && isNativePaperExecutor && reduceOnly
+            ? evaluatePaperReduceOnlyPostcondition({
+                symbol,
+                before: paperReduceOnlyBefore,
+                after: getPaperPositionSnapshot(symbol, paperInitialCashUsdc),
+              })
+            : null;
+        if (paperReduceOnlyPostcondition && !paperReduceOnlyPostcondition.verified) {
+          return {
+            success: false,
+            error:
+              `Paper reduce-only postcondition failed for ${symbol}: ${paperReduceOnlyPostcondition.reason} ` +
+              `(before_size=${paperReduceOnlyPostcondition.before_size}, after_size=${paperReduceOnlyPostcondition.after_size}).`,
+          };
+        }
         ctx.limiter.confirm(size);
+        const positionAfter = await getPerpPositionSnapshotForLifecycle({
+          config: ctx.config,
+          symbol,
+          mode: bookMode,
+          isNativePaperExecutor,
+          paperInitialCashUsdc,
+        });
+        const lifecycleTradeId = await resolvePerpLifecycleTradeId({
+          symbol,
+          hypothesisId,
+          leverage: leverage ?? null,
+          orderType,
+          markPrice: market.markPrice ?? null,
+          before: positionBefore,
+          after: positionAfter,
+        });
         const inferredOrderId = parseOrderIdFromResultMessage(result.message);
         const realizedFee = await fetchRealizedPerpFee(ctx, {
           symbol,
@@ -1687,19 +1831,9 @@ export async function executeToolCall(
           }
         }
         try {
-          const tradeId = recordPerpTrade({
-            hypothesisId,
-            symbol,
-            side: side as 'buy' | 'sell',
-            size,
-            price: market.markPrice ?? null,
-            leverage: leverage ?? null,
-            orderType,
-            status: 'executed',
-          });
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
-            tradeId,
+            tradeId: lifecycleTradeId,
             hypothesisId,
             symbol,
             side: side as 'buy' | 'sell',
@@ -1766,6 +1900,7 @@ export async function executeToolCall(
           data: {
             ...result,
             mode: bookMode,
+            reduce_only_postcondition: paperReduceOnlyPostcondition,
             policy: {
               reason_code: policyGate.reasonCode ?? null,
               reason: policyGate.reason ?? null,
@@ -1828,13 +1963,17 @@ export async function executeToolCall(
       case 'perp_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const snapshot = await buildPaperPerpSnapshot(ctx);
+          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
           return {
             success: true,
             data: {
               mode,
               positions: snapshot.positions,
-              summary: snapshot.summary,
+              summary: {
+                account_value: snapshot.accountValueUsdc,
+                withdrawable: snapshot.cashBalanceUsdc,
+                source: 'paper',
+              },
             },
           };
         }
@@ -2317,19 +2456,23 @@ export async function executeToolCall(
       }
 
       case 'get_portfolio': {
-        return getPortfolio(ctx);
+        return getPortfolio(ctx, toolInput);
       }
 
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const snapshot = await buildPaperPerpSnapshot(ctx);
+          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
           return {
             success: true,
             data: {
               mode,
               positions: snapshot.positions,
-              summary: snapshot.summary,
+              summary: {
+                account_value: snapshot.accountValueUsdc,
+                withdrawable: snapshot.cashBalanceUsdc,
+                source: 'paper',
+              },
             },
           };
         }
@@ -2534,62 +2677,26 @@ function getWalletInfo(ctx: ToolExecutorContext): ToolResult {
   }
 }
 
-async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
+async function getPortfolio(
+  ctx: ToolExecutorContext,
+  toolInput: Record<string, unknown>
+): Promise<ToolResult> {
   try {
-    const balances = await getBalances(ctx);
-    const isPaperMode = ctx.config.execution?.mode !== 'live';
+    const mode = resolvePerpBookMode(ctx.config, toolInput);
+    const balances = await getBalances(ctx, mode);
     const limiterState = ctx.limiter?.getState?.();
     const dailyLimit = ctx.config.wallet?.limits?.daily ?? 100;
     const remainingDaily =
       limiterState != null
         ? Math.max(0, dailyLimit - limiterState.todaySpent - limiterState.reserved)
         : null;
-    if (isPaperMode) {
-      const paperPerp = await buildPaperPerpSnapshot(ctx);
-      const availableBalance = paperPerp.summary.account_value;
-      return {
-        success: true,
-        data: {
-          balances,
-          onchain_balances: balances,
-          onchain_balances_note:
-            'In paper mode, balances reflect the paper ledger cash balance (not live exchange collateral).',
-          positions: [],
-          summary: {
-            available_balance: availableBalance,
-            available_balance_note:
-              'Paper mode active: available_balance is paper account equity (cash plus unrealized PnL from open paper perp positions).',
-            onchain_usdc: balances.usdc ?? 0,
-            paper_cash_balance_usdc: paperPerp.summary.withdrawable,
-            paper_total_unrealized_pnl: paperPerp.summary.total_unrealized_pnl,
-            paper_total_notional: paperPerp.summary.total_notional,
-            remaining_daily_limit: remainingDaily,
-            positions_source: 'paper',
-            perp_enabled: true,
-            execution_mode: 'paper',
-          },
-          hyperliquid_balances: null,
-          perp_positions: paperPerp.positions,
-          perp_summary: paperPerp.summary,
-          perp_error: null,
-          spot_balances: [],
-          spot_escrows: [],
-          spot_summary: null,
-          spot_error: null,
-          hyperliquid_fees: null,
-          hyperliquid_fees_error: null,
-          hyperliquid_portfolio: null,
-          hyperliquid_portfolio_error: null,
-          hyperliquid_dex_abstraction_error: null,
-        },
-      };
-    }
-    const hasHyperliquid =
+    const hasHyperliquidConfigured =
       Boolean(ctx.config.hyperliquid?.enabled) ||
       Boolean(ctx.config.hyperliquid?.accountAddress) ||
       Boolean(ctx.config.hyperliquid?.privateKey) ||
       Boolean(process.env.HYPERLIQUID_ACCOUNT_ADDRESS) ||
       Boolean(process.env.HYPERLIQUID_PRIVATE_KEY);
+    const hasHyperliquid = mode === 'live' && hasHyperliquidConfigured;
     let perpPositions: {
       positions: Array<Record<string, unknown>>;
       summary: Record<string, unknown>;
@@ -2607,7 +2714,23 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
     let hyperliquidPortfolioError: string | null = null;
     let dexAbstraction: boolean | null = null;
     let dexAbstractionError: string | null = null;
-    if (hasHyperliquid) {
+    if (mode === 'paper') {
+      const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+      perpPositions = {
+        positions: snapshot.positions,
+        summary: {
+          account_value: snapshot.accountValueUsdc,
+          total_notional: snapshot.totalNotionalUsdc,
+          total_margin_used: null,
+          cross_account_value: snapshot.accountValueUsdc,
+          cross_total_notional: null,
+          cross_total_margin_used: null,
+          cross_maintenance_margin_used: null,
+          withdrawable: snapshot.cashBalanceUsdc,
+          source: 'paper',
+        },
+      };
+    } else if (hasHyperliquid) {
       try {
         const client = new HyperliquidClient(ctx.config);
         dexAbstraction = await client.getUserDexAbstraction();
@@ -2673,7 +2796,9 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
     if (!hasHyperliquid) {
       availableBalance = balances.usdc ?? 0;
       availableBalanceNote =
-        'available_balance reflects on-chain wallet/memory cash balance (not exchange collateral).';
+        mode === 'paper'
+          ? 'available_balance reflects paper cash balance in the paper perp book.'
+          : 'available_balance reflects on-chain wallet/memory cash balance (not exchange collateral).';
     } else if (dexAbstraction === true) {
       availableBalance = spotUsdcFree ?? 0;
       availableBalanceNote =
@@ -2719,7 +2844,8 @@ async function getPortfolio(ctx: ToolExecutorContext): Promise<ToolResult> {
           hyperliquid_perp_account_value: perpAccountValue,
           remaining_daily_limit: remainingDaily,
           positions_source: 'none',
-          perp_enabled: hasHyperliquid,
+          perp_enabled: mode === 'paper' ? true : hasHyperliquid,
+          perp_mode: mode,
         },
         hyperliquid_balances: hasHyperliquid
           ? {
@@ -3393,12 +3519,13 @@ async function buildTradeReview(
   };
 }
 
-async function getBalances(ctx: ToolExecutorContext): Promise<{
+async function getBalances(ctx: ToolExecutorContext, modeOverride?: PerpBookMode): Promise<{
   usdc?: number;
   matic?: number;
   source: string;
 }> {
-  if (ctx.config.execution?.mode !== 'live') {
+  const mode = modeOverride ?? (ctx.config.execution?.mode === 'live' ? 'live' : 'paper');
+  if (mode !== 'live') {
     const paperBook = getPaperPerpBookSummary(ctx.config.paper?.initialCashUsdc ?? 200);
     return { usdc: paperBook.cashBalanceUsdc, matic: 0, source: 'paper' };
   }
