@@ -17,4 +17,14 @@ describe('mode detection', () => {
     const result = detectMode('Buy BTC now');
     expect(result.mode).toBe('trade');
   });
+
+  it('routes terse imperative close commands to trade mode', () => {
+    const result = detectMode('Close it');
+    expect(result.mode).toBe('trade');
+  });
+
+  it('keeps status questions out of trade mode', () => {
+    const result = detectMode('Is it closed?');
+    expect(result.mode).toBe('chat');
+  });
 });
