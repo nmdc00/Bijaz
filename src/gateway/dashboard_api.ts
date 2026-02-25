@@ -48,6 +48,16 @@ type EquityPoint = {
   cumulativeFees: number;
 };
 
+type EquityCurveSection = {
+  points: EquityPoint[];
+  summary: {
+    startEquity: number | null;
+    endEquity: number | null;
+    returnPct: number | null;
+    maxDrawdownPct: number | null;
+  };
+};
+
 function normalizeIso(input: string | null): string | null {
   if (!input) return null;
   const value = input.trim();
@@ -163,6 +173,14 @@ function resolveTimeRange(filters: DashboardFilters, now = new Date()): TimeRang
     fromMs: Number.isFinite(fromMs) ? fromMs : null,
     toMs: Number.isFinite(toMs) ? toMs : null,
   };
+}
+
+function isLiveMode(filters: DashboardFilters): boolean {
+  return filters.mode === 'live';
+}
+
+function isPaperMode(filters: DashboardFilters): boolean {
+  return filters.mode === 'paper';
 }
 
 function tableExists(db: Database.Database, tableName: string): boolean {
@@ -317,15 +335,7 @@ function computeUnrealizedPnl(
 function buildPaperEquitySeries(
   db: Database.Database,
   filters: DashboardFilters
-): {
-  points: EquityPoint[];
-  summary: {
-    startEquity: number | null;
-    endEquity: number | null;
-    returnPct: number | null;
-    maxDrawdownPct: number | null;
-  };
-} {
+): EquityCurveSection {
   const startingCash = safeCount(
     db,
     'SELECT COALESCE(starting_cash_usdc, 200) AS c FROM paper_perp_book WHERE id = 1'
@@ -402,6 +412,18 @@ function buildPaperEquitySeries(
       endEquity,
       returnPct,
       maxDrawdownPct,
+    },
+  };
+}
+
+function buildEmptyEquitySeries(): EquityCurveSection {
+  return {
+    points: [],
+    summary: {
+      startEquity: null,
+      endEquity: null,
+      returnPct: null,
+      maxDrawdownPct: null,
     },
   };
 }
@@ -520,7 +542,44 @@ function resolveQualityBand(row: {
   return 'mixed';
 }
 
-function listTradeLogRows(db: Database.Database, limit = 30): TradeLogRow[] {
+function resolveJournalEntryMode(payload: Record<string, unknown>): DashboardMode | null {
+  const candidates = [
+    payload.mode,
+    payload.bookMode,
+    payload.perpMode,
+    payload.executionMode,
+    payload.execution_mode,
+    payload.perp_mode,
+    payload.book_mode,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '')
+      .trim()
+      .toLowerCase();
+    if (value === 'paper' || value === 'live' || value === 'combined') {
+      return value as DashboardMode;
+    }
+  }
+  return null;
+}
+
+function journalModeMatches(payload: Record<string, unknown>, filters: DashboardFilters): boolean {
+  if (filters.mode === 'combined') {
+    return true;
+  }
+  const entryMode = resolveJournalEntryMode(payload);
+  if (entryMode == null) {
+    // Legacy journal entries are treated as paper unless explicitly tagged.
+    return filters.mode === 'paper';
+  }
+  return entryMode === filters.mode;
+}
+
+function listTradeLogRows(
+  db: Database.Database,
+  filters: DashboardFilters,
+  limit = 30
+): TradeLogRow[] {
   const rows = db
     .prepare(
       `
@@ -540,6 +599,9 @@ function listTradeLogRows(db: Database.Database, limit = 30): TradeLogRow[] {
     try {
       payload = JSON.parse(row.payload) as Record<string, unknown>;
     } catch {
+      continue;
+    }
+    if (!journalModeMatches(payload, filters)) {
       continue;
     }
 
@@ -614,7 +676,10 @@ const DEFAULT_PROMOTION_GATES = {
   minExpectancyR: 0.1,
 };
 
-function listPromotionGateRows(db: Database.Database): PromotionGateRow[] {
+function listPromotionGateRows(
+  db: Database.Database,
+  filters: DashboardFilters
+): PromotionGateRow[] {
   if (!tableExists(db, 'decision_artifacts')) {
     return [];
   }
@@ -635,7 +700,11 @@ function listPromotionGateRows(db: Database.Database): PromotionGateRow[] {
     .map((row) => {
       if (!row.payload) return null;
       try {
-        const parsed = JSON.parse(row.payload) as Partial<PerpTradeJournalEntry>;
+        const parsedPayload = JSON.parse(row.payload) as Record<string, unknown>;
+        if (!journalModeMatches(parsedPayload, filters)) {
+          return null;
+        }
+        const parsed = parsedPayload as Partial<PerpTradeJournalEntry>;
         if (parsed.kind !== 'perp_trade_journal') {
           return null;
         }
@@ -716,7 +785,42 @@ function listPromotionGateRows(db: Database.Database): PromotionGateRow[] {
   return rows.sort((a, b) => {
     if (a.promoted !== b.promoted) return a.promoted ? 1 : -1;
     return b.sampleCount - a.sampleCount;
-  });
+    });
+}
+
+function countTradeJournalRows(
+  db: Database.Database,
+  filters: DashboardFilters
+): number {
+  if (filters.mode === 'combined') {
+    return safeCount(
+      db,
+      "SELECT COUNT(*) AS c FROM decision_artifacts WHERE kind = 'perp_trade_journal'"
+    );
+  }
+
+  const rows = db
+    .prepare(
+      `
+        SELECT payload
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+      `
+    )
+    .all() as Array<{ payload?: string }>;
+  let count = 0;
+  for (const row of rows) {
+    if (!row.payload) continue;
+    try {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      if (journalModeMatches(payload, filters)) {
+        count += 1;
+      }
+    } catch {
+      // ignore unparseable payloads
+    }
+  }
+  return count;
 }
 
 function buildPolicyStateSection(db: Database.Database): {
@@ -891,24 +995,23 @@ export function buildDashboardApiPayload(params?: {
   };
 
   const perpTrades = safeCount(db, 'SELECT COUNT(*) AS c FROM perp_trades');
-  const journals = safeCount(
-    db,
-    "SELECT COUNT(*) AS c FROM decision_artifacts WHERE kind = 'perp_trade_journal'"
-  );
+  const journals = countTradeJournalRows(db, filters);
   const alerts = safeCount(db, 'SELECT COUNT(*) AS c FROM alerts');
-  const openPaperPositions = tableExists(db, 'paper_perp_positions')
+  const openPaperPositions = !isLiveMode(filters) && tableExists(db, 'paper_perp_positions')
     ? safeCount(db, 'SELECT COUNT(*) AS c FROM paper_perp_positions')
     : 0;
-  const equityCurve = buildPaperEquitySeries(db, filters);
-  const openPositionRows = listPaperOpenPositionRows(db);
+  const equityCurve = isPaperMode(filters) || filters.mode === 'combined'
+    ? buildPaperEquitySeries(db, filters)
+    : buildEmptyEquitySeries();
+  const openPositionRows = isLiveMode(filters) ? [] : listPaperOpenPositionRows(db);
   const longCount = openPositionRows.filter((row) => row.side === 'long').length;
   const shortCount = openPositionRows.filter((row) => row.side === 'short').length;
   const totalUnrealizedPnlUsd = openPositionRows.reduce(
     (sum, row) => sum + row.unrealizedPnlUsd,
     0
   );
-  const tradeLogRows = listTradeLogRows(db, 30);
-  const promotionGateRows = listPromotionGateRows(db);
+  const tradeLogRows = listTradeLogRows(db, filters, 30);
+  const promotionGateRows = listPromotionGateRows(db, filters);
   const policyState = buildPolicyStateSection(db);
 
   return {

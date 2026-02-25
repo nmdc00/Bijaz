@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../../src/memory/db.js';
+import { storeDecisionArtifact } from '../../src/memory/decision_artifacts.js';
 import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
 import { recordPerpTradeJournal } from '../../src/memory/perp_trade_journal.js';
 import {
@@ -249,6 +250,104 @@ describe('dashboard api payload', () => {
     expect(row?.sampleCount).toBe(2);
     expect(row?.gates.minTrades.pass).toBe(false);
     expect(row?.gates.minTrades.missing).toBe(23);
+  });
+
+  it('separates paper and live slices across sections when mode filter changes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-mode-split-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    placePaperPerpOrder(
+      { symbol: 'BTC', side: 'buy', size: 1, orderType: 'market', markPrice: 100 },
+      { initialCashUsdc: 200 }
+    );
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'BTC',
+      side: 'buy',
+      signalClass: 'breakout_15m',
+      outcome: 'executed',
+      directionScore: 0.8,
+      timingScore: 0.8,
+      sizingScore: 0.8,
+      exitScore: 0.8,
+      capturedR: 1,
+      thesisCorrect: true,
+    });
+
+    storeDecisionArtifact({
+      source: 'perps',
+      kind: 'perp_trade_journal',
+      marketId: 'ETH',
+      outcome: 'executed',
+      payload: {
+        kind: 'perp_trade_journal',
+        symbol: 'ETH',
+        side: 'sell',
+        signalClass: 'momentum_5m',
+        outcome: 'executed',
+        directionScore: 0.7,
+        timingScore: 0.75,
+        sizingScore: 0.8,
+        exitScore: 0.85,
+        capturedR: 1.1,
+        thesisCorrect: true,
+        mode: 'live',
+      },
+    });
+
+    const paperPayload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    const livePayload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'live',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(paperPayload.meta.recordCounts.journals).toBe(1);
+    expect(livePayload.meta.recordCounts.journals).toBe(1);
+
+    expect(paperPayload.sections.equityCurve.points.length).toBeGreaterThan(0);
+    expect(livePayload.sections.equityCurve.points).toEqual([]);
+    expect(livePayload.sections.equityCurve.summary.startEquity).toBeNull();
+    expect(livePayload.sections.openPositions.rows).toEqual([]);
+    expect(livePayload.meta.recordCounts.openPaperPositions).toBe(0);
+
+    expect(paperPayload.sections.openPositions.rows.length).toBe(1);
+    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(true);
+    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(false);
+    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(true);
+    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(false);
+
+    expect(
+      paperPayload.sections.promotionGates.rows.some((row) => row.setupKey === 'BTC:breakout_15m')
+    ).toBe(true);
+    expect(
+      paperPayload.sections.promotionGates.rows.some((row) => row.setupKey === 'ETH:momentum_5m')
+    ).toBe(false);
+    expect(
+      livePayload.sections.promotionGates.rows.some((row) => row.setupKey === 'ETH:momentum_5m')
+    ).toBe(true);
+    expect(
+      livePayload.sections.promotionGates.rows.some((row) => row.setupKey === 'BTC:breakout_15m')
+    ).toBe(false);
   });
 
   it('returns policy state from autonomy policy table', () => {
