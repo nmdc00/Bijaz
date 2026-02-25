@@ -755,6 +755,52 @@ function listTradeLogRows(
   return out;
 }
 
+function listTradeLogRowsFromPerpTrades(
+  db: Database.Database,
+  limit = 30
+): TradeLogRow[] {
+  if (!tableExists(db, 'perp_trades')) {
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `
+        SELECT id, symbol, side, status, created_at as createdAt
+        FROM perp_trades
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `
+    )
+    .all(Math.max(1, Math.min(limit, 100))) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => {
+    const status = String(row.status ?? '')
+      .trim()
+      .toLowerCase();
+    const sideRaw = String(row.side ?? '')
+      .trim()
+      .toLowerCase();
+    const side: 'buy' | 'sell' | null = sideRaw === 'buy' || sideRaw === 'sell' ? sideRaw : null;
+    const outcome: TradeLogRow['outcome'] =
+      status === 'failed' || status === 'blocked' ? (status as 'failed' | 'blocked') : 'executed';
+    return {
+      tradeId: Number.isFinite(Number(row.id)) ? Number(row.id) : null,
+      symbol: String(row.symbol ?? '').toUpperCase(),
+      side,
+      signalClass: null,
+      outcome,
+      directionScore: null,
+      timingScore: null,
+      sizingScore: null,
+      exitScore: null,
+      rCaptured: null,
+      thesisCorrect: null,
+      qualityBand: 'unknown',
+      closedAt: String(row.createdAt ?? new Date().toISOString()),
+    };
+  });
+}
+
 type PromotionGateRow = {
   setupKey: string;
   sampleCount: number;
@@ -1114,7 +1160,10 @@ export function buildDashboardApiPayload(params?: {
     (sum, row) => sum + row.unrealizedPnlUsd,
     0
   );
-  const tradeLogRows = listTradeLogRows(db, filters, 30);
+  let tradeLogRows = listTradeLogRows(db, filters, 30);
+  if (tradeLogRows.length === 0) {
+    tradeLogRows = listTradeLogRowsFromPerpTrades(db, 30);
+  }
   const promotionGateRows = listPromotionGateRows(db, filters);
   const policyState = buildPolicyStateSection(db);
 
