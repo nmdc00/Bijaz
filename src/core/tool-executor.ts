@@ -217,15 +217,22 @@ function resolvePerpExecutor(ctx: ToolExecutorContext, mode: PerpBookMode): Exec
   return new PaperExecutor();
 }
 
-function buildPaperPerpSnapshot(initialCashUsdc: number): {
+async function buildPaperPerpSnapshot(
+  ctx: ToolExecutorContext,
+  initialCashUsdc: number
+): Promise<{
   cashBalanceUsdc: number;
   totalNotionalUsdc: number;
+  totalUnrealizedPnlUsdc: number;
   accountValueUsdc: number;
+  hasUnpricedPositions: boolean;
+  unpricedSymbols: string[];
   positions: Array<{
     symbol: string;
     side: 'long' | 'short';
     size: number;
     entry_price: number;
+    mark_price: number | null;
     leverage: number | null;
     position_value: number;
     unrealized_pnl: number | null;
@@ -235,27 +242,61 @@ function buildPaperPerpSnapshot(initialCashUsdc: number): {
     leverage_type: string | null;
     max_leverage: number | null;
   }>;
-} {
+}> {
   const book = getPaperPerpBookSummary(initialCashUsdc);
-  const positions = listPaperPerpPositions(initialCashUsdc).map((position) => ({
-    symbol: position.symbol,
-    side: position.side,
-    size: position.size,
-    entry_price: position.entryPrice,
-    leverage: position.leverage,
-    position_value: position.entryPrice * position.size,
-    unrealized_pnl: null,
-    return_on_equity: null,
-    liquidation_price: null,
-    margin_used: null,
-    leverage_type: null,
-    max_leverage: null,
-  }));
+  const rawPositions = listPaperPerpPositions(initialCashUsdc);
+  const unpricedSymbols: string[] = [];
+  const positions = await Promise.all(
+    rawPositions.map(async (position) => {
+      let markPrice: number | null = null;
+      try {
+        const market = await ctx.marketClient.getMarket(position.symbol);
+        markPrice =
+          typeof market.markPrice === 'number' && Number.isFinite(market.markPrice) && market.markPrice > 0
+            ? market.markPrice
+            : null;
+      } catch {
+        markPrice = null;
+      }
+
+      if (markPrice == null) {
+        unpricedSymbols.push(position.symbol);
+      }
+
+      const positionValue = (markPrice ?? position.entryPrice) * position.size;
+      const unrealizedPnl =
+        markPrice == null
+          ? null
+          : position.side === 'long'
+            ? (markPrice - position.entryPrice) * position.size
+            : (position.entryPrice - markPrice) * position.size;
+
+      return {
+        symbol: position.symbol,
+        side: position.side,
+        size: position.size,
+        entry_price: position.entryPrice,
+        mark_price: markPrice,
+        leverage: position.leverage,
+        position_value: positionValue,
+        unrealized_pnl: unrealizedPnl,
+        return_on_equity: null,
+        liquidation_price: null,
+        margin_used: null,
+        leverage_type: null,
+        max_leverage: null,
+      };
+    })
+  );
   const totalNotionalUsdc = positions.reduce((sum, position) => sum + Number(position.position_value ?? 0), 0);
+  const totalUnrealizedPnlUsdc = positions.reduce((sum, position) => sum + Number(position.unrealized_pnl ?? 0), 0);
   return {
     cashBalanceUsdc: book.cashBalanceUsdc,
     totalNotionalUsdc,
-    accountValueUsdc: book.cashBalanceUsdc + totalNotionalUsdc,
+    totalUnrealizedPnlUsdc,
+    accountValueUsdc: book.cashBalanceUsdc + totalUnrealizedPnlUsdc,
+    hasUnpricedPositions: unpricedSymbols.length > 0,
+    unpricedSymbols,
     positions,
   };
 }
@@ -1927,7 +1968,7 @@ export async function executeToolCall(
       case 'perp_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+          const snapshot = await buildPaperPerpSnapshot(ctx, ctx.config.paper?.initialCashUsdc ?? 200);
           return {
             success: true,
             data: {
@@ -1935,8 +1976,11 @@ export async function executeToolCall(
               positions: snapshot.positions,
               summary: {
                 account_value: snapshot.accountValueUsdc,
+                total_unrealized_pnl: snapshot.totalUnrealizedPnlUsdc,
                 withdrawable: snapshot.cashBalanceUsdc,
                 source: 'paper',
+                has_unpriced_positions: snapshot.hasUnpricedPositions,
+                unpriced_symbols: snapshot.unpricedSymbols,
               },
             },
           };
@@ -2426,7 +2470,7 @@ export async function executeToolCall(
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+          const snapshot = await buildPaperPerpSnapshot(ctx, ctx.config.paper?.initialCashUsdc ?? 200);
           return {
             success: true,
             data: {
@@ -2434,8 +2478,11 @@ export async function executeToolCall(
               positions: snapshot.positions,
               summary: {
                 account_value: snapshot.accountValueUsdc,
+                total_unrealized_pnl: snapshot.totalUnrealizedPnlUsdc,
                 withdrawable: snapshot.cashBalanceUsdc,
                 source: 'paper',
+                has_unpriced_positions: snapshot.hasUnpricedPositions,
+                unpriced_symbols: snapshot.unpricedSymbols,
               },
             },
           };
@@ -2679,12 +2726,13 @@ async function getPortfolio(
     let dexAbstraction: boolean | null = null;
     let dexAbstractionError: string | null = null;
     if (mode === 'paper') {
-      const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+      const snapshot = await buildPaperPerpSnapshot(ctx, ctx.config.paper?.initialCashUsdc ?? 200);
       perpPositions = {
         positions: snapshot.positions,
         summary: {
           account_value: snapshot.accountValueUsdc,
           total_notional: snapshot.totalNotionalUsdc,
+          total_unrealized_pnl: snapshot.totalUnrealizedPnlUsdc,
           total_margin_used: null,
           cross_account_value: snapshot.accountValueUsdc,
           cross_total_notional: null,
@@ -2692,6 +2740,8 @@ async function getPortfolio(
           cross_maintenance_margin_used: null,
           withdrawable: snapshot.cashBalanceUsdc,
           source: 'paper',
+          has_unpriced_positions: snapshot.hasUnpricedPositions,
+          unpriced_symbols: snapshot.unpricedSymbols,
         },
       };
     } else if (hasHyperliquid) {
