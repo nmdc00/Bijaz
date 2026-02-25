@@ -206,6 +206,50 @@ describe('dashboard api payload', () => {
     expect(bySymbol.get('BTC')?.rCaptured).toBe(1.2);
     expect(bySymbol.get('ETH')?.rCaptured).toBe(-0.9);
   });
+
+  it('returns promotion gate rows keyed by symbol:signalClass', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-promo-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'BTC',
+      signalClass: 'breakout_15m',
+      outcome: 'executed',
+      capturedR: 1.2,
+      thesisCorrect: true,
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'BTC',
+      signalClass: 'breakout_15m',
+      outcome: 'failed',
+      capturedR: -0.5,
+      thesisCorrect: false,
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    const rows = payload.sections.promotionGates.rows as Array<any>;
+    expect(rows.length).toBeGreaterThan(0);
+    const row = rows.find((item) => item.setupKey === 'BTC:breakout_15m');
+    expect(row).toBeDefined();
+    expect(row?.sampleCount).toBe(2);
+    expect(row?.gates.minTrades.pass).toBe(false);
+    expect(row?.gates.minTrades.missing).toBe(23);
+  });
 });
 
 describe('dashboard api route handler', () => {
