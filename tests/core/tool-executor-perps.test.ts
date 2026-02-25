@@ -831,14 +831,19 @@ describe('tool-executor perps', () => {
     expect(positions.success).toBe(true);
     const perpPositions = ((positions as any).data?.positions ?? []) as Array<Record<string, unknown>>;
     expect(perpPositions.length).toBeGreaterThan(0);
+    expect(typeof perpPositions[0]?.mark_price).toBe('number');
+    expect(typeof perpPositions[0]?.unrealized_pnl).toBe('number');
 
     const portfolio = await executeToolCall('get_portfolio', {}, ctx);
     expect(portfolio.success).toBe(true);
     expect((portfolio as any).data?.summary?.perp_mode).toBe('paper');
     expect((portfolio as any).data?.perp_summary?.source).toBe('paper');
     expect(((portfolio as any).data?.perp_positions ?? []).length).toBeGreaterThan(0);
-    expect(Number((portfolio as any).data?.perp_summary?.account_value)).toBeGreaterThan(
-      Number((portfolio as any).data?.perp_summary?.withdrawable)
+    expect(typeof (portfolio as any).data?.perp_summary?.total_unrealized_pnl).toBe('number');
+    expect(Number((portfolio as any).data?.perp_summary?.account_value)).toBeCloseTo(
+      Number((portfolio as any).data?.perp_summary?.withdrawable) +
+        Number((portfolio as any).data?.perp_summary?.total_unrealized_pnl),
+      8
     );
     expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
   });
