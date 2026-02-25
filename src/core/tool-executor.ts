@@ -341,6 +341,65 @@ function parsePlanContext(input: unknown): Record<string, unknown> | null {
   return input as Record<string, unknown>;
 }
 
+function toOptionalNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function inferSignalClassFromSetupKey(setupKey: string | null): string | null {
+  if (!setupKey) return null;
+  const normalized = setupKey.trim();
+  const colonIndex = normalized.indexOf(':');
+  if (colonIndex < 0 || colonIndex >= normalized.length - 1) {
+    return null;
+  }
+  const candidate = normalized.slice(colonIndex + 1).trim();
+  return candidate.length > 0 ? candidate : null;
+}
+
+function inferSignalClassFromHypothesisId(hypothesisId: string | null): string | null {
+  if (!hypothesisId) return null;
+  const token = hypothesisId.toLowerCase();
+  if (token.includes('_revert') || token.includes('mean_reversion')) return 'mean_reversion';
+  if (token.includes('_trend') || token.includes('breakout') || token.includes('momentum')) {
+    return 'momentum_breakout';
+  }
+  if (token.includes('_reflex') || token.includes('liquidation') || token.includes('cascade')) {
+    return 'liquidation_cascade';
+  }
+  if (token.includes('news')) return 'news_event';
+  return null;
+}
+
+function inferSignalClass(params: {
+  explicitSignalClass: string | null;
+  toolInput: Record<string, unknown>;
+  planContext: Record<string, unknown> | null;
+  hypothesisId: string | null;
+  entryTrigger: 'news' | 'technical' | 'hybrid' | null;
+}): string | null {
+  if (params.explicitSignalClass) return params.explicitSignalClass;
+
+  const planContextSignalClass =
+    toOptionalNonEmptyString(params.planContext?.signal_class) ??
+    toOptionalNonEmptyString(params.planContext?.signalClass);
+  if (planContextSignalClass) return planContextSignalClass;
+
+  const setupKeySignalClass =
+    inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.toolInput.setup_key)) ??
+    inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.toolInput.setupKey)) ??
+    inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.planContext?.setup_key)) ??
+    inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.planContext?.setupKey));
+  if (setupKeySignalClass) return setupKeySignalClass;
+
+  const inferredFromHypothesis = inferSignalClassFromHypothesisId(params.hypothesisId);
+  if (inferredFromHypothesis) return inferredFromHypothesis;
+
+  if (params.entryTrigger === 'news') return 'news_event';
+  return null;
+}
+
 function toFiniteNumberOrNull(input: unknown): number | null {
   const value = Number(input);
   return Number.isFinite(value) ? value : null;
@@ -1259,10 +1318,8 @@ export async function executeToolCall(
           typeof toolInput.hypothesis_id === 'string' && toolInput.hypothesis_id.trim().length > 0
             ? toolInput.hypothesis_id.trim()
             : null;
-        const signalClass =
-          typeof toolInput.signal_class === 'string' && toolInput.signal_class.trim().length > 0
-            ? toolInput.signal_class.trim()
-            : null;
+        const explicitSignalClass =
+          toOptionalNonEmptyString(toolInput.signal_class) ?? toOptionalNonEmptyString(toolInput.signalClass);
         const volatilityBucketRaw =
           typeof toolInput.volatility_bucket === 'string' ? toolInput.volatility_bucket.trim() : '';
         const volatilityBucket =
@@ -1338,6 +1395,13 @@ export async function executeToolCall(
         const newsSources = parseNewsSources(toolInput.news_sources);
         const newsSourceCount = newsSources?.length ?? null;
         const planContext = parsePlanContext(toolInput.plan_context);
+        const signalClass = inferSignalClass({
+          explicitSignalClass,
+          toolInput,
+          planContext,
+          hypothesisId,
+          entryTrigger,
+        });
         if (!reduceOnly && !tradeArchetype) {
           tradeArchetype = 'intraday';
         }

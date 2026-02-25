@@ -757,6 +757,79 @@ describe('tool-executor perps', () => {
     });
   });
 
+  it('infers signalClass from hypothesis_id when signal_class is omitted', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const symbol = 'SIGINF1';
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'buy',
+        size: 0.001,
+        hypothesis_id: 'btc_trend_breakout_hypothesis',
+      },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 5 },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient }
+    );
+    expect(listRes.success).toBe(true);
+    const entries = ((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>;
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries[0]?.signalClass).toBe('momentum_breakout');
+  });
+
+  it('infers signalClass from plan_context setup_key when signal_class is omitted', async () => {
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const symbol = 'SIGINF2';
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol,
+        side: 'buy',
+        size: 0.001,
+        plan_context: {
+          plan_id: 'plan-infer',
+          setup_key: `${symbol}:mean_reversion`,
+        },
+      },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
+    );
+    expect(res.success).toBe(true);
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 5 },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient }
+    );
+    expect(listRes.success).toBe(true);
+    const entries = ((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>;
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries[0]?.signalClass).toBe('mean_reversion');
+  });
+
   it('perp_open_orders returns executor orders', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
