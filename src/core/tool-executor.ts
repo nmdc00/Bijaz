@@ -2894,6 +2894,7 @@ async function getPortfolio(
           'On-chain wallet (or memory/paper) balances. Do not confuse with Hyperliquid Spot/Perp USDC collateral.',
         positions: [],
         summary: {
+          execution_mode: mode,
           available_balance: availableBalance,
           available_balance_note: availableBalanceNote,
           onchain_usdc: balances.usdc ?? 0,
@@ -2908,7 +2909,7 @@ async function getPortfolio(
           hyperliquid_perp_account_value: perpAccountValue,
           remaining_daily_limit: remainingDaily,
           positions_source: 'none',
-          perp_enabled: mode === 'paper' ? true : hasHyperliquid,
+          perp_enabled: hasHyperliquid,
           perp_mode: mode,
         },
         hyperliquid_balances: hasHyperliquid
