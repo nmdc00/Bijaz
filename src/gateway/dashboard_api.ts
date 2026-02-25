@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 
 import { buildPaperPromotionReport } from '../core/paper_promotion.js';
 import { openDatabase } from '../memory/db.js';
+import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
 
 export type DashboardMode = 'paper' | 'live' | 'combined';
 export type DashboardTimeframe = 'day' | 'period' | 'all' | 'custom';
@@ -243,6 +244,9 @@ function applyFillToPositionState(
   }
 
   if (Math.sign(existingSigned) === Math.sign(fillSigned)) {
+    if (!existing) {
+      return;
+    }
     const nextSize = Math.abs(nextSigned);
     const weightedEntry =
       (Math.abs(existingSigned) * existing.entryPrice + Math.abs(fillSigned) * price) / nextSize;
@@ -255,6 +259,9 @@ function applyFillToPositionState(
   }
 
   if (Math.abs(fillSigned) < Math.abs(existingSigned)) {
+    if (!existing) {
+      return;
+    }
     map.set(symbol, {
       side: existing.side,
       size: Math.abs(nextSigned),
@@ -612,12 +619,23 @@ function listPromotionGateRows(db: Database.Database): PromotionGateRow[] {
     .map((row) => {
       if (!row.payload) return null;
       try {
-        return JSON.parse(row.payload) as Record<string, unknown>;
+        const parsed = JSON.parse(row.payload) as Partial<PerpTradeJournalEntry>;
+        if (parsed.kind !== 'perp_trade_journal') {
+          return null;
+        }
+        if (typeof parsed.symbol !== 'string' || !parsed.symbol.trim()) {
+          return null;
+        }
+        const outcome = String(parsed.outcome ?? '').toLowerCase();
+        if (outcome !== 'executed' && outcome !== 'failed' && outcome !== 'blocked') {
+          return null;
+        }
+        return parsed as PerpTradeJournalEntry;
       } catch {
         return null;
       }
     })
-    .filter((entry): entry is Record<string, unknown> => entry != null);
+    .filter((entry): entry is PerpTradeJournalEntry => entry != null);
 
   const keys = new Set<string>();
   for (const entry of entries) {
