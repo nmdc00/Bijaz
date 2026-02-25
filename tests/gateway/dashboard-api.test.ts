@@ -208,6 +208,50 @@ describe('dashboard api payload', () => {
     expect(bySymbol.get('ETH')?.rCaptured).toBe(-0.9);
   });
 
+  it('builds non-empty signal/regime/session performance breakdown from journals', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-performance-breakdown-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'BTC',
+      side: 'buy',
+      signalClass: 'momentum_breakout',
+      marketRegime: 'trending',
+      outcome: 'executed',
+      capturedR: 1.25,
+      thesisCorrect: true,
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'ETH',
+      side: 'sell',
+      signalClass: 'mean_reversion',
+      marketRegime: 'choppy',
+      outcome: 'failed',
+      capturedR: -0.75,
+      thesisCorrect: false,
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.performanceBreakdown.bySignalClass.length).toBeGreaterThan(0);
+    expect(payload.sections.performanceBreakdown.byRegime.length).toBeGreaterThan(0);
+    expect(payload.sections.performanceBreakdown.bySession.length).toBeGreaterThan(0);
+  });
+
   it('returns promotion gate rows keyed by symbol:signalClass', () => {
     const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-promo-'));
     dbDir = dir;
