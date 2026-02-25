@@ -811,6 +811,12 @@ export async function executeToolCall(
       }
 
       case 'hyperliquid_verify_live': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: hyperliquid_verify_live.',
+          };
+        }
         const symbol = String(toolInput.symbol ?? 'BTC').trim().toUpperCase();
         const client = new HyperliquidClient(ctx.config);
         const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
@@ -932,6 +938,12 @@ export async function executeToolCall(
       }
 
       case 'hyperliquid_order_roundtrip': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: hyperliquid_order_roundtrip.',
+          };
+        }
         const symbol = String(toolInput.symbol ?? 'BTC').trim().toUpperCase();
         const size = Number(toolInput.size ?? 0);
         const side = String(toolInput.side ?? 'buy').trim().toLowerCase() === 'sell' ? 'sell' : 'buy';
@@ -1022,6 +1034,12 @@ export async function executeToolCall(
       }
 
       case 'hyperliquid_usd_class_transfer': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: hyperliquid_usd_class_transfer.',
+          };
+        }
         const amountUsdc = Number(toolInput.amount_usdc ?? 0);
         const to = String(toolInput.to ?? '').trim().toLowerCase();
         if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
@@ -1055,6 +1073,12 @@ export async function executeToolCall(
       }
 
       case 'evm_erc20_balance': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: evm_erc20_balance.',
+          };
+        }
         const chain = String(toolInput.chain ?? '').trim().toLowerCase() as EvmChain;
         if (chain !== 'polygon' && chain !== 'arbitrum') {
           return { success: false, error: 'Invalid chain (use polygon|arbitrum)' };
@@ -1082,6 +1106,12 @@ export async function executeToolCall(
       }
 
       case 'evm_usdc_balances': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: evm_usdc_balances.',
+          };
+        }
         let address = String(toolInput.address ?? '').trim();
         if (!address) {
           // Read address from keystore without decrypting the private key.
@@ -1127,6 +1157,12 @@ export async function executeToolCall(
       }
 
       case 'cctp_bridge_usdc': {
+        if (ctx.config.execution?.mode === 'paper') {
+          return {
+            success: false,
+            error: 'Tool unavailable in paper mode: cctp_bridge_usdc.',
+          };
+        }
         const fromChain = String(toolInput.from_chain ?? 'polygon').trim().toLowerCase() as EvmChain;
         const toChain = String(toolInput.to_chain ?? 'arbitrum').trim().toLowerCase() as EvmChain;
         const amountUsdc = Number(toolInput.amount_usdc ?? 0);
