@@ -161,6 +161,70 @@ describe('ConversationHandler cooldown fallback', () => {
     });
   });
 
+  it('treats imperative close commands as manual trade overrides', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockResolvedValue({
+      response: 'ok',
+      state: {
+        plan: null,
+        toolExecutions: [],
+        criticResult: null,
+        mode: 'trade',
+      },
+      summary: { fragility: null },
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: false },
+    } as any;
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    await handler.chat('user', 'Close it');
+
+    expect(runOrchestratorMock).toHaveBeenCalledTimes(1);
+    expect(runOrchestratorMock.mock.calls[0]?.[2]).toMatchObject({
+      executionOrigin: 'manual_override',
+      allowTradeMutations: true,
+    });
+  });
+
+  it('keeps status questions in chat analysis mode', async () => {
+    runOrchestratorMock.mockClear();
+    runOrchestratorMock.mockResolvedValue({
+      response: 'ok',
+      state: {
+        plan: null,
+        toolExecutions: [],
+        criticResult: null,
+        mode: 'trade',
+      },
+      summary: { fragility: null },
+    });
+
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
+    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
+    const config = {
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      agent: { useOrchestrator: true },
+      autonomy: { fullAuto: false },
+    } as any;
+
+    const handler = new ConversationHandler(llm, marketClient, config);
+    await handler.chat('user', 'Is it closed?');
+
+    expect(runOrchestratorMock).toHaveBeenCalledTimes(1);
+    expect(runOrchestratorMock.mock.calls[0]?.[2]).toMatchObject({
+      executionOrigin: 'chat',
+      allowTradeMutations: false,
+    });
+  });
+
   it('suppresses repeated planning progress updates while preserving stage transitions', async () => {
     runOrchestratorMock.mockClear();
     runOrchestratorMock.mockImplementationOnce(async (_goal: string, ctx: any) => {

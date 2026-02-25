@@ -231,6 +231,27 @@ function formatMarketsForChat(markets: Market[]): string {
 /**
  * Main conversation handler
  */
+function isImplicitTradeMutationCommand(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized || normalized.endsWith('?')) return false;
+
+  const closePatterns = [
+    /\bclose\b.{0,20}\b(it|position|trade|long|short|btc|eth|perp)\b/i,
+    /\b(flatten|exit|unwind)\b.{0,20}\b(it|position|trade|book|long|short)\b/i,
+    /\b(close|flatten|exit|unwind)\s+(it|position|trade|book)\b/i,
+  ];
+  if (closePatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  // Imperative one/two-word commands like "close" or "flatten now".
+  if (/^(close|flatten|exit|unwind)(\s+(now|please))?$/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
 export class ConversationHandler {
   private llm: LlmClient;
   private infoLlm?: LlmClient;
@@ -342,7 +363,10 @@ export class ConversationHandler {
             ? message.slice(manualTradeOverride[0].length).trim()
             : message;
           const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
-          const isManualTradeOverride = Boolean(manualTradeOverride && orchestratorMessage.length > 0);
+          const implicitTradeMutation = isImplicitTradeMutationCommand(orchestratorMessage);
+          const isManualTradeOverride = Boolean(
+            (manualTradeOverride && orchestratorMessage.length > 0) || implicitTradeMutation
+          );
           const executionOrigin =
             isManualTradeOverride
               ? 'manual_override'
