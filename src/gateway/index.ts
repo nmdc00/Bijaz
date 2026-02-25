@@ -1184,6 +1184,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  (req as typeof req & { thufirConfig?: typeof config }).thufirConfig = config;
   if (handleDashboardApiRequest(req, res)) {
     return;
   }
