@@ -172,6 +172,22 @@ function tableExists(db: Database.Database, tableName: string): boolean {
   return Boolean(row?.name);
 }
 
+function tableHasColumn(
+  db: Database.Database,
+  tableName: string,
+  columnName: string
+): boolean {
+  if (!tableExists(db, tableName)) return false;
+  try {
+    const rows = db
+      .prepare(`PRAGMA table_info(${tableName})`)
+      .all() as Array<{ name?: string }>;
+    return rows.some((row) => row.name === columnName);
+  } catch {
+    return false;
+  }
+}
+
 function safeCount(
   db: Database.Database,
   query: string,
@@ -710,48 +726,78 @@ function buildPolicyStateSection(db: Database.Database): {
   tradesRemainingToday: number | null;
   updatedAt: string | null;
 } {
+  const defaults = {
+    observationMode: false,
+    leverageCap: null,
+    drawdownCapRemainingUsd: null,
+    tradesRemainingToday: null,
+    updatedAt: null,
+  } as const;
+
   if (!tableExists(db, 'autonomy_policy_state')) {
-    return {
-      observationMode: false,
-      leverageCap: null,
-      drawdownCapRemainingUsd: null,
-      tradesRemainingToday: null,
-      updatedAt: null,
-    };
+    return defaults;
   }
 
-  const row = db
-    .prepare(
-      `
-        SELECT observation_only_until_ms as observationOnlyUntilMs,
-               leverage_cap_override as leverageCapOverride,
-               updated_at as updatedAt
-        FROM autonomy_policy_state
-        ORDER BY id DESC
-        LIMIT 1
-      `
-    )
-    .get() as {
-      observationOnlyUntilMs?: number | null;
-      leverageCapOverride?: number | null;
-      updatedAt?: string | null;
-    } | undefined;
-
-  if (!row) {
-    return {
-      observationMode: false,
-      leverageCap: null,
-      drawdownCapRemainingUsd: null,
-      tradesRemainingToday: null,
-      updatedAt: null,
-    };
+  let observationOnlyUntilMsRaw: unknown = null;
+  let leverageCapRawInput: unknown = null;
+  let updatedAtRaw: unknown = null;
+  try {
+    if (tableHasColumn(db, 'autonomy_policy_state', 'payload')) {
+      const row = db
+        .prepare(
+          `
+            SELECT payload, updated_at as updatedAt
+            FROM autonomy_policy_state
+            ORDER BY id DESC
+            LIMIT 1
+          `
+        )
+        .get() as { payload?: string | null; updatedAt?: string | null } | undefined;
+      if (!row) return defaults;
+      updatedAtRaw = row.updatedAt ?? null;
+      if (row.payload) {
+        try {
+          const payload = JSON.parse(row.payload) as Record<string, unknown>;
+          observationOnlyUntilMsRaw =
+            payload.observationOnlyUntilMs ?? payload.observation_only_until_ms ?? null;
+          leverageCapRawInput =
+            payload.leverageCapOverride ?? payload.leverage_cap_override ?? payload.leverageCap ?? null;
+        } catch {
+          observationOnlyUntilMsRaw = null;
+          leverageCapRawInput = null;
+        }
+      }
+    } else {
+      const row = db
+        .prepare(
+          `
+            SELECT observation_only_until_ms as observationOnlyUntilMs,
+                   leverage_cap_override as leverageCapOverride,
+                   updated_at as updatedAt
+            FROM autonomy_policy_state
+            ORDER BY id DESC
+            LIMIT 1
+          `
+        )
+        .get() as {
+          observationOnlyUntilMs?: number | null;
+          leverageCapOverride?: number | null;
+          updatedAt?: string | null;
+        } | undefined;
+      if (!row) return defaults;
+      observationOnlyUntilMsRaw = row.observationOnlyUntilMs ?? null;
+      leverageCapRawInput = row.leverageCapOverride ?? null;
+      updatedAtRaw = row.updatedAt ?? null;
+    }
+  } catch {
+    return defaults;
   }
 
   const nowMs = Date.now();
-  const observationOnlyUntilMs = Number(row.observationOnlyUntilMs ?? NaN);
+  const observationOnlyUntilMs = Number(observationOnlyUntilMsRaw ?? NaN);
   const observationMode = Number.isFinite(observationOnlyUntilMs) && observationOnlyUntilMs > nowMs;
 
-  const leverageCapRaw = Number(row.leverageCapOverride ?? NaN);
+  const leverageCapRaw = Number(leverageCapRawInput ?? NaN);
   const leverageCap = Number.isFinite(leverageCapRaw) ? leverageCapRaw : null;
 
   const maxTradesRaw = Number(process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY ?? NaN);
@@ -774,7 +820,7 @@ function buildPolicyStateSection(db: Database.Database): {
     leverageCap,
     drawdownCapRemainingUsd: null,
     tradesRemainingToday,
-    updatedAt: row.updatedAt ? String(row.updatedAt) : null,
+    updatedAt: updatedAtRaw ? String(updatedAtRaw) : null,
   };
 }
 
