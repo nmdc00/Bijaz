@@ -381,7 +381,82 @@ function buildPaperEquitySeries(
     },
   };
 }
+type OpenPositionRow = {
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  currentPrice: number;
+  size: number;
+  unrealizedPnlUsd: number;
+  heldSeconds: number;
+  openedAt: string;
+  updatedAt: string;
+};
 
+function listPaperOpenPositionRows(db: Database.Database): OpenPositionRow[] {
+  if (!tableExists(db, 'paper_perp_positions')) {
+    return [];
+  }
+
+  const rows = db
+    .prepare(
+      `
+        SELECT p.symbol,
+               p.side,
+               p.size,
+               p.entry_price as entryPrice,
+               p.opened_at as openedAt,
+               p.updated_at as updatedAt,
+               COALESCE(m.mark_price, p.entry_price) as currentPrice
+        FROM paper_perp_positions p
+        LEFT JOIN (
+          SELECT f.symbol, f.mark_price
+          FROM paper_perp_fills f
+          INNER JOIN (
+            SELECT symbol, MAX(id) as max_id
+            FROM paper_perp_fills
+            GROUP BY symbol
+          ) latest
+            ON latest.symbol = f.symbol
+           AND latest.max_id = f.id
+        ) m
+          ON m.symbol = p.symbol
+        ORDER BY p.symbol ASC
+      `
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  const nowMs = Date.now();
+  return rows.map((row) => {
+    const symbol = String(row.symbol ?? '').toUpperCase();
+    const side = String(row.side ?? 'long') === 'short' ? 'short' : 'long';
+    const size = Number(row.size ?? 0);
+    const entryPrice = Number(row.entryPrice ?? 0);
+    const currentPrice = Number(row.currentPrice ?? entryPrice);
+    const openedAt = String(row.openedAt ?? '');
+    const updatedAt = String(row.updatedAt ?? '');
+    const openedMs = Date.parse(openedAt);
+    const heldSeconds =
+      Number.isFinite(openedMs) && nowMs > openedMs
+        ? Math.floor((nowMs - openedMs) / 1000)
+        : 0;
+    const unrealizedPnlUsd =
+      side === 'long'
+        ? (currentPrice - entryPrice) * size
+        : (entryPrice - currentPrice) * size;
+    return {
+      symbol,
+      side,
+      entryPrice,
+      currentPrice,
+      size,
+      unrealizedPnlUsd: Number.isFinite(unrealizedPnlUsd) ? unrealizedPnlUsd : 0,
+      heldSeconds,
+      openedAt,
+      updatedAt,
+    };
+  });
+}
 export function buildDashboardApiPayload(params?: {
   db?: Database.Database;
   filters?: DashboardFilters;
@@ -411,7 +486,7 @@ export function buildDashboardApiPayload(params?: {
       };
     };
     openPositions: {
-      rows: unknown[];
+      rows: OpenPositionRow[];
       summary: {
         totalUnrealizedPnlUsd: number;
         longCount: number;
@@ -458,6 +533,13 @@ export function buildDashboardApiPayload(params?: {
     ? safeCount(db, 'SELECT COUNT(*) AS c FROM paper_perp_positions')
     : 0;
   const equityCurve = buildPaperEquitySeries(db, filters);
+  const openPositionRows = listPaperOpenPositionRows(db);
+  const longCount = openPositionRows.filter((row) => row.side === 'long').length;
+  const shortCount = openPositionRows.filter((row) => row.side === 'short').length;
+  const totalUnrealizedPnlUsd = openPositionRows.reduce(
+    (sum, row) => sum + row.unrealizedPnlUsd,
+    0
+  );
 
   return {
     meta: {
@@ -477,11 +559,11 @@ export function buildDashboardApiPayload(params?: {
     sections: {
       equityCurve,
       openPositions: {
-        rows: [],
+        rows: openPositionRows,
         summary: {
-          totalUnrealizedPnlUsd: 0,
-          longCount: 0,
-          shortCount: 0,
+          totalUnrealizedPnlUsd,
+          longCount,
+          shortCount,
         },
       },
       tradeLog: {

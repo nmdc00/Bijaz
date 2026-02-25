@@ -113,6 +113,45 @@ describe('dashboard api payload', () => {
     expect(Number(endEquity)).toBeGreaterThan(200);
     expect(Number(payload.sections.equityCurve.summary.returnPct)).toBeGreaterThan(0);
   });
+
+  it('returns open paper positions with current mark and unrealized pnl summary', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-open-pos-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    placePaperPerpOrder(
+      { symbol: 'BTC', side: 'buy', size: 2, orderType: 'market', markPrice: 100 },
+      { initialCashUsdc: 200 }
+    );
+    placePaperPerpOrder(
+      { symbol: 'BTC', side: 'sell', size: 1, orderType: 'market', markPrice: 110, reduceOnly: true },
+      { initialCashUsdc: 200 }
+    );
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.openPositions.rows.length).toBe(1);
+    const row = payload.sections.openPositions.rows[0]!;
+    expect(row.symbol).toBe('BTC');
+    expect(row.side).toBe('long');
+    expect(row.entryPrice).toBeCloseTo(100.05, 6);
+    expect(row.currentPrice).toBe(110);
+    expect(row.unrealizedPnlUsd).toBeCloseTo(9.95, 6);
+    expect(payload.sections.openPositions.summary.longCount).toBe(1);
+    expect(payload.sections.openPositions.summary.shortCount).toBe(0);
+    expect(payload.sections.openPositions.summary.totalUnrealizedPnlUsd).toBeCloseTo(9.95, 6);
+  });
 });
 
 describe('dashboard api route handler', () => {
