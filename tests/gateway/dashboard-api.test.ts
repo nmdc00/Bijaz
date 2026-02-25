@@ -250,6 +250,54 @@ describe('dashboard api payload', () => {
     expect(row?.gates.minTrades.pass).toBe(false);
     expect(row?.gates.minTrades.missing).toBe(23);
   });
+
+  it('returns policy state from autonomy policy table', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-policy-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY = '5';
+    const db = openDatabase(dbPath);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS autonomy_policy_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_date TEXT NOT NULL,
+        observation_only_until_ms INTEGER,
+        leverage_cap_override REAL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    db.exec(`
+      INSERT INTO autonomy_policy_state (
+        session_date, observation_only_until_ms, leverage_cap_override, updated_at
+      )
+      VALUES (
+        '2026-02-25',
+        ${Date.now() + 60_000},
+        1.25,
+        '2026-02-25T18:30:00.000Z'
+      );
+    `);
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.policyState.observationMode).toBe(true);
+    expect(payload.sections.policyState.leverageCap).toBe(1.25);
+    expect(payload.sections.policyState.tradesRemainingToday).toBe(5);
+    expect(payload.sections.policyState.updatedAt).toBe('2026-02-25T18:30:00.000Z');
+    delete process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY;
+  });
 });
 
 describe('dashboard api route handler', () => {

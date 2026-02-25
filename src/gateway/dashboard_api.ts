@@ -685,6 +685,81 @@ function listPromotionGateRows(db: Database.Database): PromotionGateRow[] {
   });
 }
 
+function buildPolicyStateSection(db: Database.Database): {
+  observationMode: boolean;
+  leverageCap: number | null;
+  drawdownCapRemainingUsd: number | null;
+  tradesRemainingToday: number | null;
+  updatedAt: string | null;
+} {
+  if (!tableExists(db, 'autonomy_policy_state')) {
+    return {
+      observationMode: false,
+      leverageCap: null,
+      drawdownCapRemainingUsd: null,
+      tradesRemainingToday: null,
+      updatedAt: null,
+    };
+  }
+
+  const row = db
+    .prepare(
+      `
+        SELECT observation_only_until_ms as observationOnlyUntilMs,
+               leverage_cap_override as leverageCapOverride,
+               updated_at as updatedAt
+        FROM autonomy_policy_state
+        ORDER BY id DESC
+        LIMIT 1
+      `
+    )
+    .get() as {
+      observationOnlyUntilMs?: number | null;
+      leverageCapOverride?: number | null;
+      updatedAt?: string | null;
+    } | undefined;
+
+  if (!row) {
+    return {
+      observationMode: false,
+      leverageCap: null,
+      drawdownCapRemainingUsd: null,
+      tradesRemainingToday: null,
+      updatedAt: null,
+    };
+  }
+
+  const nowMs = Date.now();
+  const observationOnlyUntilMs = Number(row.observationOnlyUntilMs ?? NaN);
+  const observationMode = Number.isFinite(observationOnlyUntilMs) && observationOnlyUntilMs > nowMs;
+
+  const leverageCapRaw = Number(row.leverageCapOverride ?? NaN);
+  const leverageCap = Number.isFinite(leverageCapRaw) ? leverageCapRaw : null;
+
+  const maxTradesRaw = Number(process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY ?? NaN);
+  let tradesRemainingToday: number | null = null;
+  if (Number.isFinite(maxTradesRaw) && maxTradesRaw > 0) {
+    const todayCount = safeCount(
+      db,
+      `
+        SELECT COUNT(*) AS c
+        FROM perp_trades
+        WHERE status = 'executed'
+          AND date(created_at) = date('now')
+      `
+    );
+    tradesRemainingToday = Math.max(0, Math.floor(maxTradesRaw) - todayCount);
+  }
+
+  return {
+    observationMode,
+    leverageCap,
+    drawdownCapRemainingUsd: null,
+    tradesRemainingToday,
+    updatedAt: row.updatedAt ? String(row.updatedAt) : null,
+  };
+}
+
 export function buildDashboardApiPayload(params?: {
   db?: Database.Database;
   filters?: DashboardFilters;
@@ -770,6 +845,7 @@ export function buildDashboardApiPayload(params?: {
   );
   const tradeLogRows = listTradeLogRows(db, 30);
   const promotionGateRows = listPromotionGateRows(db);
+  const policyState = buildPolicyStateSection(db);
 
   return {
     meta: {
@@ -804,11 +880,11 @@ export function buildDashboardApiPayload(params?: {
         rows: promotionGateRows,
       },
       policyState: {
-        observationMode: false,
-        leverageCap: null,
-        drawdownCapRemainingUsd: null,
-        tradesRemainingToday: null,
-        updatedAt: null,
+        observationMode: policyState.observationMode,
+        leverageCap: policyState.leverageCap,
+        drawdownCapRemainingUsd: policyState.drawdownCapRemainingUsd,
+        tradesRemainingToday: policyState.tradesRemainingToday,
+        updatedAt: policyState.updatedAt,
       },
       performanceBreakdown: {
         bySignalClass: [],
