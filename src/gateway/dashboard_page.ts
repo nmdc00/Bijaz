@@ -195,6 +195,67 @@ function buildDashboardHtml(): string {
         return 'pill mixed';
       }
 
+      function EquityChartFallback({ points }) {
+        if (!Array.isArray(points) || points.length === 0) {
+          return <div className="muted small">No equity points for this filter window.</div>;
+        }
+        const W = 1000;
+        const H = 320;
+        const PAD = 24;
+        const values = points
+          .map((point) => Number(point && point.equity))
+          .filter((value) => Number.isFinite(value));
+        if (values.length === 0) {
+          return <div className="muted small">No numeric equity values available.</div>;
+        }
+        let min = Math.min.apply(null, values);
+        let max = Math.max.apply(null, values);
+        if (Math.abs(max - min) < 1e-9) {
+          min = min - 1;
+          max = max + 1;
+        }
+
+        const xFor = (index) =>
+          PAD + (index / Math.max(1, points.length - 1)) * (W - PAD * 2);
+        const yFor = (value) =>
+          PAD + ((max - value) / (max - min)) * (H - PAD * 2);
+
+        const lineD = points
+          .map((point, index) => {
+            const x = xFor(index);
+            const y = yFor(Number(point.equity));
+            return (index === 0 ? 'M' : 'L') + x + ' ' + y;
+          })
+          .join(' ');
+
+        const areaD = lineD + ' L ' + xFor(points.length - 1) + ' ' + (H - PAD) + ' L ' + xFor(0) + ' ' + (H - PAD) + ' Z';
+        const startPoint = points[0];
+        const endPoint = points[points.length - 1];
+
+        return (
+          <div style={{ width: '100%', height: '100%' }}>
+            <svg viewBox={'0 0 ' + W + ' ' + H} width="100%" height="100%" preserveAspectRatio="none" role="img" aria-label="Equity curve">
+              <defs>
+                <linearGradient id="fallbackEqFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f59d43" stopOpacity="0.48" />
+                  <stop offset="95%" stopColor="#d86a2b" stopOpacity="0.06" />
+                </linearGradient>
+              </defs>
+              <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="rgba(245,217,183,0.25)" />
+              <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="rgba(245,217,183,0.25)" />
+              <path d={areaD} fill="url(#fallbackEqFill)" />
+              <path d={lineD} fill="none" stroke="#f5d9b7" strokeWidth="2.5" />
+              <circle cx={xFor(0)} cy={yFor(Number(startPoint.equity))} r="3.5" fill="#4eb3d9" />
+              <circle cx={xFor(points.length - 1)} cy={yFor(Number(endPoint.equity))} r="3.5" fill="#f59d43" />
+            </svg>
+            <div className="small muted" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
+              <span>{fmtTime(startPoint.timestamp)} · {money(startPoint.equity)}</span>
+              <span>{fmtTime(endPoint.timestamp)} · {money(endPoint.equity)}</span>
+            </div>
+          </div>
+        );
+      }
+
       function PerfTable({ rows }) {
         if (!Array.isArray(rows) || rows.length === 0) {
           return <div className="muted small">No data yet for this slice.</div>;
@@ -326,7 +387,7 @@ function buildDashboardHtml(): string {
                       </AreaChart>
                     </ResponsiveContainer>
                   ) : (
-                    <div className="muted small">Chart library unavailable. Tables and KPIs are still live.</div>
+                    <EquityChartFallback points={chartPoints} />
                   )}
                 </div></div>
               </article>
