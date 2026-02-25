@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type Database from 'better-sqlite3';
 
+import { buildPaperPromotionReport } from '../core/paper_promotion.js';
 import { openDatabase } from '../memory/db.js';
 
 export type DashboardMode = 'paper' | 'live' | 'combined';
@@ -564,6 +565,126 @@ function listTradeLogRows(db: Database.Database, limit = 30): TradeLogRow[] {
 
   return out;
 }
+
+type PromotionGateRow = {
+  setupKey: string;
+  sampleCount: number;
+  hitRate: number;
+  expectancyR: number;
+  payoffRatio: number;
+  maxDrawdownR: number;
+  promoted: boolean;
+  gates: {
+    minTrades: { pass: boolean; required: number; actual: number; missing: number };
+    maxDrawdownR: { pass: boolean; maxAllowed: number; actual: number; missing: number };
+    minHitRate: { pass: boolean; required: number; actual: number; missing: number };
+    minPayoffRatio: { pass: boolean; required: number; actual: number; missing: number };
+    minExpectancyR: { pass: boolean; required: number; actual: number; missing: number };
+  };
+};
+
+const DEFAULT_PROMOTION_GATES = {
+  minTrades: 25,
+  maxDrawdownR: 6,
+  minHitRate: 0.5,
+  minPayoffRatio: 1.2,
+  minExpectancyR: 0.1,
+};
+
+function listPromotionGateRows(db: Database.Database): PromotionGateRow[] {
+  if (!tableExists(db, 'decision_artifacts')) {
+    return [];
+  }
+
+  const artifactRows = db
+    .prepare(
+      `
+        SELECT payload
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+        ORDER BY created_at DESC
+        LIMIT 500
+      `
+    )
+    .all() as Array<{ payload?: string }>;
+
+  const entries = artifactRows
+    .map((row) => {
+      if (!row.payload) return null;
+      try {
+        return JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => entry != null);
+
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    const outcome = String(entry.outcome ?? '').toLowerCase();
+    if ((outcome !== 'executed' && outcome !== 'failed') || !entry.symbol) {
+      continue;
+    }
+    const signalClass = String(entry.signalClass ?? 'unknown');
+    keys.add(`${String(entry.symbol).toUpperCase()}:${signalClass}`);
+  }
+
+  const rows: PromotionGateRow[] = [];
+  for (const setupKey of keys) {
+    const report = buildPaperPromotionReport({
+      entries,
+      setupKey,
+      gates: DEFAULT_PROMOTION_GATES,
+    });
+    rows.push({
+      setupKey: report.setupKey,
+      sampleCount: report.sampleCount,
+      hitRate: report.hitRate,
+      expectancyR: report.expectancyR,
+      payoffRatio: report.payoffRatio,
+      maxDrawdownR: report.maxDrawdownR,
+      promoted: report.promoted,
+      gates: {
+        minTrades: {
+          pass: report.gates.minTrades.pass,
+          required: report.gates.minTrades.required,
+          actual: report.gates.minTrades.actual,
+          missing: Math.max(0, report.gates.minTrades.required - report.gates.minTrades.actual),
+        },
+        maxDrawdownR: {
+          pass: report.gates.maxDrawdownR.pass,
+          maxAllowed: report.gates.maxDrawdownR.maxAllowed,
+          actual: report.gates.maxDrawdownR.actual,
+          missing: Math.max(0, report.gates.maxDrawdownR.actual - report.gates.maxDrawdownR.maxAllowed),
+        },
+        minHitRate: {
+          pass: report.gates.minHitRate.pass,
+          required: report.gates.minHitRate.required,
+          actual: report.gates.minHitRate.actual,
+          missing: Math.max(0, report.gates.minHitRate.required - report.gates.minHitRate.actual),
+        },
+        minPayoffRatio: {
+          pass: report.gates.minPayoffRatio.pass,
+          required: report.gates.minPayoffRatio.required,
+          actual: report.gates.minPayoffRatio.actual,
+          missing: Math.max(0, report.gates.minPayoffRatio.required - report.gates.minPayoffRatio.actual),
+        },
+        minExpectancyR: {
+          pass: report.gates.minExpectancyR.pass,
+          required: report.gates.minExpectancyR.required,
+          actual: report.gates.minExpectancyR.actual,
+          missing: Math.max(0, report.gates.minExpectancyR.required - report.gates.minExpectancyR.actual),
+        },
+      },
+    });
+  }
+
+  return rows.sort((a, b) => {
+    if (a.promoted !== b.promoted) return a.promoted ? 1 : -1;
+    return b.sampleCount - a.sampleCount;
+  });
+}
+
 export function buildDashboardApiPayload(params?: {
   db?: Database.Database;
   filters?: DashboardFilters;
@@ -605,7 +726,7 @@ export function buildDashboardApiPayload(params?: {
       limit: number;
     };
     promotionGates: {
-      rows: unknown[];
+      rows: PromotionGateRow[];
     };
     policyState: {
       observationMode: boolean;
@@ -648,6 +769,7 @@ export function buildDashboardApiPayload(params?: {
     0
   );
   const tradeLogRows = listTradeLogRows(db, 30);
+  const promotionGateRows = listPromotionGateRows(db);
 
   return {
     meta: {
@@ -679,7 +801,7 @@ export function buildDashboardApiPayload(params?: {
         limit: 30,
       },
       promotionGates: {
-        rows: [],
+        rows: promotionGateRows,
       },
       policyState: {
         observationMode: false,
