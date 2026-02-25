@@ -121,9 +121,39 @@ function buildDashboardHtml(): string {
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div style="padding:14px;border:1px solid rgba(245,217,183,0.2);border-radius:12px;background:rgba(12,25,47,0.7);color:#f4e8d8">
+        Loading dashboard UI...
+      </div>
+    </div>
+    <script>
+      (function () {
+        var app = document.getElementById('app');
+        function showBootError(message) {
+          if (!app) return;
+          app.innerHTML =
+            '<div style=\"padding:14px;border:1px solid rgba(220,106,93,0.55);border-radius:12px;background:rgba(220,106,93,0.12);color:#ffb7ae\">' +
+            '<strong>Dashboard failed to render.</strong><br/>' +
+            '<span style=\"font-family:monospace\">' + String(message || 'unknown error') + '</span><br/>' +
+            '<span style=\"color:#cbbba7\">Try hard-refresh. If this persists, CDN scripts may be blocked by network/extensions.</span>' +
+            '</div>';
+        }
+        window.__dashboardShowBootError = showBootError;
+        window.addEventListener('error', function (event) {
+          if (event && event.message) showBootError(event.message);
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+          var msg = event && event.reason && event.reason.message ? event.reason.message : event.reason;
+          showBootError(msg || 'unhandled promise rejection');
+        });
+      })();
+    </script>
     <script type="text/babel" data-presets="env,react">
-      const { useEffect, useMemo, useState } = React;
+      if (!window.React || !window.ReactDOM) {
+        window.__dashboardShowBootError && window.__dashboardShowBootError('React runtime failed to load');
+      }
+
+      const { useEffect, useMemo, useState } = React || {};
       const {
         ResponsiveContainer,
         AreaChart,
@@ -132,7 +162,8 @@ function buildDashboardHtml(): string {
         Tooltip,
         XAxis,
         YAxis
-      } = Recharts;
+      } = window.Recharts || {};
+      const hasRecharts = Boolean(window.Recharts && ResponsiveContainer);
 
       const PERIODS = ['1d', '7d', '14d', '30d', '90d'];
 
@@ -281,18 +312,22 @@ function buildDashboardHtml(): string {
               <article className="panel">
                 <div className="head"><h3>Equity Curve</h3><p>Cash + unrealized PnL over the selected window.</p></div>
                 <div className="body"><div className="chart-wrap">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={chartPoints} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59d43" stopOpacity="0.44" /><stop offset="95%" stopColor="#d86a2b" stopOpacity="0.04" /></linearGradient>
-                      </defs>
-                      <CartesianGrid stroke="rgba(245,217,183,0.10)" strokeDasharray="3 3" />
-                      <XAxis dataKey="tsLabel" tick={{ fill: '#cbbba7', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'rgba(245,217,183,0.25)' }} minTickGap={40} />
-                      <YAxis tick={{ fill: '#cbbba7', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'rgba(245,217,183,0.25)' }} width={70} tickFormatter={(v) => '$' + Number(v).toFixed(0)} />
-                      <Tooltip contentStyle={{ background: 'rgba(8,18,35,0.95)', border: '1px solid rgba(245,217,183,0.25)', borderRadius: '10px', color: '#f4e8d8' }} formatter={(v, n) => [money(v), n]} labelFormatter={(v) => String(v)} />
-                      <Area type="monotone" dataKey="equity" stroke="#f5d9b7" strokeWidth={2.4} fill="url(#eqFill)" dot={false} isAnimationActive={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                  {hasRecharts ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chartPoints} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59d43" stopOpacity="0.44" /><stop offset="95%" stopColor="#d86a2b" stopOpacity="0.04" /></linearGradient>
+                        </defs>
+                        <CartesianGrid stroke="rgba(245,217,183,0.10)" strokeDasharray="3 3" />
+                        <XAxis dataKey="tsLabel" tick={{ fill: '#cbbba7', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'rgba(245,217,183,0.25)' }} minTickGap={40} />
+                        <YAxis tick={{ fill: '#cbbba7', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'rgba(245,217,183,0.25)' }} width={70} tickFormatter={(v) => '$' + Number(v).toFixed(0)} />
+                        <Tooltip contentStyle={{ background: 'rgba(8,18,35,0.95)', border: '1px solid rgba(245,217,183,0.25)', borderRadius: '10px', color: '#f4e8d8' }} formatter={(v, n) => [money(v), n]} labelFormatter={(v) => String(v)} />
+                        <Area type="monotone" dataKey="equity" stroke="#f5d9b7" strokeWidth={2.4} fill="url(#eqFill)" dot={false} isAnimationActive={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="muted small">Chart library unavailable. Tables and KPIs are still live.</div>
+                  )}
                 </div></div>
               </article>
 
@@ -371,7 +406,22 @@ function buildDashboardHtml(): string {
         );
       }
 
-      ReactDOM.createRoot(document.getElementById('app')).render(<App />);
+      try {
+        const mountEl = document.getElementById('app');
+        if (!mountEl) {
+          throw new Error('Missing #app mount element');
+        }
+        if (window.ReactDOM && typeof window.ReactDOM.createRoot === 'function') {
+          window.ReactDOM.createRoot(mountEl).render(<App />);
+        } else if (window.ReactDOM && typeof window.ReactDOM.render === 'function') {
+          window.ReactDOM.render(<App />, mountEl);
+        } else {
+          throw new Error('ReactDOM renderer unavailable');
+        }
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        window.__dashboardShowBootError && window.__dashboardShowBootError(msg);
+      }
     </script>
   </body>
 </html>`;
