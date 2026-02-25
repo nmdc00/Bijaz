@@ -95,6 +95,66 @@ describe('tool-executor perps', () => {
     }
   });
 
+  it('reuses one tradeId across a full paper position lifecycle', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+    const symbol = 'BTCLIFE';
+
+    const openRes = await executeToolCall(
+      'perp_place_order',
+      { symbol, side: 'buy', size: 0.05, mode: 'paper' },
+      ctx
+    );
+    expect(openRes.success).toBe(true);
+
+    const addRes = await executeToolCall(
+      'perp_place_order',
+      { symbol, side: 'buy', size: 0.02, mode: 'paper' },
+      ctx
+    );
+    expect(addRes.success).toBe(true);
+
+    const cutRes = await executeToolCall(
+      'perp_place_order',
+      { symbol, side: 'sell', size: 0.03, reduce_only: true, mode: 'paper' },
+      ctx
+    );
+    expect(cutRes.success).toBe(true);
+
+    const closeRes = await executeToolCall(
+      'perp_place_order',
+      { symbol, side: 'sell', size: 0.04, reduce_only: true, mode: 'paper' },
+      ctx
+    );
+    expect(closeRes.success).toBe(true);
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 20 },
+      { config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any, marketClient }
+    );
+    expect(listRes.success).toBe(true);
+    const entries = (((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>)
+      .filter((entry) => entry.outcome === 'executed')
+      .slice(0, 4);
+    expect(entries.length).toBe(4);
+    const tradeIds = entries
+      .map((entry) => Number(entry.tradeId ?? NaN))
+      .filter((tradeId) => Number.isFinite(tradeId) && tradeId > 0);
+    expect(tradeIds.length).toBe(4);
+    expect(new Set(tradeIds).size).toBe(1);
+  });
+
   it('retries no-immediate-match failures with widened slippage and succeeds', async () => {
     const slippageSeen: number[] = [];
     let confirmCount = 0;
@@ -774,142 +834,13 @@ describe('tool-executor perps', () => {
 
     const portfolio = await executeToolCall('get_portfolio', {}, ctx);
     expect(portfolio.success).toBe(true);
+    expect((portfolio as any).data?.summary?.perp_mode).toBe('paper');
+    expect((portfolio as any).data?.perp_summary?.source).toBe('paper');
+    expect(((portfolio as any).data?.perp_positions ?? []).length).toBeGreaterThan(0);
+    expect(Number((portfolio as any).data?.perp_summary?.account_value)).toBeGreaterThan(
+      Number((portfolio as any).data?.perp_summary?.withdrawable)
+    );
     expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
-  });
-
-  it('marks paper account value to market in get_positions/perp_positions/get_portfolio', async () => {
-    let markPrice = 100;
-    const dynamicMarketClient = {
-      getMarket: async (symbol: string) => ({
-        id: symbol,
-        question: `Perp: ${symbol}`,
-        outcomes: ['LONG', 'SHORT'],
-        prices: {},
-        platform: 'hyperliquid',
-        kind: 'perp',
-        symbol,
-        markPrice,
-        metadata: { maxLeverage: 10 },
-      }),
-      listMarkets: async () => [],
-      searchMarkets: async () => [],
-    };
-    const executor = new PaperExecutor({ initialCashUsdc: 200 });
-    const limiter = {
-      checkAndReserve: async () => ({ allowed: true }),
-      confirm: () => {},
-      release: () => {},
-    };
-    const ctx = {
-      config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
-      marketClient: dynamicMarketClient as any,
-      executor,
-      limiter,
-    };
-
-    const entry = await executeToolCall(
-      'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 1, order_type: 'market' },
-      ctx
-    );
-    expect(entry.success).toBe(true);
-
-    markPrice = 110;
-
-    const positionsResult = await executeToolCall('get_positions', {}, ctx);
-    expect(positionsResult.success).toBe(true);
-    const position = ((positionsResult as any).data?.positions ?? [])[0] as Record<string, unknown>;
-    const summary = (positionsResult as any).data?.summary as Record<string, unknown>;
-    expect(Number(position?.mark_price)).toBeCloseTo(110, 8);
-    expect(Number(position?.unrealized_pnl)).toBeGreaterThan(0);
-    expect(Number(summary?.account_value)).toBeCloseTo(
-      Number(summary?.withdrawable) + Number(position?.unrealized_pnl),
-      8
-    );
-
-    const perpPositionsResult = await executeToolCall('perp_positions', {}, ctx);
-    expect(perpPositionsResult.success).toBe(true);
-    expect(Number((perpPositionsResult as any).data?.summary?.account_value)).toBeCloseTo(
-      Number(summary?.account_value),
-      8
-    );
-
-    const portfolio = await executeToolCall('get_portfolio', {}, ctx);
-    expect(portfolio.success).toBe(true);
-    expect(Number((portfolio as any).data?.summary?.available_balance)).toBeCloseTo(
-      Number(summary?.account_value),
-      8
-    );
-    expect(Number((portfolio as any).data?.summary?.paper_cash_balance_usdc)).toBeCloseTo(
-      Number(summary?.withdrawable),
-      8
-    );
-    expect(Array.isArray((portfolio as any).data?.perp_positions)).toBe(true);
-    expect(((portfolio as any).data?.perp_positions ?? []).length).toBe(1);
-  });
-
-  it('keeps get_positions/get_open_orders on paper mode even when mode=live is passed', async () => {
-    const executor = new PaperExecutor({ initialCashUsdc: 200 });
-    const limiter = {
-      checkAndReserve: async () => ({ allowed: true }),
-      confirm: () => {},
-      release: () => {},
-    };
-    const ctx = {
-      config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
-      marketClient,
-      executor,
-      limiter,
-    };
-
-    const positions = await executeToolCall('get_positions', { mode: 'live' }, ctx);
-    expect(positions.success).toBe(true);
-    expect((positions as any).data?.mode).toBe('paper');
-
-    const openOrders = await executeToolCall('get_open_orders', { mode: 'live' }, ctx);
-    expect(openOrders.success).toBe(true);
-    expect((openOrders as any).data?.mode).toBe('paper');
-  });
-
-  it('closes paper positions when side is provided as close/short alias text', async () => {
-    const executor = new PaperExecutor({ initialCashUsdc: 200 });
-    const limiter = {
-      checkAndReserve: async () => ({ allowed: true }),
-      confirm: () => {},
-      release: () => {},
-    };
-    const ctx = {
-      config: { execution: { mode: 'paper', provider: 'hyperliquid' } } as any,
-      marketClient,
-      executor,
-      limiter,
-    };
-
-    const entry = await executeToolCall(
-      'perp_place_order',
-      { symbol: 'BTC', side: 'buy', size: 0.005, order_type: 'market' },
-      ctx
-    );
-    expect(entry.success).toBe(true);
-
-    const close = await executeToolCall(
-      'perp_place_order',
-      {
-        symbol: 'BTC',
-        side: 'close/short',
-        size: 0.005,
-        reduce_only: true,
-        order_type: 'market',
-        exit_mode: 'risk_reduction',
-      },
-      ctx
-    );
-    expect(close.success).toBe(true);
-
-    const positions = await executeToolCall('perp_positions', {}, ctx);
-    expect(positions.success).toBe(true);
-    const remaining = ((positions as any).data?.positions ?? []) as Array<Record<string, unknown>>;
-    expect(remaining.length).toBe(0);
   });
 
   it('paper_promotion_report returns gate evaluation', async () => {

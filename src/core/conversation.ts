@@ -231,33 +231,6 @@ function formatMarketsForChat(markets: Market[]): string {
 /**
  * Main conversation handler
  */
-function isImplicitTradeMutationCommand(message: string): boolean {
-  const normalized = message.trim().toLowerCase();
-  if (!normalized || normalized.endsWith('?')) return false;
-
-  const closePatterns = [
-    /\bclose\b.{0,20}\b(it|position|trade|long|short|btc|eth|perp)\b/i,
-    /\b(flatten|exit|unwind)\b.{0,20}\b(it|position|trade|book|long|short)\b/i,
-    /\b(close|flatten|exit|unwind)\s+(it|position|trade|book)\b/i,
-  ];
-  if (closePatterns.some((pattern) => pattern.test(normalized))) {
-    return true;
-  }
-
-  // Imperative one/two-word commands like "close" or "flatten now".
-  if (/^(close|flatten|exit|unwind)(\s+(now|please))?$/.test(normalized)) {
-    return true;
-  }
-
-  return false;
-}
-
-type LightweightPerpPosition = {
-  symbol: string;
-  side: 'long' | 'short';
-  size: number;
-};
-
 export class ConversationHandler {
   private llm: LlmClient;
   private infoLlm?: LlmClient;
@@ -369,10 +342,7 @@ export class ConversationHandler {
             ? message.slice(manualTradeOverride[0].length).trim()
             : message;
           const autoApproveTrades = Boolean(this.config.autonomy?.fullAuto);
-          const implicitTradeMutation = isImplicitTradeMutationCommand(orchestratorMessage);
-          const isManualTradeOverride = Boolean(
-            (manualTradeOverride && orchestratorMessage.length > 0) || implicitTradeMutation
-          );
+          const isManualTradeOverride = Boolean(manualTradeOverride && orchestratorMessage.length > 0);
           const executionOrigin =
             isManualTradeOverride
               ? 'manual_override'
@@ -382,36 +352,6 @@ export class ConversationHandler {
           const allowTradeMutations = Boolean(autoApproveTrades || isManualTradeOverride);
           if (manualTradeOverride && orchestratorMessage.length === 0) {
             return 'Manual override requires a concrete instruction after `/trade confirm`, e.g. `/trade confirm buy BTC 0.001 market`.';
-          }
-          if (!manualTradeOverride && isImplicitTradeMutationCommand(orchestratorMessage)) {
-            let response = await this.executeImplicitCloseAllPositions();
-            response = appendProactiveAttribution(response, proactiveSnapshot ?? null);
-
-            this.sessions.appendEntry(userId, {
-              type: 'message',
-              role: 'user',
-              content: message,
-              timestamp: new Date().toISOString(),
-            });
-            this.sessions.appendEntry(userId, {
-              type: 'message',
-              role: 'assistant',
-              content: response,
-              timestamp: new Date().toISOString(),
-            });
-
-            const sessionId = this.sessions.getSessionId(userId);
-            storeChatMessage({
-              sessionId,
-              role: 'user',
-              content: message,
-            });
-            storeChatMessage({
-              sessionId,
-              role: 'assistant',
-              content: response,
-            });
-            return response;
           }
 
           const memorySystem = {
@@ -464,8 +404,20 @@ export class ConversationHandler {
               agentToolRegistry: this.orchestratorRegistry,
             },
             memorySystem,
-            onConfirmation: async (_prompt, toolName) => {
+            onConfirmation: async (_prompt, toolName, input) => {
               if (tradeToolNames.has(toolName)) {
+                if (
+                  executionOrigin === 'autonomous' &&
+                  toolName === 'perp_place_order' &&
+                  input &&
+                  typeof input === 'object' &&
+                  (input as Record<string, unknown>).reduce_only === true
+                ) {
+                  return true;
+                }
+                if (executionOrigin === 'autonomous' && toolName === 'perp_cancel_order') {
+                  return true;
+                }
                 return allowTradeMutations;
               }
               if (fundingToolNames.has(toolName)) {
@@ -824,94 +776,6 @@ export class ConversationHandler {
     }
     const text = message.toLowerCase();
     return /\b(continue|resume|next step|next|progress|status|carry on)\b/.test(text);
-  }
-
-  private parsePerpPositions(payload: unknown): LightweightPerpPosition[] {
-    const positionsRaw = (payload as any)?.positions;
-    if (!Array.isArray(positionsRaw)) return [];
-    return positionsRaw
-      .map((entry: any) => {
-        const symbol = String(entry?.symbol ?? '').trim();
-        const side = String(entry?.side ?? '').toLowerCase() === 'short' ? 'short' : 'long';
-        const size = Number(entry?.size ?? NaN);
-        if (!symbol || !Number.isFinite(size) || size <= 0) return null;
-        return { symbol, side, size } as LightweightPerpPosition;
-      })
-      .filter((entry: LightweightPerpPosition | null): entry is LightweightPerpPosition => Boolean(entry));
-  }
-
-  private async executeImplicitCloseAllPositions(): Promise<string> {
-    const before = await executeToolCall('get_positions', {}, this.toolContext);
-    if (!before.success) {
-      return [
-        'Action: I did not place a new perp order in this cycle.',
-        `Book State: Could not load positions (${before.error}).`,
-        'Risk: Current exposure is unknown until positions can be read.',
-        'Next Action: Retry position read, then execute reduce-only closes.',
-      ].join('\n\n');
-    }
-
-    const openPositions = this.parsePerpPositions(before.data);
-    if (openPositions.length === 0) {
-      return [
-        'Action: I did not place a new perp order in this cycle.',
-        'Book State: No open perp positions to close; book is already flat.',
-        'Risk: No directional perp exposure.',
-        'Next Action: Stay flat unless you provide a new execution directive.',
-      ].join('\n\n');
-    }
-
-    const attempts: Array<{ symbol: string; success: boolean; error?: string }> = [];
-    for (const pos of openPositions) {
-      const closeSide = pos.side === 'long' ? 'sell' : 'buy';
-      const close = await executeToolCall(
-        'perp_place_order',
-        {
-          symbol: pos.symbol,
-          side: closeSide,
-          size: pos.size,
-          reduce_only: true,
-          order_type: 'market',
-        },
-        this.toolContext
-      );
-      attempts.push({
-        symbol: pos.symbol,
-        success: close.success,
-        error: close.success ? undefined : close.error,
-      });
-    }
-
-    const after = await executeToolCall('get_positions', {}, this.toolContext);
-    const remaining = after.success ? this.parsePerpPositions(after.data) : [];
-    const successful = attempts.filter((attempt) => attempt.success);
-    const failed = attempts.filter((attempt) => !attempt.success);
-
-    const action =
-      remaining.length === 0 && failed.length === 0
-        ? `Action: Closed ${successful.length} perp position(s) via reduce-only market orders.`
-        : failed.length > 0
-          ? `Action: Close attempted on ${attempts.length} position(s): ${successful.length} succeeded, ${failed.length} failed.`
-          : `Action: Close attempted on ${attempts.length} position(s), but ${remaining.length} position(s) remain open.`;
-    const failedSymbols =
-      failed.length > 0 ? failed.map((entry) => `${entry.symbol}${entry.error ? ` (${entry.error})` : ''}`).join(', ') : null;
-    const remainingSummary =
-      remaining.length > 0
-        ? remaining.map((entry) => `${entry.symbol} ${entry.side} ${entry.size}`).join(', ')
-        : 'none';
-
-    return [
-      action,
-      `Book State: Remaining open perp positions: ${remainingSummary}.`,
-      failedSymbols
-        ? `Risk: Close execution incomplete; failures on ${failedSymbols}.`
-        : remaining.length > 0
-          ? 'Risk: Residual directional exposure remains until all positions are closed.'
-          : 'Risk: Perp exposure is flat; no active directional risk.',
-      remaining.length > 0
-        ? 'Next Action: Re-attempt close on remaining positions or inspect failure reasons.'
-        : 'Next Action: Stay flat until the next explicit directive.',
-    ].join('\n\n');
   }
 
   private async runToolFirstGuard(message: string): Promise<string> {
