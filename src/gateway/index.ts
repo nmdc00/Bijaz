@@ -53,6 +53,7 @@ import {
 } from './scheduled_task_format.js';
 import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
+import { handleDashboardPageRequest } from './dashboard_page.js';
 import { handleDashboardApiRequest } from './dashboard_api.js';
 
 const config = loadConfig();
@@ -1184,6 +1185,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (handleDashboardApiRequest(req, res)) {
+    return;
+  }
+
+  if (handleDashboardPageRequest(req, res)) {
     return;
   }
 
