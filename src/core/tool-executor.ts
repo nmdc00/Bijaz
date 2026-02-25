@@ -1629,7 +1629,9 @@ export async function executeToolCall(
           paperInitialCashUsdc,
         });
         const paperReduceOnlyBefore =
-          bookMode === 'paper' && isNativePaperExecutor && reduceOnly ? positionBefore : null;
+          bookMode === 'paper' && isNativePaperExecutor && reduceOnly
+            ? getPaperPositionSnapshot(symbol, paperInitialCashUsdc)
+            : null;
         const executionStartMs = Date.now();
         const baseSlippageBps = Math.max(0, Number(ctx.config.hyperliquid?.defaultSlippageBps ?? 10));
         const execution = await executePerpWithRetry({
