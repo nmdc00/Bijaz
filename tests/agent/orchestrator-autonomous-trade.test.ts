@@ -1519,6 +1519,8 @@ describe('runOrchestrator autonomous trade contract', () => {
     expect(
       ((placeExec?.result as { success: true; data: { reason?: string } }).data.reason ?? '').toLowerCase()
     ).toContain('chat-origin requests are analysis-only');
+    expect(result.response).toContain('Action: I did not place a new perp order in this cycle.');
+    expect(result.response).not.toContain('Action: I executed a buy.');
   });
 
   it('allows mutating trade tools for explicit manual_override origin', async () => {

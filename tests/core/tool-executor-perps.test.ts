@@ -64,6 +64,37 @@ describe('tool-executor perps', () => {
     expect(res.success).toBe(true);
   });
 
+  it('verifies paper reduce-only closes with explicit postcondition metadata', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+
+    const openRes = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'buy', size: 0.1, mode: 'paper' },
+      { config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any, marketClient, executor, limiter }
+    );
+    expect(openRes.success).toBe(true);
+
+    const closeRes = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'BTC', side: 'sell', size: 0.1, reduce_only: true, mode: 'paper' },
+      { config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any, marketClient, executor, limiter }
+    );
+    expect(closeRes.success).toBe(true);
+    if (closeRes.success) {
+      const post = (closeRes.data as { reduce_only_postcondition?: Record<string, unknown> })
+        .reduce_only_postcondition;
+      expect(post).toBeTruthy();
+      expect(post?.verified).toBe(true);
+      expect(post?.close_complete).toBe(true);
+      expect(post?.after_size).toBe(0);
+    }
+  });
+
   it('retries no-immediate-match failures with widened slippage and succeeds', async () => {
     const slippageSeen: number[] = [];
     let confirmCount = 0;

@@ -879,7 +879,16 @@ function enforceTradeResponseContract(
     );
     // Strip permission-seeking phrases if the synthesizer emitted them.
     const sanitizedResponse = response.replace(/\bif you want\b[^.!?]*[.!?]?/gi, '').trim();
+    const looksLikeExecutionClaim =
+      /\bAction:\s*/i.test(sanitizedResponse) ||
+      /\b(i|we)\s+(closed|flattened|executed|placed|bought|sold|reduced|cancelled)\b/i.test(sanitizedResponse);
     if (!hasTerminalTradeExecution) {
+      if (looksLikeExecutionClaim) {
+        if (hasContractShape) {
+          return rewriteActionLine(response);
+        }
+        return `${sanitizedResponse || response}\n\n${deterministicContract}`;
+      }
       return sanitizedResponse || response;
     }
     if (hasContractShape) {
