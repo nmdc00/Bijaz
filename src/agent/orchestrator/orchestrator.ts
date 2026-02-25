@@ -847,10 +847,17 @@ function enforceTradeResponseContract(
   state: AgentState,
   executionOrigin: 'chat' | 'autonomous' | 'manual_override' | 'system' = 'system'
 ): string {
+  if (state.mode !== 'trade') {
+    return response;
+  }
+
+  const responseLooksLikeExecutionClaim =
+    /\bAction:\s*/i.test(response) ||
+    /\b(i|we)\s+(closed|flattened|executed|placed|bought|sold|reduced|cancelled)\b/i.test(response);
   const shouldEnforce =
-    state.mode === 'trade' &&
-    (isTradeExecutionIntent(state.goal) ||
-      state.toolExecutions.some((execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName)));
+    isTradeExecutionIntent(state.goal) ||
+    state.toolExecutions.some((execution) => TERMINAL_TRADE_TOOLS.has(execution.toolName)) ||
+    (executionOrigin === 'chat' && responseLooksLikeExecutionClaim);
   if (!shouldEnforce) {
     return response;
   }
