@@ -16,6 +16,20 @@ export interface PerpTradeRecord extends PerpTradeInput {
   createdAt: string;
 }
 
+function ensurePerpPositionLifecycleSchema(): void {
+  const db = openDatabase();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS perp_position_lifecycles (
+      symbol TEXT PRIMARY KEY,
+      trade_id INTEGER NOT NULL,
+      side TEXT NOT NULL CHECK (side IN ('long', 'short')),
+      opened_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES perp_trades(id)
+    );
+  `);
+}
+
 export function recordPerpTrade(input: PerpTradeInput): number {
   const db = openDatabase();
   const result = db.prepare(
@@ -51,6 +65,60 @@ export function recordPerpTrade(input: PerpTradeInput): number {
     status: input.status ?? null,
   });
   return Number(result.lastInsertRowid ?? 0);
+}
+
+export function getActivePerpPositionTradeId(symbol: string): number | null {
+  ensurePerpPositionLifecycleSchema();
+  const db = openDatabase();
+  const normalized = symbol.trim().toUpperCase();
+  if (!normalized) return null;
+  const row = db
+    .prepare(
+      `
+        SELECT trade_id
+        FROM perp_position_lifecycles
+        WHERE symbol = ?
+        LIMIT 1
+      `
+    )
+    .get(normalized) as { trade_id?: number } | undefined;
+  const tradeId = Number(row?.trade_id ?? NaN);
+  return Number.isFinite(tradeId) && tradeId > 0 ? tradeId : null;
+}
+
+export function setActivePerpPositionLifecycle(input: {
+  symbol: string;
+  tradeId: number;
+  side: 'long' | 'short';
+}): void {
+  ensurePerpPositionLifecycleSchema();
+  const db = openDatabase();
+  const symbol = input.symbol.trim().toUpperCase();
+  if (!symbol) {
+    return;
+  }
+  db.prepare(
+    `
+      INSERT INTO perp_position_lifecycles (symbol, trade_id, side, opened_at, updated_at)
+      VALUES (@symbol, @tradeId, @side, datetime('now'), datetime('now'))
+      ON CONFLICT(symbol) DO UPDATE SET
+        trade_id = excluded.trade_id,
+        side = excluded.side,
+        updated_at = datetime('now')
+    `
+  ).run({
+    symbol,
+    tradeId: input.tradeId,
+    side: input.side,
+  });
+}
+
+export function clearActivePerpPositionLifecycle(symbol: string): void {
+  ensurePerpPositionLifecycleSchema();
+  const db = openDatabase();
+  const normalized = symbol.trim().toUpperCase();
+  if (!normalized) return;
+  db.prepare(`DELETE FROM perp_position_lifecycles WHERE symbol = ?`).run(normalized);
 }
 
 export function listPerpTrades(params?: { symbol?: string; limit?: number }): PerpTradeRecord[] {

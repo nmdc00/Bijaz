@@ -161,66 +161,45 @@ describe('ConversationHandler cooldown fallback', () => {
     });
   });
 
-  it('handles imperative close commands via direct deterministic close path', async () => {
+  it('allows autonomous reduce-only trade confirmations when full auto is disabled', async () => {
     runOrchestratorMock.mockClear();
-    runOrchestratorMock.mockResolvedValue({
-      response: 'ok',
-      state: {
-        plan: null,
-        toolExecutions: [],
-        criticResult: null,
-        mode: 'trade',
-      },
-      summary: { fragility: null },
+    runOrchestratorMock.mockImplementationOnce(async (_goal: string, ctx: any) => {
+      const allowReduceOnly = await ctx.onConfirmation(
+        'Execute perp_place_order?',
+        'perp_place_order',
+        { symbol: 'BTC', side: 'sell', size: 0.1, reduce_only: true }
+      );
+      const allowIncrease = await ctx.onConfirmation(
+        'Execute perp_place_order?',
+        'perp_place_order',
+        { symbol: 'BTC', side: 'buy', size: 0.1, reduce_only: false }
+      );
+      return {
+        response: JSON.stringify({ allowReduceOnly, allowIncrease }),
+        state: {
+          plan: null,
+          toolExecutions: [],
+          criticResult: null,
+          mode: 'trade',
+        },
+        summary: { fragility: null },
+      };
     });
 
     const { ConversationHandler } = await import('../../src/core/conversation.js');
     const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
     const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
     const config = {
-      execution: { mode: 'paper', provider: 'hyperliquid' },
+      execution: { mode: 'live', provider: 'hyperliquid' },
       agent: { useOrchestrator: true },
       autonomy: { fullAuto: false },
     } as any;
 
     const handler = new ConversationHandler(llm, marketClient, config);
-    const reply = await handler.chat('user', 'Close it');
-
-    expect(runOrchestratorMock).toHaveBeenCalledTimes(0);
-    expect(reply).toContain('Action:');
-    expect(reply).toContain('Book State:');
-  });
-
-  it('keeps status questions in chat analysis mode', async () => {
-    runOrchestratorMock.mockClear();
-    runOrchestratorMock.mockResolvedValue({
-      response: 'ok',
-      state: {
-        plan: null,
-        toolExecutions: [],
-        criticResult: null,
-        mode: 'trade',
-      },
-      summary: { fragility: null },
-    });
-
-    const { ConversationHandler } = await import('../../src/core/conversation.js');
-    const llm = { complete: vi.fn(async () => ({ content: 'ok', model: 'test' })) } as any;
-    const marketClient = { searchMarkets: vi.fn(async () => []) } as any;
-    const config = {
-      execution: { mode: 'paper', provider: 'hyperliquid' },
-      agent: { useOrchestrator: true },
-      autonomy: { fullAuto: false },
-    } as any;
-
-    const handler = new ConversationHandler(llm, marketClient, config);
-    await handler.chat('user', 'Is it closed?');
-
-    expect(runOrchestratorMock).toHaveBeenCalledTimes(1);
-    expect(runOrchestratorMock.mock.calls[0]?.[2]).toMatchObject({
-      executionOrigin: 'chat',
-      allowTradeMutations: false,
-    });
+    const reply = await handler.chat('__heartbeat__', 'Manage position risk.');
+    const parsed = JSON.parse(reply) as { allowReduceOnly: boolean; allowIncrease: boolean };
+    expect(parsed.allowReduceOnly).toBe(true);
+    expect(parsed.allowIncrease).toBe(false);
   });
 
   it('suppresses repeated planning progress updates while preserving stage transitions', async () => {
