@@ -457,6 +457,113 @@ function listPaperOpenPositionRows(db: Database.Database): OpenPositionRow[] {
     };
   });
 }
+
+type TradeLogRow = {
+  tradeId: number | null;
+  symbol: string;
+  side: 'buy' | 'sell' | null;
+  signalClass: string | null;
+  outcome: 'executed' | 'failed' | 'blocked' | 'unknown';
+  directionScore: number | null;
+  timingScore: number | null;
+  sizingScore: number | null;
+  exitScore: number | null;
+  rCaptured: number | null;
+  thesisCorrect: boolean | null;
+  qualityBand: 'good' | 'mixed' | 'poor' | 'unknown';
+  closedAt: string;
+};
+
+function toOptionalScore(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(1, n));
+}
+
+function resolveQualityBand(row: {
+  directionScore: number | null;
+  timingScore: number | null;
+  sizingScore: number | null;
+  exitScore: number | null;
+}): 'good' | 'mixed' | 'poor' | 'unknown' {
+  const scores = [row.directionScore, row.timingScore, row.sizingScore, row.exitScore].filter(
+    (value): value is number => value != null
+  );
+  if (scores.length === 0) return 'unknown';
+  const avg = scores.reduce((sum, value) => sum + value, 0) / scores.length;
+  if (avg >= 0.7) return 'good';
+  if (avg < 0.45) return 'poor';
+  return 'mixed';
+}
+
+function listTradeLogRows(db: Database.Database, limit = 30): TradeLogRow[] {
+  const rows = db
+    .prepare(
+      `
+        SELECT payload, created_at as createdAt
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+        ORDER BY created_at DESC
+        LIMIT ?
+      `
+    )
+    .all(Math.max(1, Math.min(limit, 100))) as Array<{ payload?: string; createdAt?: string }>;
+
+  const out: TradeLogRow[] = [];
+  for (const row of rows) {
+    if (!row.payload) continue;
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const outcomeRaw = String(payload.outcome ?? '').trim().toLowerCase();
+    if (outcomeRaw !== 'executed' && outcomeRaw !== 'failed' && outcomeRaw !== 'blocked') {
+      continue;
+    }
+    if (outcomeRaw === 'blocked') {
+      continue;
+    }
+
+    const directionScore = toOptionalScore(payload.directionScore ?? payload.direction_score);
+    const timingScore = toOptionalScore(payload.timingScore ?? payload.timing_score);
+    const sizingScore = toOptionalScore(payload.sizingScore ?? payload.sizing_score);
+    const exitScore = toOptionalScore(payload.exitScore ?? payload.exit_score);
+    const rCapturedRaw = Number(payload.capturedR ?? payload.captured_r);
+    const rCaptured = Number.isFinite(rCapturedRaw) ? rCapturedRaw : null;
+    const sideRaw = String(payload.side ?? '').trim().toLowerCase();
+    const side: 'buy' | 'sell' | null = sideRaw === 'buy' || sideRaw === 'sell' ? sideRaw : null;
+    const thesisCorrect =
+      typeof payload.thesisCorrect === 'boolean' ? payload.thesisCorrect : null;
+    const closedAt = String(payload.closedAt ?? row.createdAt ?? new Date().toISOString());
+
+    const tradeIdRaw = Number(payload.tradeId);
+    out.push({
+      tradeId: Number.isFinite(tradeIdRaw) ? tradeIdRaw : null,
+      symbol: String(payload.symbol ?? '').toUpperCase(),
+      side,
+      signalClass: typeof payload.signalClass === 'string' ? payload.signalClass : null,
+      outcome: outcomeRaw as 'executed' | 'failed',
+      directionScore,
+      timingScore,
+      sizingScore,
+      exitScore,
+      rCaptured,
+      thesisCorrect,
+      qualityBand: resolveQualityBand({
+        directionScore,
+        timingScore,
+        sizingScore,
+        exitScore,
+      }),
+      closedAt,
+    });
+  }
+
+  return out;
+}
 export function buildDashboardApiPayload(params?: {
   db?: Database.Database;
   filters?: DashboardFilters;
@@ -494,7 +601,7 @@ export function buildDashboardApiPayload(params?: {
       };
     };
     tradeLog: {
-      rows: unknown[];
+      rows: TradeLogRow[];
       limit: number;
     };
     promotionGates: {
@@ -540,6 +647,7 @@ export function buildDashboardApiPayload(params?: {
     (sum, row) => sum + row.unrealizedPnlUsd,
     0
   );
+  const tradeLogRows = listTradeLogRows(db, 30);
 
   return {
     meta: {
@@ -567,7 +675,7 @@ export function buildDashboardApiPayload(params?: {
         },
       },
       tradeLog: {
-        rows: [],
+        rows: tradeLogRows,
         limit: 30,
       },
       promotionGates: {

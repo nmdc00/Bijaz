@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../../src/memory/db.js';
 import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
+import { recordPerpTradeJournal } from '../../src/memory/perp_trade_journal.js';
 import {
   buildDashboardApiPayload,
   handleDashboardApiRequest,
@@ -151,6 +152,59 @@ describe('dashboard api payload', () => {
     expect(payload.sections.openPositions.summary.longCount).toBe(1);
     expect(payload.sections.openPositions.summary.shortCount).toBe(0);
     expect(payload.sections.openPositions.summary.totalUnrealizedPnlUsd).toBeCloseTo(9.95, 6);
+  });
+
+  it('returns recent trade-log rows with component quality bands', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-trade-log-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'BTC',
+      side: 'buy',
+      signalClass: 'breakout_15m',
+      outcome: 'executed',
+      directionScore: 0.9,
+      timingScore: 0.8,
+      sizingScore: 0.75,
+      exitScore: 0.7,
+      capturedR: 1.2,
+      thesisCorrect: true,
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'ETH',
+      side: 'sell',
+      signalClass: 'mean_reversion_5m',
+      outcome: 'failed',
+      directionScore: 0.2,
+      timingScore: 0.25,
+      sizingScore: 0.3,
+      exitScore: 0.2,
+      capturedR: -0.9,
+      thesisCorrect: false,
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.tradeLog.rows.length).toBe(2);
+    const bySymbol = new Map(payload.sections.tradeLog.rows.map((row) => [row.symbol, row]));
+    expect(bySymbol.get('BTC')?.qualityBand).toBe('good');
+    expect(bySymbol.get('ETH')?.qualityBand).toBe('poor');
+    expect(bySymbol.get('BTC')?.rCaptured).toBe(1.2);
+    expect(bySymbol.get('ETH')?.rCaptured).toBe(-0.9);
   });
 });
 
