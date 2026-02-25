@@ -575,6 +575,26 @@ function journalModeMatches(payload: Record<string, unknown>, filters: Dashboard
   return entryMode === filters.mode;
 }
 
+function resolveJournalSignalClass(payload: Record<string, unknown>): string | null {
+  const candidates = [payload.signalClass, payload.signal_class];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function resolveJournalMarketRegime(payload: Record<string, unknown>): string | null {
+  const candidates = [payload.marketRegime, payload.market_regime];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
 function listTradeLogRows(
   db: Database.Database,
   filters: DashboardFilters,
@@ -630,7 +650,7 @@ function listTradeLogRows(
       tradeId: Number.isFinite(tradeIdRaw) ? tradeIdRaw : null,
       symbol: String(payload.symbol ?? '').toUpperCase(),
       side,
-      signalClass: typeof payload.signalClass === 'string' ? payload.signalClass : null,
+      signalClass: resolveJournalSignalClass(payload),
       outcome: outcomeRaw as 'executed' | 'failed',
       directionScore,
       timingScore,
@@ -728,7 +748,13 @@ function listPromotionGateRows(
     if ((outcome !== 'executed' && outcome !== 'failed') || !entry.symbol) {
       continue;
     }
-    const signalClass = String(entry.signalClass ?? 'unknown');
+    const signalClass =
+      typeof entry.signalClass === 'string' && entry.signalClass.trim().length > 0
+        ? entry.signalClass.trim()
+        : typeof (entry as { signal_class?: unknown }).signal_class === 'string' &&
+            String((entry as { signal_class?: unknown }).signal_class).trim().length > 0
+          ? String((entry as { signal_class?: unknown }).signal_class).trim()
+          : 'unknown';
     keys.add(`${String(entry.symbol).toUpperCase()}:${signalClass}`);
   }
 
@@ -785,7 +811,140 @@ function listPromotionGateRows(
   return rows.sort((a, b) => {
     if (a.promoted !== b.promoted) return a.promoted ? 1 : -1;
     return b.sampleCount - a.sampleCount;
-    });
+  });
+}
+
+type PerformanceBreakdownRow = {
+  key: string;
+  winRate: number;
+  expectancyR: number;
+  sampleCount: number;
+};
+
+function resolveJournalOutcome(payload: Record<string, unknown>): 'executed' | 'failed' | 'blocked' | 'unknown' {
+  const raw = String(payload.outcome ?? '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'executed' || raw === 'failed' || raw === 'blocked') {
+    return raw;
+  }
+  return 'unknown';
+}
+
+function resolveJournalClosedAtMs(
+  payload: Record<string, unknown>,
+  createdAt: string | undefined
+): number | null {
+  const raw = String(payload.closedAt ?? createdAt ?? '');
+  const value = Date.parse(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function resolveSessionKey(timestampMs: number): string {
+  const hour = new Date(timestampMs).getUTCHours();
+  if (hour < 8) return 'asia';
+  if (hour < 16) return 'europe';
+  return 'us';
+}
+
+function resolveJournalExpectancyScore(payload: Record<string, unknown>): number {
+  const r = Number(payload.capturedR ?? payload.captured_r);
+  if (Number.isFinite(r)) {
+    return r;
+  }
+  if (payload.thesisCorrect === true) return 1;
+  if (payload.thesisCorrect === false) return -1;
+  const outcome = resolveJournalOutcome(payload);
+  if (outcome === 'failed') return -1;
+  if (outcome === 'executed') return 0;
+  return 0;
+}
+
+function resolveJournalWin(payload: Record<string, unknown>): boolean {
+  const r = Number(payload.capturedR ?? payload.captured_r);
+  if (Number.isFinite(r)) return r > 0;
+  return payload.thesisCorrect === true;
+}
+
+function listPerformanceBreakdown(
+  db: Database.Database,
+  filters: DashboardFilters
+): {
+  bySignalClass: PerformanceBreakdownRow[];
+  byRegime: PerformanceBreakdownRow[];
+  bySession: PerformanceBreakdownRow[];
+} {
+  if (!tableExists(db, 'decision_artifacts')) {
+    return { bySignalClass: [], byRegime: [], bySession: [] };
+  }
+  const rows = db
+    .prepare(
+      `
+        SELECT payload, created_at as createdAt
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+        ORDER BY created_at DESC
+        LIMIT 2000
+      `
+    )
+    .all() as Array<{ payload?: string; createdAt?: string }>;
+  const { fromMs, toMs } = resolveTimeRange(filters);
+
+  const signalAgg = new Map<string, { sampleCount: number; wins: number; scoreSum: number }>();
+  const regimeAgg = new Map<string, { sampleCount: number; wins: number; scoreSum: number }>();
+  const sessionAgg = new Map<string, { sampleCount: number; wins: number; scoreSum: number }>();
+  const add = (map: Map<string, { sampleCount: number; wins: number; scoreSum: number }>, key: string, win: boolean, score: number) => {
+    const current = map.get(key) ?? { sampleCount: 0, wins: 0, scoreSum: 0 };
+    current.sampleCount += 1;
+    current.wins += win ? 1 : 0;
+    current.scoreSum += score;
+    map.set(key, current);
+  };
+
+  for (const row of rows) {
+    if (!row.payload) continue;
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!journalModeMatches(payload, filters)) continue;
+    const outcome = resolveJournalOutcome(payload);
+    if (outcome !== 'executed' && outcome !== 'failed') continue;
+    const closedAtMs = resolveJournalClosedAtMs(payload, row.createdAt);
+    if (closedAtMs == null) continue;
+    if ((fromMs != null && closedAtMs < fromMs) || (toMs != null && closedAtMs > toMs)) {
+      continue;
+    }
+    const signalClass = resolveJournalSignalClass(payload) ?? 'unknown';
+    const regime = resolveJournalMarketRegime(payload) ?? 'unknown';
+    const session = resolveSessionKey(closedAtMs);
+    const score = resolveJournalExpectancyScore(payload);
+    const win = resolveJournalWin(payload);
+    add(signalAgg, signalClass, win, score);
+    add(regimeAgg, regime, win, score);
+    add(sessionAgg, session, win, score);
+  }
+
+  const toRows = (
+    map: Map<string, { sampleCount: number; wins: number; scoreSum: number }>
+  ): PerformanceBreakdownRow[] =>
+    [...map.entries()]
+      .map(([key, value]) => ({
+        key,
+        winRate: value.sampleCount > 0 ? value.wins / value.sampleCount : 0,
+        expectancyR: value.sampleCount > 0 ? value.scoreSum / value.sampleCount : 0,
+        sampleCount: value.sampleCount,
+      }))
+      .sort((a, b) => b.sampleCount - a.sampleCount)
+      .slice(0, 8);
+
+  return {
+    bySignalClass: toRows(signalAgg),
+    byRegime: toRows(regimeAgg),
+    bySession: toRows(sessionAgg),
+  };
 }
 
 function countTradeJournalRows(
@@ -844,6 +1003,8 @@ function buildPolicyStateSection(db: Database.Database): {
 
   let observationOnlyUntilMsRaw: unknown = null;
   let leverageCapRawInput: unknown = null;
+  let drawdownCapRemainingUsdRaw: unknown = null;
+  let tradesRemainingTodayRaw: unknown = null;
   let updatedAtRaw: unknown = null;
   try {
     if (tableHasColumn(db, 'autonomy_policy_state', 'payload')) {
@@ -866,9 +1027,21 @@ function buildPolicyStateSection(db: Database.Database): {
             payload.observationOnlyUntilMs ?? payload.observation_only_until_ms ?? null;
           leverageCapRawInput =
             payload.leverageCapOverride ?? payload.leverage_cap_override ?? payload.leverageCap ?? null;
+          drawdownCapRemainingUsdRaw =
+            payload.drawdownCapRemainingUsd ??
+            payload.drawdown_cap_remaining_usd ??
+            payload.drawdownRemainingUsd ??
+            null;
+          tradesRemainingTodayRaw =
+            payload.tradesRemainingToday ??
+            payload.trades_remaining_today ??
+            payload.tradesRemaining ??
+            null;
         } catch {
           observationOnlyUntilMsRaw = null;
           leverageCapRawInput = null;
+          drawdownCapRemainingUsdRaw = null;
+          tradesRemainingTodayRaw = null;
         }
       }
     } else {
@@ -903,10 +1076,19 @@ function buildPolicyStateSection(db: Database.Database): {
 
   const leverageCapRaw = Number(leverageCapRawInput ?? NaN);
   const leverageCap = Number.isFinite(leverageCapRaw) ? leverageCapRaw : null;
+  const drawdownCapRemainingRaw = Number(drawdownCapRemainingUsdRaw ?? NaN);
+  const drawdownCapRemainingUsd = Number.isFinite(drawdownCapRemainingRaw)
+    ? drawdownCapRemainingRaw
+    : null;
 
   const maxTradesRaw = Number(process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY ?? NaN);
-  let tradesRemainingToday: number | null = null;
-  if (Number.isFinite(maxTradesRaw) && maxTradesRaw > 0) {
+  let tradesRemainingToday =
+    tradesRemainingTodayRaw == null
+      ? null
+      : Number.isFinite(Number(tradesRemainingTodayRaw))
+        ? Number(tradesRemainingTodayRaw)
+        : null;
+  if (tradesRemainingToday == null && Number.isFinite(maxTradesRaw) && maxTradesRaw > 0) {
     const todayCount = safeCount(
       db,
       `
@@ -922,7 +1104,7 @@ function buildPolicyStateSection(db: Database.Database): {
   return {
     observationMode,
     leverageCap,
-    drawdownCapRemainingUsd: null,
+    drawdownCapRemainingUsd,
     tradesRemainingToday,
     updatedAt: updatedAtRaw ? String(updatedAtRaw) : null,
   };
@@ -1013,6 +1195,7 @@ export function buildDashboardApiPayload(params?: {
   const tradeLogRows = listTradeLogRows(db, filters, 30);
   const promotionGateRows = listPromotionGateRows(db, filters);
   const policyState = buildPolicyStateSection(db);
+  const performanceBreakdown = listPerformanceBreakdown(db, filters);
 
   return {
     meta: {
@@ -1054,9 +1237,9 @@ export function buildDashboardApiPayload(params?: {
         updatedAt: policyState.updatedAt,
       },
       performanceBreakdown: {
-        bySignalClass: [],
-        byRegime: [],
-        bySession: [],
+        bySignalClass: performanceBreakdown.bySignalClass,
+        byRegime: performanceBreakdown.byRegime,
+        bySession: performanceBreakdown.bySession,
       },
     },
   };

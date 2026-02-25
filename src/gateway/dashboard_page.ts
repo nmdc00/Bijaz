@@ -6,7 +6,7 @@ function buildDashboardHtml(): string {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Thufir Product Dashboard</title>
+    <title>Thufir Dashboard</title>
     <style>
       :root {
         --bg-deep: #081223;
@@ -45,6 +45,25 @@ function buildDashboardHtml(): string {
                           linear-gradient(90deg, rgba(245, 217, 183, 0.04) 1px, transparent 1px);
         background-size: 28px 28px;
         mask-image: radial-gradient(circle at center, black 0%, rgba(0, 0, 0, 0.25) 70%, transparent 100%);
+      }
+      body::after {
+        content: "";
+        position: fixed;
+        inset: -10% -10% 0 -10%;
+        pointer-events: none;
+        z-index: 0;
+        opacity: 0.36;
+        background:
+          radial-gradient(110% 55% at 18% 108%, rgba(216, 106, 43, 0.35), transparent 66%),
+          radial-gradient(95% 50% at 58% 112%, rgba(245, 157, 67, 0.20), transparent 70%),
+          radial-gradient(100% 55% at 88% 110%, rgba(169, 66, 46, 0.24), transparent 72%);
+        animation: duneDrift 48s ease-in-out infinite alternate;
+        filter: blur(1px);
+      }
+      @keyframes duneDrift {
+        0% { transform: translate3d(-1.5%, 0, 0) scale(1.01); }
+        50% { transform: translate3d(1.25%, -0.5%, 0) scale(1.02); }
+        100% { transform: translate3d(-1%, 0.3%, 0) scale(1.01); }
       }
       #app {
         max-width: 1380px;
@@ -343,7 +362,7 @@ function buildDashboardHtml(): string {
           <div>
             <header className="hero">
               <div className="title-wrap">
-                <h1>Product Dashboard</h1>
+                <h1>Thufir Dashboard</h1>
                 <p>Desert sunset control room for paper/live execution quality and promotion readiness.</p>
               </div>
               <div className="stamp">
