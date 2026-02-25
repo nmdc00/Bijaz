@@ -94,6 +94,44 @@ const PERSONALITY_MODES: Record<string, { label: string; instruction: string }> 
   },
 };
 
+function isSkippedToolExecution(execution: ToolExecution): boolean {
+  if (!execution.result.success) return false;
+  const data = (execution.result as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') return false;
+  return (data as { skipped?: unknown }).skipped === true;
+}
+
+function hasVerifiedHeartbeatAction(toolExecutions: ToolExecution[]): boolean {
+  const mutatingTools = new Set([
+    'perp_place_order',
+    'perp_cancel_order',
+    'hyperliquid_usd_class_transfer',
+    'cctp_bridge_usdc',
+    'hyperliquid_deposit_usdc',
+  ]);
+  return toolExecutions.some((execution) => {
+    if (!mutatingTools.has(execution.toolName)) return false;
+    if (isSkippedToolExecution(execution)) return false;
+    if (!execution.result.success) return false;
+    if (execution.toolName !== 'perp_place_order') return true;
+    const message = (
+      execution.result as { data?: { message?: unknown } }
+    )?.data?.message;
+    const normalized = typeof message === 'string' ? message.toLowerCase() : '';
+    return /oid=|order\s+(filled|resting|placed)/.test(normalized);
+  });
+}
+
+function normalizeHeartbeatResponse(response: string, toolExecutions: ToolExecution[]): string {
+  const text = response.trim();
+  const hasVerifiedAction = hasVerifiedHeartbeatAction(toolExecutions);
+  if (hasVerifiedAction) {
+    if (text.toUpperCase().startsWith('HEARTBEAT_ACTION:')) return response;
+    return `HEARTBEAT_ACTION: ${text}`;
+  }
+  return 'HEARTBEAT_OK';
+}
+
 /**
  * Build context about the user and their trading preferences
  */
@@ -480,6 +518,9 @@ export class ConversationHandler {
 
           if (!response || response.trim() === '') {
             response = await this.buildCooldownSafeFallbackResponse();
+          }
+          if (userId === '__heartbeat__') {
+            response = normalizeHeartbeatResponse(response, result.state.toolExecutions);
           }
           response = appendProactiveAttribution(response, proactiveSnapshot ?? null);
 
