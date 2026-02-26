@@ -5,6 +5,7 @@ export interface PerpTradeInput {
   symbol: string;
   side: 'buy' | 'sell';
   size: number;
+  executionMode?: 'paper' | 'live' | null;
   price?: number | null;
   leverage?: number | null;
   orderType?: 'market' | 'limit' | null;
@@ -14,6 +15,15 @@ export interface PerpTradeInput {
 export interface PerpTradeRecord extends PerpTradeInput {
   id: number;
   createdAt: string;
+}
+
+function ensurePerpTradesExecutionModeSchema(): void {
+  const db = openDatabase();
+  const rows = db.prepare("PRAGMA table_info('perp_trades')").all() as Array<{ name?: string }>;
+  const hasExecutionMode = rows.some((row) => String(row.name ?? '') === 'execution_mode');
+  if (!hasExecutionMode) {
+    db.exec("ALTER TABLE perp_trades ADD COLUMN execution_mode TEXT");
+  }
 }
 
 function ensurePerpPositionLifecycleSchema(): void {
@@ -31,6 +41,7 @@ function ensurePerpPositionLifecycleSchema(): void {
 }
 
 export function recordPerpTrade(input: PerpTradeInput): number {
+  ensurePerpTradesExecutionModeSchema();
   const db = openDatabase();
   const result = db.prepare(
     `
@@ -39,6 +50,7 @@ export function recordPerpTrade(input: PerpTradeInput): number {
         symbol,
         side,
         size,
+        execution_mode,
         price,
         leverage,
         order_type,
@@ -48,6 +60,7 @@ export function recordPerpTrade(input: PerpTradeInput): number {
         @symbol,
         @side,
         @size,
+        @executionMode,
         @price,
         @leverage,
         @orderType,
@@ -59,6 +72,7 @@ export function recordPerpTrade(input: PerpTradeInput): number {
     symbol: input.symbol,
     side: input.side,
     size: input.size,
+    executionMode: input.executionMode ?? null,
     price: input.price ?? null,
     leverage: input.leverage ?? null,
     orderType: input.orderType ?? null,
@@ -122,6 +136,7 @@ export function clearActivePerpPositionLifecycle(symbol: string): void {
 }
 
 export function listPerpTrades(params?: { symbol?: string; limit?: number }): PerpTradeRecord[] {
+  ensurePerpTradesExecutionModeSchema();
   const db = openDatabase();
   const limit = Math.min(Math.max(params?.limit ?? 50, 1), 500);
   const symbol = params?.symbol ?? null;
@@ -134,6 +149,7 @@ export function listPerpTrades(params?: { symbol?: string; limit?: number }): Pe
                symbol,
                side,
                size,
+               execution_mode,
                price,
                leverage,
                order_type,
@@ -153,6 +169,10 @@ export function listPerpTrades(params?: { symbol?: string; limit?: number }): Pe
     symbol: String(row.symbol ?? ''),
     side: (row.side as 'buy' | 'sell') ?? 'buy',
     size: Number(row.size ?? 0),
+    executionMode:
+      row.execution_mode === 'paper' || row.execution_mode === 'live'
+        ? (row.execution_mode as 'paper' | 'live')
+        : null,
     price: row.price == null ? null : Number(row.price),
     leverage: row.leverage == null ? null : Number(row.leverage),
     orderType:

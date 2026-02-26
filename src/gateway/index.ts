@@ -53,6 +53,8 @@ import {
 } from './scheduled_task_format.js';
 import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
+import { handleDashboardPageRequest } from './dashboard_page.js';
+import { handleDashboardApiRequest } from './dashboard_api.js';
 
 const config = loadConfig();
 try {
@@ -1179,6 +1181,15 @@ const server = http.createServer(async (req, res) => {
   if (req.url?.startsWith('/health')) {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
+    return;
+  }
+
+  (req as typeof req & { thufirConfig?: typeof config }).thufirConfig = config;
+  if (handleDashboardApiRequest(req, res)) {
+    return;
+  }
+
+  if (handleDashboardPageRequest(req, res)) {
     return;
   }
 
