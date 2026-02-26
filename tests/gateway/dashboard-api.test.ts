@@ -489,6 +489,51 @@ describe('dashboard api payload', () => {
     expect(payload.sections.policyState.updatedAt).toBe('2026-02-25T19:00:00.000Z');
     delete process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY;
   });
+
+  it('derives drawdown cap remaining from configured daily cap and todays pnl rollup', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-policy-drawdown-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    process.env.THUFIR_DASHBOARD_DAILY_DRAWDOWN_CAP_USD = '100';
+    const db = openDatabase(dbPath);
+
+    db.exec(`
+      DROP TABLE IF EXISTS autonomy_policy_state;
+      CREATE TABLE autonomy_policy_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        payload TEXT NOT NULL,
+        updated_at TEXT
+      );
+    `);
+
+    db.prepare(
+      `
+        INSERT INTO autonomy_policy_state (payload, updated_at)
+        VALUES (?, ?)
+      `
+    ).run(
+      JSON.stringify({
+        observationOnlyUntilMs: Date.now() + 120_000,
+        leverageCapOverride: 1.5,
+      }),
+      '2026-02-25T19:00:00.000Z'
+    );
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.policyState.drawdownCapRemainingUsd).toBe(100);
+    delete process.env.THUFIR_DASHBOARD_DAILY_DRAWDOWN_CAP_USD;
+  });
 });
 
 describe('dashboard api route handler', () => {

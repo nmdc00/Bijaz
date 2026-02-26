@@ -3,7 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
 
 import { buildPaperPromotionReport } from '../core/paper_promotion.js';
-import type { ThufirConfig } from '../core/config.js';
+import { loadConfig, type ThufirConfig } from '../core/config.js';
+import { getDailyPnLRollup } from '../core/daily_pnl.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { openDatabase } from '../memory/db.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
@@ -59,6 +60,14 @@ type EquityCurveSection = {
     maxDrawdownPct: number | null;
   };
 };
+
+function getDashboardConfig(): ThufirConfig | null {
+  try {
+    return loadConfig();
+  } catch {
+    return null;
+  }
+}
 
 function normalizeIso(input: string | null): string | null {
   if (!input) return null;
@@ -1226,19 +1235,30 @@ function buildPolicyStateSection(db: Database.Database): {
 
   const leverageCapRaw = Number(leverageCapRawInput ?? NaN);
   const leverageCap = Number.isFinite(leverageCapRaw) ? leverageCapRaw : null;
-  const drawdownCapRemainingRaw = Number(drawdownCapRemainingUsdRaw ?? NaN);
-  const drawdownCapRemainingUsd = Number.isFinite(drawdownCapRemainingRaw)
-    ? drawdownCapRemainingRaw
+  const payloadDrawdownCapRemainingRaw = Number(drawdownCapRemainingUsdRaw ?? NaN);
+  const payloadDrawdownCapRemainingUsd = Number.isFinite(payloadDrawdownCapRemainingRaw)
+    ? payloadDrawdownCapRemainingRaw
     : null;
 
-  const maxTradesRaw = Number(process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY ?? NaN);
+  const config = getDashboardConfig();
+  const maxTradesEnvRaw = Number(process.env.THUFIR_DASHBOARD_MAX_TRADES_PER_DAY ?? NaN);
+  const maxTradesConfigRaw = Number(
+    (config?.autonomy as { maxTradesPerDay?: unknown } | undefined)?.maxTradesPerDay ?? NaN
+  );
+  const configuredMaxTradesPerDay =
+    Number.isFinite(maxTradesEnvRaw) && maxTradesEnvRaw > 0
+      ? Math.floor(maxTradesEnvRaw)
+      : Number.isFinite(maxTradesConfigRaw) && maxTradesConfigRaw > 0
+        ? Math.floor(maxTradesConfigRaw)
+        : null;
+
   let tradesRemainingToday =
     tradesRemainingTodayRaw == null
       ? null
       : Number.isFinite(Number(tradesRemainingTodayRaw))
         ? Number(tradesRemainingTodayRaw)
         : null;
-  if (tradesRemainingToday == null && Number.isFinite(maxTradesRaw) && maxTradesRaw > 0) {
+  if (configuredMaxTradesPerDay != null) {
     const todayCount = safeCount(
       db,
       `
@@ -1248,13 +1268,41 @@ function buildPolicyStateSection(db: Database.Database): {
           AND date(created_at) = date('now')
       `
     );
-    tradesRemainingToday = Math.max(0, Math.floor(maxTradesRaw) - todayCount);
+    tradesRemainingToday = Math.max(0, configuredMaxTradesPerDay - todayCount);
   }
+
+  const drawdownCapEnvRaw = Number(process.env.THUFIR_DASHBOARD_DAILY_DRAWDOWN_CAP_USD ?? NaN);
+  const drawdownCapConfigRaw = Number(
+    (config?.autonomy as { dailyDrawdownCapUsd?: unknown } | undefined)?.dailyDrawdownCapUsd ?? NaN
+  );
+  const configuredDrawdownCapUsd =
+    Number.isFinite(drawdownCapEnvRaw) && drawdownCapEnvRaw > 0
+      ? drawdownCapEnvRaw
+      : Number.isFinite(drawdownCapConfigRaw) && drawdownCapConfigRaw > 0
+        ? drawdownCapConfigRaw
+        : null;
+
+  let drawdownCapRemainingUsd = payloadDrawdownCapRemainingUsd;
+  if (configuredDrawdownCapUsd != null) {
+    try {
+      const rollup = getDailyPnLRollup();
+      const totalPnl = Number(rollup.totalPnl ?? 0);
+      const boundedTotalPnl = Number.isFinite(totalPnl) ? totalPnl : 0;
+      const remaining = configuredDrawdownCapUsd + boundedTotalPnl;
+      drawdownCapRemainingUsd = Math.max(0, Math.min(configuredDrawdownCapUsd, remaining));
+    } catch {
+      drawdownCapRemainingUsd = payloadDrawdownCapRemainingUsd;
+    }
+  }
+
+  const drawdownCapRemainingUsdFinal = Number.isFinite(Number(drawdownCapRemainingUsd))
+    ? Number(drawdownCapRemainingUsd)
+    : null;
 
   return {
     observationMode,
     leverageCap,
-    drawdownCapRemainingUsd,
+    drawdownCapRemainingUsd: drawdownCapRemainingUsdFinal,
     tradesRemainingToday,
     updatedAt: updatedAtRaw ? String(updatedAtRaw) : null,
   };
