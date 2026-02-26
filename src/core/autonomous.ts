@@ -369,7 +369,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             missing: expr.contextPack?.missing ?? ['contextPack.provider'],
           });
           try {
-            const executionMode = this.config.execution?.mode === 'live' ? 'live' : 'paper';
+            const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               execution_mode: executionMode,
@@ -642,7 +642,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         reasoning: decision.reasoning ?? null,
       });
       try {
-        const executionMode = this.config.execution?.mode === 'live' ? 'live' : 'paper';
+        const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
         const tradeId = recordPerpTrade({
           hypothesisId: expr.hypothesisId,
           symbol,
