@@ -25,7 +25,7 @@ describe('dashboard page route', () => {
     expect(handled).toBe(true);
     expect(state.status).toBe(200);
     expect(state.contentType).toContain('text/html');
-    expect(state.body).toContain('Thufir Product Dashboard');
+    expect(state.body).toContain('Thufir Dashboard');
     expect(state.body).toContain('/api/dashboard?');
   });
 
