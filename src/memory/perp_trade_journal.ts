@@ -5,6 +5,7 @@ export type PerpTradeJournalOutcome = 'executed' | 'failed' | 'blocked';
 
 export type PerpTradeJournalEntry = {
   kind: 'perp_trade_journal';
+  execution_mode?: 'paper' | 'live' | null;
   tradeId?: number | null;
   hypothesisId?: string | null;
   symbol: string;

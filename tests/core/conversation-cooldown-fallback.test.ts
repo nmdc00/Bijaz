@@ -250,7 +250,6 @@ describe('ConversationHandler cooldown fallback', () => {
     expect(progressMessages.some((m) => m.includes('running perp_market_get'))).toBe(true);
     expect(progressMessages.filter((m) => m.includes('finalizing response')).length).toBe(1);
   });
-
   it('forces heartbeat to HEARTBEAT_OK when no verified mutating tool execution exists', async () => {
     runOrchestratorMock.mockClear();
     runOrchestratorMock.mockResolvedValueOnce({
