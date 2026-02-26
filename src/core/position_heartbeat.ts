@@ -79,7 +79,8 @@ export class PositionHeartbeatService {
 
     const hb = this.config.heartbeat;
     if (!hb?.enabled) return;
-    if ((this.config.execution?.mode ?? 'paper') !== 'live') return;
+    const executionMode = this.config.execution?.mode ?? 'paper';
+    if (executionMode !== 'live' && executionMode !== 'paper') return;
     if ((this.config.execution?.provider ?? 'hyperliquid') !== 'hyperliquid') return;
 
     const nowMs = Date.now();
@@ -279,4 +280,3 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, attempts: number): Prom
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
-
