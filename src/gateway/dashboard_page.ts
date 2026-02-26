@@ -52,7 +52,7 @@ function buildDashboardHtml(): string {
         inset: -10% -10% 0 -10%;
         pointer-events: none;
         z-index: 0;
-        opacity: 0.36;
+        opacity: 0.22;
         background:
           radial-gradient(110% 55% at 18% 108%, rgba(216, 106, 43, 0.35), transparent 66%),
           radial-gradient(95% 50% at 58% 112%, rgba(245, 157, 67, 0.20), transparent 70%),
@@ -60,10 +60,50 @@ function buildDashboardHtml(): string {
         animation: duneDrift 48s ease-in-out infinite alternate;
         filter: blur(1px);
       }
+      .dune-layer {
+        position: fixed;
+        left: -18vw;
+        right: -18vw;
+        bottom: -18vh;
+        height: 44vh;
+        pointer-events: none;
+        z-index: 0;
+        border-radius: 52% 48% 0 0 / 68% 72% 0 0;
+        transform-origin: center bottom;
+      }
+      .dune-a {
+        background: radial-gradient(120% 92% at 50% 100%, rgba(216, 106, 43, 0.30), rgba(216, 106, 43, 0.02) 74%);
+        animation: duneFloatA 34s ease-in-out infinite alternate;
+        filter: blur(0.8px);
+      }
+      .dune-b {
+        height: 38vh;
+        bottom: -14vh;
+        background: radial-gradient(110% 88% at 54% 100%, rgba(245, 157, 67, 0.24), rgba(245, 157, 67, 0.01) 72%);
+        animation: duneFloatB 46s ease-in-out infinite alternate;
+      }
+      .dune-c {
+        height: 32vh;
+        bottom: -9vh;
+        background: radial-gradient(115% 82% at 46% 100%, rgba(169, 66, 46, 0.20), rgba(169, 66, 46, 0.01) 70%);
+        animation: duneFloatC 56s ease-in-out infinite alternate;
+      }
       @keyframes duneDrift {
         0% { transform: translate3d(-1.5%, 0, 0) scale(1.01); }
         50% { transform: translate3d(1.25%, -0.5%, 0) scale(1.02); }
         100% { transform: translate3d(-1%, 0.3%, 0) scale(1.01); }
+      }
+      @keyframes duneFloatA {
+        0% { transform: translate3d(-2.5%, 0, 0) scale(1.02); }
+        100% { transform: translate3d(2.1%, -1.8%, 0) scale(1.06); }
+      }
+      @keyframes duneFloatB {
+        0% { transform: translate3d(2.4%, 0, 0) scale(1.01); }
+        100% { transform: translate3d(-2.2%, -1.2%, 0) scale(1.05); }
+      }
+      @keyframes duneFloatC {
+        0% { transform: translate3d(-1.8%, 0, 0) scale(1.00); }
+        100% { transform: translate3d(1.6%, -0.9%, 0) scale(1.03); }
       }
       #app {
         max-width: 1380px;
@@ -140,6 +180,9 @@ function buildDashboardHtml(): string {
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
   <body>
+    <div class="dune-layer dune-a"></div>
+    <div class="dune-layer dune-b"></div>
+    <div class="dune-layer dune-c"></div>
     <div id="app">
       <div style="padding:14px;border:1px solid rgba(245,217,183,0.2);border-radius:12px;background:rgba(12,25,47,0.7);color:#f4e8d8">
         Loading dashboard UI...
