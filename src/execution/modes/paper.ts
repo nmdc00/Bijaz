@@ -60,6 +60,7 @@ export class PaperExecutor implements ExecutionAdapter {
         symbol,
         side,
         size,
+        executionMode: 'paper',
         price: fill.fillPrice ?? limitPrice ?? markPrice,
         leverage: decision.leverage ?? null,
         orderType,

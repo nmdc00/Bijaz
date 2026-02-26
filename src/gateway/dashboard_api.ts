@@ -449,7 +449,12 @@ async function tryBuildLiveWalletSnapshot(config: ThufirConfig): Promise<LiveWal
       assetPositions?: Array<{ position?: Record<string, unknown> }>;
       marginSummary?: Record<string, unknown>;
       crossMarginSummary?: Record<string, unknown>;
+      withdrawable?: string | number;
     };
+    const spotState = (await client.getSpotClearinghouseState()) as {
+      balances?: Array<Record<string, unknown>>;
+    };
+    const dexAbstraction = await client.getUserDexAbstraction().catch(() => null);
 
     const toNumber = (value: unknown): number | null => {
       const num = Number(value);
@@ -492,8 +497,20 @@ async function tryBuildLiveWalletSnapshot(config: ThufirConfig): Promise<LiveWal
       if (side === 'short') shortCount += 1;
     }
 
-    const marginSummary = state.marginSummary ?? state.crossMarginSummary ?? {};
-    const accountValue = toNumber((marginSummary as { accountValue?: unknown }).accountValue);
+    const spotUsdcRow = (spotState.balances ?? []).find(
+      (row) => String(row.coin ?? '').trim().toUpperCase() === 'USDC'
+    );
+    const spotUsdcTotal = toNumber(spotUsdcRow?.total ?? null) ?? 0;
+    const spotUsdcHold = toNumber(spotUsdcRow?.hold ?? null) ?? 0;
+    const spotUsdcFree = Math.max(0, spotUsdcTotal - spotUsdcHold);
+    const perpWithdrawable = toNumber(state.withdrawable ?? null) ?? 0;
+    const availableBalance =
+      dexAbstraction === true
+        ? spotUsdcFree
+        : perpWithdrawable > 0
+          ? perpWithdrawable
+          : spotUsdcFree;
+    const accountValue = availableBalance;
     const equityCurve =
       accountValue != null
         ? {
@@ -777,21 +794,43 @@ function listTradeLogRows(
 
 function listTradeLogRowsFromPerpTrades(
   db: Database.Database,
+  filters: DashboardFilters,
   limit = 30
 ): TradeLogRow[] {
   if (!tableExists(db, 'perp_trades')) {
     return [];
   }
-  const rows = db
-    .prepare(
-      `
-        SELECT id, symbol, side, status, created_at as createdAt
-        FROM perp_trades
-        ORDER BY created_at DESC, id DESC
-        LIMIT ?
-      `
-    )
-    .all(Math.max(1, Math.min(limit, 100))) as Array<Record<string, unknown>>;
+  const hasExecutionMode = tableHasColumn(db, 'perp_trades', 'execution_mode');
+  if (!hasExecutionMode && filters.mode === 'live') {
+    // Legacy perp_trades rows without execution_mode are treated as paper.
+    return [];
+  }
+  const rows = hasExecutionMode
+    ? (db
+        .prepare(
+          `
+            SELECT id, symbol, side, status, created_at as createdAt, execution_mode
+            FROM perp_trades
+            WHERE (? IS NULL OR execution_mode = ?)
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+          `
+        )
+        .all(
+          filters.mode === 'combined' ? null : filters.mode,
+          filters.mode === 'combined' ? null : filters.mode,
+          Math.max(1, Math.min(limit, 100))
+        ) as Array<Record<string, unknown>>)
+    : (db
+        .prepare(
+          `
+            SELECT id, symbol, side, status, created_at as createdAt
+            FROM perp_trades
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+          `
+        )
+        .all(Math.max(1, Math.min(limit, 100))) as Array<Record<string, unknown>>);
 
   return rows.map((row) => {
     const status = String(row.status ?? '')
@@ -1344,7 +1383,7 @@ export function buildDashboardApiPayload(params?: {
   );
   let tradeLogRows = listTradeLogRows(db, filters, 30);
   if (tradeLogRows.length === 0) {
-    tradeLogRows = listTradeLogRowsFromPerpTrades(db, 30);
+    tradeLogRows = listTradeLogRowsFromPerpTrades(db, filters, 30);
   }
   const promotionGateRows = listPromotionGateRows(db, filters);
   const policyState = buildPolicyStateSection(db);

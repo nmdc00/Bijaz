@@ -7,6 +7,10 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => {
   class HyperliquidClient {
     constructor(_config: unknown) {}
 
+    async getUserDexAbstraction() {
+      return false;
+    }
+
     async getClearinghouseState() {
       return {
         assetPositions: [
@@ -22,6 +26,13 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => {
         marginSummary: {
           accountValue: '1020',
         },
+        withdrawable: '0',
+      };
+    }
+
+    async getSpotClearinghouseState() {
+      return {
+        balances: [{ coin: 'USDC', total: '12.841434', hold: '0' }],
       };
     }
   }
@@ -65,7 +76,7 @@ describe('dashboard api live wallet overlay', () => {
       expect(payload.sections.openPositions.rows.length).toBe(1);
       expect(payload.sections.openPositions.rows[0].symbol).toBe('BTC');
       expect(payload.sections.openPositions.summary.totalUnrealizedPnlUsd).toBeCloseTo(120, 8);
-      expect(payload.sections.equityCurve.summary.endEquity).toBeCloseTo(1020, 8);
+      expect(payload.sections.equityCurve.summary.endEquity).toBeCloseTo(12.841434, 8);
     } finally {
       if (process.env.THUFIR_DB_PATH) {
         rmSync(process.env.THUFIR_DB_PATH, { force: true });

@@ -459,6 +459,7 @@ async function getReduceOnlyPositionSnapshot(
 
 async function resolvePerpLifecycleTradeId(params: {
   symbol: string;
+  mode: PerpBookMode;
   hypothesisId: string | null;
   leverage: number | null;
   orderType: 'market' | 'limit';
@@ -480,6 +481,7 @@ async function resolvePerpLifecycleTradeId(params: {
       symbol,
       side: openSide(side),
       size: params.after?.size ?? params.before?.size ?? 0,
+      executionMode: params.mode,
       price: params.markPrice,
       leverage: params.leverage,
       orderType: params.orderType,
@@ -1544,6 +1546,7 @@ export async function executeToolCall(
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
+              execution_mode: bookMode,
               tradeId: null,
               hypothesisId,
               symbol,
@@ -1614,6 +1617,7 @@ export async function executeToolCall(
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
+              execution_mode: bookMode,
               tradeId: null,
               hypothesisId,
               symbol,
@@ -1665,6 +1669,7 @@ export async function executeToolCall(
             try {
               recordPerpTradeJournal({
                 kind: 'perp_trade_journal',
+                execution_mode: bookMode,
                 tradeId: null,
                 hypothesisId,
                 symbol,
@@ -1757,6 +1762,7 @@ export async function executeToolCall(
               symbol,
               side: side as 'buy' | 'sell',
               size,
+              executionMode: bookMode,
               price: market.markPrice ?? null,
               leverage: leverage ?? null,
               orderType,
@@ -1764,6 +1770,7 @@ export async function executeToolCall(
             });
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
+              execution_mode: bookMode,
               tradeId,
               hypothesisId,
               symbol,
@@ -1832,6 +1839,7 @@ export async function executeToolCall(
         });
         const lifecycleTradeId = await resolvePerpLifecycleTradeId({
           symbol,
+          mode: bookMode,
           hypothesisId,
           leverage: leverage ?? null,
           orderType,
@@ -1897,6 +1905,7 @@ export async function executeToolCall(
         try {
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
+            execution_mode: bookMode,
             tradeId: lifecycleTradeId,
             hypothesisId,
             symbol,

@@ -153,6 +153,8 @@ describe('tool-executor perps', () => {
       .filter((tradeId) => Number.isFinite(tradeId) && tradeId > 0);
     expect(tradeIds.length).toBe(4);
     expect(new Set(tradeIds).size).toBe(1);
+    const modes = entries.map((entry) => String(entry.execution_mode ?? ''));
+    expect(modes.every((mode) => mode === 'paper')).toBe(true);
   });
 
   it('retries no-immediate-match failures with widened slippage and succeeds', async () => {
