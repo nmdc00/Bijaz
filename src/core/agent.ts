@@ -410,6 +410,7 @@ export class ThufirAgent {
         const { checkPerpRiskLimits } = await import('../execution/perp-risk.js');
         const { recordPerpTrade } = await import('../memory/perp_trades.js');
         const { recordPerpTradeJournal } = await import('../memory/perp_trade_journal.js');
+        const executionMode = this.config.execution?.mode === 'live' ? 'live' : 'paper';
         const riskCheck = await checkPerpRiskLimits({
           config: this.config,
           symbol,
@@ -428,6 +429,7 @@ export class ThufirAgent {
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
+              execution_mode: executionMode,
               tradeId: null,
               hypothesisId: null,
               symbol,
@@ -452,6 +454,7 @@ export class ThufirAgent {
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
+              execution_mode: executionMode,
               tradeId: null,
               hypothesisId: null,
               symbol,
@@ -492,6 +495,7 @@ export class ThufirAgent {
             symbol,
             side: side as 'buy' | 'sell',
             size,
+            executionMode,
             price: markPrice || null,
             leverage: leverage ?? null,
             orderType: 'market',
@@ -499,6 +503,7 @@ export class ThufirAgent {
           });
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
+            execution_mode: executionMode,
             tradeId,
             hypothesisId: null,
             symbol,

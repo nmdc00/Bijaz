@@ -394,6 +394,53 @@ describe('dashboard api payload', () => {
     ).toBe(false);
   });
 
+  it('filters perp_trades fallback trade log by execution_mode', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-perp-trades-mode-filter-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    db.prepare(
+      `
+        INSERT INTO perp_trades (symbol, side, size, execution_mode, status)
+        VALUES (?, ?, ?, ?, ?)
+      `
+    ).run('BTC', 'buy', 0.01, 'paper', 'executed');
+    db.prepare(
+      `
+        INSERT INTO perp_trades (symbol, side, size, execution_mode, status)
+        VALUES (?, ?, ?, ?, ?)
+      `
+    ).run('ETH', 'sell', 0.02, 'live', 'executed');
+
+    const paperPayload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+    const livePayload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'live',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(true);
+    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(false);
+    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(true);
+    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(false);
+  });
+
   it('returns policy state from autonomy policy table', () => {
     const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-policy-'));
     dbDir = dir;

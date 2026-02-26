@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS perp_trades (
     symbol TEXT NOT NULL,
     side TEXT NOT NULL,
     size REAL NOT NULL,
+    execution_mode TEXT CHECK(execution_mode IN ('paper', 'live')),
     price REAL,
     leverage REAL,
     order_type TEXT,
