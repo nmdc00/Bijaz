@@ -731,6 +731,12 @@ Just type naturally to chat about markets, risks, or positioning.
     sender: string,
     message: string
   ): Promise<string | null> {
+    // Heartbeat prompts include operational wording ("execute", "open positions")
+    // and must be handled by the orchestrator path, not chat keyword shortcuts.
+    if (sender === '__heartbeat__') {
+      return null;
+    }
+
     const autonomyEnabled = (this.config.autonomy as any)?.enabled === true;
     const autoEnabled = autonomyEnabled && (this.config.autonomy as any)?.fullAuto === true;
     const wantsAutoScan =
