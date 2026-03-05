@@ -58,12 +58,12 @@ export interface LlmClient {
   meta?: LlmClientMeta;
 }
 
-function resolveIdentityPromptMode(
+export function resolveIdentityPromptMode(
   config: ThufirConfig,
   kind?: LlmClientMeta['kind']
 ): 'full' | 'minimal' | 'none' {
   if (kind === 'trivial') {
-    return config.agent?.internalPromptMode ?? 'minimal';
+    return config.agent?.internalPromptMode ?? 'none';
   }
   return config.agent?.identityPromptMode ?? 'full';
 }
@@ -72,12 +72,38 @@ function isDebugEnabled(): boolean {
   return (process.env.THUFIR_LOG_LEVEL ?? '').toLowerCase() === 'debug';
 }
 
-function finalizeMessages(
+export function finalizeMessages(
   messages: ChatMessage[],
   config: ThufirConfig,
   meta?: LlmClientMeta
 ): ChatMessage[] {
   const promptMode = resolveIdentityPromptMode(config, meta?.kind);
+
+  // Skip identity injection entirely for 'none' mode (trivial/internal calls)
+  if (promptMode === 'none') {
+    const sanitized = messages.map((msg) => {
+      if (
+        msg.role === 'user' &&
+        typeof msg.content === 'string' &&
+        looksLikeToolOutput(msg.content)
+      ) {
+        return {
+          ...msg,
+          content: sanitizeUntrustedText(
+            msg.content,
+            config.agent?.maxToolResultChars ?? 8000
+          ),
+        };
+      }
+      return msg;
+    });
+    return trimMessagesByCharBudget(
+      sanitized,
+      config.agent?.maxPromptChars ?? 120000,
+      config.agent?.maxToolResultChars ?? 8000
+    );
+  }
+
   const identityConfig = {
     workspacePath: config.agent?.workspace,
     bootstrapMaxChars: config.agent?.identityBootstrapMaxChars,
