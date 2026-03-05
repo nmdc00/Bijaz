@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import fetch from 'node-fetch';
 
 import type { ThufirConfig } from './config.js';
-import { THUFIR_TOOLS } from './tool-schemas.js';
+import { THUFIR_TOOLS, getToolsForSubset, type ToolSubset } from './tool-schemas.js';
 import { executeToolCall, type ToolExecutorContext } from './tool-executor.js';
 import { Logger } from './logger.js';
 import {
@@ -414,7 +414,8 @@ export function createExecutorClient(
 export function createAgenticExecutorClient(
   config: ThufirConfig,
   toolContext: ToolExecutorContext,
-  modelOverride?: string
+  modelOverride?: string,
+  toolSubset?: ToolSubset
 ): LlmClient {
   const provider = config.agent.executorProvider ?? 'openai';
   assertLocalProviderNotAllowed(provider, 'agentic executor usage');
@@ -424,14 +425,14 @@ export function createAgenticExecutorClient(
     config.agent.openaiModel ??
     config.agent.model;
   if (provider === 'anthropic') {
-    const primary = new AgenticAnthropicClient(config, toolContext, model);
+    const primary = new AgenticAnthropicClient(config, toolContext, model, toolSubset);
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
-    const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel);
+    const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel, toolSubset);
     return wrapWithLimiter(
       wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
     );
   }
-  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config));
+  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model, toolSubset), config));
 }
 
 export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null {
@@ -957,12 +958,14 @@ export class AgenticAnthropicClient implements LlmClient {
   private client: Anthropic;
   private model: string;
   private toolContext: ToolExecutorContext;
+  private toolSubset: ToolSubset;
   meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
     toolContext: ToolExecutorContext,
-    modelOverride?: string
+    modelOverride?: string,
+    toolSubset?: ToolSubset
   ) {
     const baseURL = resolveAnthropicBaseUrl(config);
     this.client = new Anthropic({
@@ -971,6 +974,7 @@ export class AgenticAnthropicClient implements LlmClient {
     });
     this.model = modelOverride ?? config.agent.model;
     this.toolContext = toolContext;
+    this.toolSubset = toolSubset ?? 'full';
     this.meta = { provider: 'anthropic', model: this.model, kind: 'agentic' };
   }
 
@@ -1008,7 +1012,7 @@ export class AgenticAnthropicClient implements LlmClient {
         temperature,
         system: systemPrompt,
         messages: anthropicMessages,
-        tools: THUFIR_TOOLS,
+        tools: getToolsForSubset(this.toolSubset),
       });
 
       const toolUseBlocks = response.content.filter(
@@ -1148,18 +1152,21 @@ export class AgenticOpenAiClient implements LlmClient {
   private toolContext: ToolExecutorContext;
   private includeTemperature: boolean;
   private useResponsesApi: boolean;
+  private toolSubset: ToolSubset;
   meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
     toolContext: ToolExecutorContext,
-    modelOverride?: string
+    modelOverride?: string,
+    toolSubset?: ToolSubset
   ) {
     this.model = resolveOpenAiModel(config, modelOverride);
     this.baseUrl = resolveOpenAiBaseUrl(config);
     this.toolContext = toolContext;
     this.includeTemperature = !config.agent.useProxy;
     this.useResponsesApi = config.agent.useResponsesApi ?? config.agent.useProxy;
+    this.toolSubset = toolSubset ?? 'full';
     this.meta = { provider: 'openai', model: this.model, kind: 'agentic' };
   }
 
@@ -1183,7 +1190,8 @@ export class AgenticOpenAiClient implements LlmClient {
       content: msg.content,
     }));
 
-    const tools: OpenAiTool[] = THUFIR_TOOLS.map((tool) => ({
+    const scopedTools = getToolsForSubset(this.toolSubset);
+    const tools: OpenAiTool[] = scopedTools.map((tool) => ({
       type: 'function',
       function: {
         name: tool.name,
@@ -1224,7 +1232,7 @@ export class AgenticOpenAiClient implements LlmClient {
                             }))
                           : [{ type: 'text', text: msg.content ?? '' }],
                     })),
-                  tools: THUFIR_TOOLS.map((tool) => ({
+                  tools: scopedTools.map((tool) => ({
                     type: 'function',
                     name: tool.name,
                     description: tool.description,
