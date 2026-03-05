@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { Logger } from '../../src/core/logger.js';
 
+const conversationChatMock = vi.hoisted(() => vi.fn(async () => 'ok'));
+
 vi.mock('../../src/core/llm.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>(
     '../../src/core/llm.js'
@@ -32,8 +34,8 @@ vi.mock('../../src/core/autonomous.js', () => ({
 vi.mock('../../src/core/conversation.js', () => ({
   ConversationHandler: class {
     constructor() {}
-    async chat() {
-      return 'ok';
+    async chat(sender: string, message: string) {
+      return conversationChatMock(sender, message);
     }
   },
 }));
@@ -69,5 +71,25 @@ describe('access status routing', () => {
 
     const res = await agent.handleMessage('u', '/access_status');
     expect(res).toMatch(/Access status/i);
+  });
+
+  it('does not apply natural-language trade shortcut to heartbeat prompts in paper mode', async () => {
+    conversationChatMock.mockReset();
+    conversationChatMock.mockResolvedValue('ok');
+
+    const { ThufirAgent } = await import('../../src/core/agent.js');
+    const agent = new ThufirAgent({
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      hyperliquid: { enabled: true },
+      wallet: { limits: { daily: 100, perTrade: 25, confirmationThreshold: 10 } },
+      autonomy: { enabled: true, fullAuto: false },
+      agent: { model: 'test', provider: 'local' },
+    } as any, new Logger('error'));
+
+    const prompt = 'If you execute any action, monitor open position risk.';
+    const res = await agent.handleMessage('__heartbeat__', prompt);
+
+    expect(res).toBe('ok');
+    expect(conversationChatMock).toHaveBeenCalledWith('__heartbeat__', prompt);
   });
 });

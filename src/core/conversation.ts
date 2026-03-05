@@ -67,7 +67,7 @@ const SYSTEM_PROMPT_BASE = `## Operating Rules
 - Never claim a trade was placed unless a trading tool returned success
 - Never say you lack wallet/trade access without first using get_portfolio/get_positions/get_open_orders
 - When interpreting get_portfolio: balances/onchain_balances are on-chain wallet or paper/memory cash, NOT Hyperliquid collateral. For Hyperliquid, use summary.available_balance as the collateral you can trade with — it already accounts for unified/separate account modes. Do NOT refuse to trade because perp withdrawable is 0 if available_balance shows funds.
-- If you need the perp universe, prices, or liquidity to answer a trading question, use perp_market_list (do not ask the user to paste exports)
+- If you need perp prices or liquidity, prefer exchange-native tools first: use perp_market_get for exact symbol pricing and perp_market_list for universe context (do not ask the user to paste exports)
 - On Hyperliquid, spot USDC and perp collateral are typically unified. Place orders directly using available_balance as your collateral figure — the exchange validates collateral at order time. Only use hyperliquid_usd_class_transfer if orders are explicitly rejected for insufficient collateral.
 - Provide probability estimates when asked about directional outcomes
 - Reference relevant perp markets or instruments when discussing events
@@ -823,7 +823,7 @@ export class ConversationHandler {
     const text = message.toLowerCase();
     const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
     const wantsMarket = /\b(price|odds|market|probability|volume|liquidity|bid|ask)\b/.test(text);
-    const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding)\b/.test(text);
+    const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding|position|positions)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
 
     if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime) {
@@ -851,9 +851,57 @@ export class ConversationHandler {
     }
 
     if (wantsMarket || wantsTrade) {
+      const symbols = new Set<string>();
+      const positionsResult = await executeToolCall('get_positions', {}, this.toolContext);
+      if (positionsResult.success) {
+        sections.push(`### get_positions\n${JSON.stringify(positionsResult.data, null, 2)}`);
+        const positionRows = (positionsResult.data as { positions?: Array<{ symbol?: string }> } | null)?.positions ?? [];
+        for (const row of positionRows) {
+          const symbol = String(row?.symbol ?? '').trim().toUpperCase();
+          if (symbol.length > 0) symbols.add(symbol);
+        }
+      }
+
       const marketResult = await executeToolCall('perp_market_list', { limit: 20 }, this.toolContext);
       if (marketResult.success) {
         sections.push(`### perp_market_list\n${JSON.stringify(marketResult.data, null, 2)}`);
+      }
+
+      // Prefer exchange market data for direct symbol price requests before web search.
+      const symbolCandidates = Array.from(
+        new Set(
+          [
+            ...(Array.isArray(this.config.hyperliquid?.symbols) ? this.config.hyperliquid.symbols : []),
+            'BTC',
+            'ETH',
+            'SOL',
+            'XRP',
+            'DOGE',
+            'BNB',
+            'SUI',
+            'ADA',
+            'AVAX',
+            'DOT',
+            'LINK',
+            'LTC',
+          ].map((item) => String(item || '').trim().toUpperCase()).filter((item) => item.length > 0)
+        )
+      );
+      const symbolRegex = symbolCandidates.length > 0
+        ? new RegExp(
+            `\\b(${symbolCandidates.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`,
+            'i'
+          )
+        : null;
+      const symbolMatch = symbolRegex ? message.match(symbolRegex) : null;
+      if (symbolMatch?.[1]) {
+        symbols.add(symbolMatch[1].toUpperCase());
+      }
+      for (const symbol of Array.from(symbols).slice(0, 3)) {
+        const marketGet = await executeToolCall('perp_market_get', { symbol }, this.toolContext);
+        if (marketGet.success) {
+          sections.push(`### perp_market_get:${symbol}\n${JSON.stringify(marketGet.data, null, 2)}`);
+        }
       }
     }
 

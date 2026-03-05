@@ -574,6 +574,8 @@ if (heartbeatConfig?.enabled) {
   const heartbeatPrompt =
     'Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. ' +
     'Do not infer or repeat old tasks from prior chats. ' +
+    'For perp price/state checks, use exchange-native tools first (get_positions + perp_market_get/perp_market_list). ' +
+    'Do not treat web search/proactive intel failures as a blocker for risk management of existing positions. ' +
     'If you execute any action, start the first line with "HEARTBEAT_ACTION:". ' +
     'If nothing needs attention, reply HEARTBEAT_OK.';
 
