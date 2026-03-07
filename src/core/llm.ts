@@ -58,6 +58,18 @@ export interface LlmClient {
   meta?: LlmClientMeta;
 }
 
+export function resolveMaxPromptChars(config: ThufirConfig, meta?: LlmClientMeta): number {
+  const budget = config.agent?.promptBudget;
+  if (meta?.kind === 'trivial') {
+    return budget?.trivial ?? 10000;
+  }
+  const ctx = getExecutionContext();
+  if (ctx?.source === 'autonomous') {
+    return budget?.autonomous ?? 25000;
+  }
+  return budget?.chat ?? config.agent?.maxPromptChars ?? 120000;
+}
+
 export function resolveIdentityPromptMode(
   config: ThufirConfig,
   kind?: LlmClientMeta['kind']
@@ -99,7 +111,7 @@ export function finalizeMessages(
     });
     return trimMessagesByCharBudget(
       sanitized,
-      config.agent?.maxPromptChars ?? 120000,
+      resolveMaxPromptChars(config, meta),
       config.agent?.maxToolResultChars ?? 8000
     );
   }
@@ -158,7 +170,7 @@ export function finalizeMessages(
 
   const trimmed = trimMessagesByCharBudget(
     withSystem,
-    config.agent?.maxPromptChars ?? 120000,
+    resolveMaxPromptChars(config, meta),
     config.agent?.maxToolResultChars ?? 8000
   );
 
