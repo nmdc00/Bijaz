@@ -8,7 +8,7 @@
  * the createAgenticExecutorClient() call in conversation.ts, which would
  * silently revert to the full (50-tool) schema for every agentic execution.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Spy on createAgenticExecutorClient before anything imports conversation.ts
@@ -83,13 +83,22 @@ vi.mock('../../src/intel/store.js', () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Module-level import — vi.mock is hoisted so mocks are active before this
+// ---------------------------------------------------------------------------
+
+import { ConversationHandler } from '../../src/core/conversation.js';
+
+const llm = { complete: vi.fn(async () => ({ content: '', model: 'test' })) };
+const marketClient = { searchMarkets: vi.fn(async () => []) };
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('executor toolSubset wiring', () => {
-  it('ConversationHandler creates executor client with "execution" toolSubset', async () => {
-    const { ConversationHandler } = await import('../../src/core/conversation.js');
+  beforeEach(() => createExecutorSpy.mockClear());
 
+  it('ConversationHandler creates executor client with "chat" toolSubset', () => {
     // Config that activates the executor model path:
     // provider=anthropic, executorProvider=openai → different, so shouldUseExecutorModel=true
     const config = {
@@ -103,9 +112,6 @@ describe('executor toolSubset wiring', () => {
       },
     } as any;
 
-    const llm = { complete: vi.fn(async () => ({ content: '', model: 'test' })) };
-    const marketClient = { searchMarkets: vi.fn(async () => []) };
-
     // Constructing ConversationHandler triggers the executor wiring in the constructor
     new ConversationHandler(llm as any, marketClient as any, config);
 
@@ -115,10 +121,7 @@ describe('executor toolSubset wiring', () => {
     expect(toolSubset).toBe('chat');
   });
 
-  it('ConversationHandler does NOT call createAgenticExecutorClient when useExecutorModel is false', async () => {
-    createExecutorSpy.mockClear();
-    const { ConversationHandler } = await import('../../src/core/conversation.js');
-
+  it('ConversationHandler does NOT call createAgenticExecutorClient when useExecutorModel is false', () => {
     const config = {
       agent: {
         provider: 'anthropic',
@@ -127,9 +130,6 @@ describe('executor toolSubset wiring', () => {
         workspace: '/tmp/nonexistent-wiring-test',
       },
     } as any;
-
-    const llm = { complete: vi.fn(async () => ({ content: '', model: 'test' })) };
-    const marketClient = { searchMarkets: vi.fn(async () => []) };
 
     new ConversationHandler(llm as any, marketClient as any, config);
 
