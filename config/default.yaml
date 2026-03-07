@@ -15,8 +15,8 @@ agent:
   # OpenAI model (used for info gathering + execution)
   openaiModel: gpt-5.2
   # Executor model (orchestrator pattern)
-  executorModel: gpt-5.2
-  executorProvider: openai
+  executorModel: claude-sonnet-4-6
+  executorProvider: anthropic
   useExecutorModel: false
   useOrchestrator: false
   showToolTrace: false
