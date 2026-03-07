@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import fetch from 'node-fetch';
 
 import type { ThufirConfig } from './config.js';
-import { THUFIR_TOOLS, getToolsForSubset, type ToolSubset } from './tool-schemas.js';
+import { THUFIR_TOOLS } from './tool-schemas.js';
 import { executeToolCall, type ToolExecutorContext } from './tool-executor.js';
 import { Logger } from './logger.js';
 import {
@@ -58,27 +58,12 @@ export interface LlmClient {
   meta?: LlmClientMeta;
 }
 
-export function resolveMaxPromptChars(config: ThufirConfig, meta?: LlmClientMeta): number {
-  const budget = config.agent?.promptBudget;
-  if (meta?.kind === 'trivial') {
-    return budget?.trivial ?? 10000;
-  }
-  const ctx = getExecutionContext();
-  if (ctx?.reason === 'autonomous_async_execution_enrichment') {
-    return budget?.enrichment ?? 10000;
-  }
-  if (ctx?.source === 'autonomous') {
-    return budget?.autonomous ?? 60000;
-  }
-  return budget?.chat ?? config.agent?.maxPromptChars ?? 120000;
-}
-
-export function resolveIdentityPromptMode(
+function resolveIdentityPromptMode(
   config: ThufirConfig,
   kind?: LlmClientMeta['kind']
 ): 'full' | 'minimal' | 'none' {
   if (kind === 'trivial') {
-    return config.agent?.internalPromptMode ?? 'none';
+    return config.agent?.internalPromptMode ?? 'minimal';
   }
   return config.agent?.identityPromptMode ?? 'full';
 }
@@ -87,38 +72,12 @@ function isDebugEnabled(): boolean {
   return (process.env.THUFIR_LOG_LEVEL ?? '').toLowerCase() === 'debug';
 }
 
-export function finalizeMessages(
+function finalizeMessages(
   messages: ChatMessage[],
   config: ThufirConfig,
   meta?: LlmClientMeta
 ): ChatMessage[] {
   const promptMode = resolveIdentityPromptMode(config, meta?.kind);
-
-  // Skip identity injection entirely for 'none' mode (trivial/internal calls)
-  if (promptMode === 'none') {
-    const sanitized = messages.map((msg) => {
-      if (
-        msg.role === 'user' &&
-        typeof msg.content === 'string' &&
-        looksLikeToolOutput(msg.content)
-      ) {
-        return {
-          ...msg,
-          content: sanitizeUntrustedText(
-            msg.content,
-            config.agent?.maxToolResultChars ?? 8000
-          ),
-        };
-      }
-      return msg;
-    });
-    return trimMessagesByCharBudget(
-      sanitized,
-      resolveMaxPromptChars(config, meta),
-      config.agent?.maxToolResultChars ?? 8000
-    );
-  }
-
   const identityConfig = {
     workspacePath: config.agent?.workspace,
     bootstrapMaxChars: config.agent?.identityBootstrapMaxChars,
@@ -173,7 +132,7 @@ export function finalizeMessages(
 
   const trimmed = trimMessagesByCharBudget(
     withSystem,
-    resolveMaxPromptChars(config, meta),
+    config.agent?.maxPromptChars ?? 120000,
     config.agent?.maxToolResultChars ?? 8000
   );
 
@@ -455,8 +414,7 @@ export function createExecutorClient(
 export function createAgenticExecutorClient(
   config: ThufirConfig,
   toolContext: ToolExecutorContext,
-  modelOverride?: string,
-  toolSubset?: ToolSubset
+  modelOverride?: string
 ): LlmClient {
   const provider = config.agent.executorProvider ?? 'openai';
   assertLocalProviderNotAllowed(provider, 'agentic executor usage');
@@ -466,14 +424,14 @@ export function createAgenticExecutorClient(
     config.agent.openaiModel ??
     config.agent.model;
   if (provider === 'anthropic') {
-    const primary = new AgenticAnthropicClient(config, toolContext, model, toolSubset);
+    const primary = new AgenticAnthropicClient(config, toolContext, model);
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
-    const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel, toolSubset);
+    const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel);
     return wrapWithLimiter(
       wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
     );
   }
-  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model, toolSubset), config));
+  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config));
 }
 
 export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null {
@@ -999,14 +957,12 @@ export class AgenticAnthropicClient implements LlmClient {
   private client: Anthropic;
   private model: string;
   private toolContext: ToolExecutorContext;
-  private toolSubset: ToolSubset;
   meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
     toolContext: ToolExecutorContext,
-    modelOverride?: string,
-    toolSubset?: ToolSubset
+    modelOverride?: string
   ) {
     const baseURL = resolveAnthropicBaseUrl(config);
     this.client = new Anthropic({
@@ -1015,7 +971,6 @@ export class AgenticAnthropicClient implements LlmClient {
     });
     this.model = modelOverride ?? config.agent.model;
     this.toolContext = toolContext;
-    this.toolSubset = toolSubset ?? 'full';
     this.meta = { provider: 'anthropic', model: this.model, kind: 'agentic' };
   }
 
@@ -1053,7 +1008,7 @@ export class AgenticAnthropicClient implements LlmClient {
         temperature,
         system: systemPrompt,
         messages: anthropicMessages,
-        tools: getToolsForSubset(this.toolSubset),
+        tools: THUFIR_TOOLS,
       });
 
       const toolUseBlocks = response.content.filter(
@@ -1193,21 +1148,18 @@ export class AgenticOpenAiClient implements LlmClient {
   private toolContext: ToolExecutorContext;
   private includeTemperature: boolean;
   private useResponsesApi: boolean;
-  private toolSubset: ToolSubset;
   meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
     toolContext: ToolExecutorContext,
-    modelOverride?: string,
-    toolSubset?: ToolSubset
+    modelOverride?: string
   ) {
     this.model = resolveOpenAiModel(config, modelOverride);
     this.baseUrl = resolveOpenAiBaseUrl(config);
     this.toolContext = toolContext;
     this.includeTemperature = !config.agent.useProxy;
     this.useResponsesApi = config.agent.useResponsesApi ?? config.agent.useProxy;
-    this.toolSubset = toolSubset ?? 'full';
     this.meta = { provider: 'openai', model: this.model, kind: 'agentic' };
   }
 
@@ -1231,8 +1183,7 @@ export class AgenticOpenAiClient implements LlmClient {
       content: msg.content,
     }));
 
-    const scopedTools = getToolsForSubset(this.toolSubset);
-    const tools: OpenAiTool[] = scopedTools.map((tool) => ({
+    const tools: OpenAiTool[] = THUFIR_TOOLS.map((tool) => ({
       type: 'function',
       function: {
         name: tool.name,
@@ -1273,7 +1224,7 @@ export class AgenticOpenAiClient implements LlmClient {
                             }))
                           : [{ type: 'text', text: msg.content ?? '' }],
                     })),
-                  tools: scopedTools.map((tool) => ({
+                  tools: THUFIR_TOOLS.map((tool) => ({
                     type: 'function',
                     name: tool.name,
                     description: tool.description,

@@ -3,9 +3,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
+  createAgenticExecutorClient,
   createLlmClient,
   createTrivialTaskClient,
   clearIdentityCache,
+  OrchestratorClient,
 } from './llm.js';
 import type { LlmClient } from './llm.js';
 import { Logger } from './logger.js';
@@ -34,6 +36,7 @@ import { formatOperatorStatusSnapshot } from './status_snapshot.js';
 export class ThufirAgent {
   private llm: ReturnType<typeof createLlmClient>;
   private infoLlm?: LlmClient;
+  private autonomyLlm: ReturnType<typeof createLlmClient>;
   private marketClient: MarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
@@ -76,11 +79,18 @@ export class ThufirAgent {
       this.logger
     );
 
-    // Autonomous scan pipeline (discovery → filter → evaluate) is fully deterministic.
-    // Only the optional async enrichment synthesis step needs an LLM call — use the
-    // trivial/direct client to keep it to a single call instead of the full orchestrator.
+    const autonomyExecutorConfig = {
+      ...this.config,
+      agent: {
+        ...(this.config.agent ?? {}),
+        executorProvider: 'openai' as const,
+      },
+    } satisfies ThufirConfig;
+    const executor = createAgenticExecutorClient(autonomyExecutorConfig, this.toolContext);
+    this.autonomyLlm = new OrchestratorClient(this.llm, executor, this.llm, this.logger);
+
     this.autonomous = new AutonomousManager(
-      this.infoLlm ?? this.llm,
+      this.autonomyLlm,
       this.marketClient,
       this.executor,
       this.limiter,

@@ -3,28 +3,6 @@ import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { PriceService } from '../technical/prices.js';
 import type { SignalPrimitive } from './types.js';
 import { buildReflexivitySetup } from '../reflexivity/fragility.js';
-import { TTLCache } from './signal_cache.js';
-
-const DEFAULT_SIGNAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-const signalCache = new TTLCache<SignalPrimitive | SignalPrimitive[] | null>(DEFAULT_SIGNAL_CACHE_TTL_MS);
-
-function getSignalCacheTtlMs(config: ThufirConfig): number {
-  const seconds = (config as Record<string, unknown>).discovery
-    ? ((config as Record<string, Record<string, unknown>>).discovery?.signalCacheTtlSeconds as number | undefined)
-    : undefined;
-  return typeof seconds === 'number' && seconds > 0 ? seconds * 1000 : DEFAULT_SIGNAL_CACHE_TTL_MS;
-}
-
-/** Exposed for testing: clear the signal cache. */
-export function clearSignalCache(): void {
-  signalCache.clear();
-}
-
-/** Exposed for testing: get the signal cache instance. */
-export function getSignalCacheForTesting(): TTLCache<SignalPrimitive | SignalPrimitive[] | null> {
-  return signalCache;
-}
 
 function mean(values: number[]): number {
   if (!values.length) return 0;
@@ -63,10 +41,6 @@ export async function signalPriceVolRegime(
   config: ThufirConfig,
   symbol: string
 ): Promise<SignalPrimitive | null> {
-  const cacheKey = `price_vol:${symbol}`;
-  const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
-  if (cached !== undefined) return cached;
-
   const priceService = new PriceService(config);
   const candles = await priceService.getCandles(symbol, '1h', 80);
   if (candles.length < 30) return null;
@@ -84,7 +58,7 @@ export async function signalPriceVolRegime(
   const confidence = Math.min(1, Math.max(0, Math.abs(volZ)));
   const timeHorizon = 'hours';
 
-  const result: SignalPrimitive = {
+  return {
     id: `price_vol_${symbol}_${Date.now()}`,
     kind: 'price_vol_regime',
     symbol,
@@ -98,8 +72,6 @@ export async function signalPriceVolRegime(
       trend,
     },
   };
-  signalCache.set(cacheKey, result, getSignalCacheTtlMs(config));
-  return result;
 }
 
 export async function signalCrossAssetDivergence(
@@ -107,9 +79,6 @@ export async function signalCrossAssetDivergence(
   symbols: string[]
 ): Promise<SignalPrimitive[]> {
   if (symbols.length < 2) return [];
-  const cacheKey = `cross_asset:${[...symbols].sort().join(',')}`;
-  const cached = signalCache.get(cacheKey) as SignalPrimitive[] | undefined;
-  if (cached !== undefined) return cached;
   const priceService = new PriceService(config);
   const results: SignalPrimitive[] = [];
 
@@ -141,7 +110,6 @@ export async function signalCrossAssetDivergence(
     });
   }
 
-  signalCache.set(cacheKey, results, getSignalCacheTtlMs(config));
   return results;
 }
 
@@ -151,10 +119,6 @@ export async function signalHyperliquidFundingOISkew(
 ): Promise<SignalPrimitive | null> {
   const coin = normalizeHyperliquidSymbol(symbol);
   if (!coin) return null;
-
-  const cacheKey = `funding_oi:${coin}`;
-  const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
-  if (cached !== undefined) return cached;
 
   const client = new HyperliquidClient(config);
   const [meta, assetCtxs] = await client.getMetaAndAssetCtxs();
@@ -191,7 +155,7 @@ export async function signalHyperliquidFundingOISkew(
   const oiStrength = Math.min(1, Math.abs(oiZ));
   const confidence = Math.min(1, fundingStrength * 0.6 + oiStrength * 0.4);
 
-  const result: SignalPrimitive = {
+  return {
     id: `funding_oi_${coin}_${Date.now()}`,
     kind: 'funding_oi_skew',
     symbol,
@@ -208,8 +172,6 @@ export async function signalHyperliquidFundingOISkew(
       oiShare,
     },
   };
-  signalCache.set(cacheKey, result, getSignalCacheTtlMs(config));
-  return result;
 }
 
 export async function signalHyperliquidOrderflowImbalance(
@@ -218,10 +180,6 @@ export async function signalHyperliquidOrderflowImbalance(
 ): Promise<SignalPrimitive | null> {
   const coin = normalizeHyperliquidSymbol(symbol);
   if (!coin) return null;
-
-  const cacheKey = `orderflow:${coin}`;
-  const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
-  if (cached !== undefined) return cached;
 
   const client = new HyperliquidClient(config);
   const trades = await client.getRecentTrades(coin);
@@ -254,7 +212,7 @@ export async function signalHyperliquidOrderflowImbalance(
   const sampleStrength = Math.min(1, tradeCount / 12);
   const confidence = Math.min(1, Math.abs(imbalance) * 2 * sampleStrength);
 
-  const result: SignalPrimitive = {
+  return {
     id: `orderflow_${coin}_${Date.now()}`,
     kind: 'orderflow_imbalance',
     symbol,
@@ -268,25 +226,16 @@ export async function signalHyperliquidOrderflowImbalance(
       tradeCount,
     },
   };
-  signalCache.set(cacheKey, result, getSignalCacheTtlMs(config));
-  return result;
 }
 
 export async function signalReflexivityFragility(
   config: ThufirConfig,
   symbol: string
 ): Promise<SignalPrimitive | null> {
-  const cacheKey = `reflexivity:${symbol}`;
-  const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
-  if (cached !== undefined) return cached;
-
   const setup = await buildReflexivitySetup({ config, symbol });
-  if (!setup) {
-    signalCache.set(cacheKey, null, getSignalCacheTtlMs(config));
-    return null;
-  }
+  if (!setup) return null;
 
-  const result: SignalPrimitive = {
+  return {
     id: `reflexivity_${setup.baseSymbol}_${Date.now()}`,
     kind: 'reflexivity_fragility',
     symbol: setup.symbol,
@@ -295,6 +244,4 @@ export async function signalReflexivityFragility(
     timeHorizon: setup.timeHorizon,
     metrics: setup.metrics,
   };
-  signalCache.set(cacheKey, result, getSignalCacheTtlMs(config));
-  return result;
 }

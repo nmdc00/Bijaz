@@ -116,14 +116,6 @@ const ConfigSchema = z.object({
         storagePath: z.string().optional(),
       })
       .default({}),
-    promptBudget: z
-      .object({
-        enrichment: z.number().default(10000),
-        autonomous: z.number().default(60000),
-        trivial: z.number().default(10000),
-        chat: z.number().default(120000),
-      })
-      .default({}),
     provider: z.enum(['anthropic', 'openai', 'local']).default('anthropic'),
     apiBaseUrl: z.string().optional(),
     localBaseUrl: z.string().optional(),

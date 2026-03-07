@@ -64,12 +64,6 @@ memory: {}
     expect(config.agent.trivial.keepWarmEnabled).toBe(true);
     expect(config.agent.trivial.keepWarmIntervalSeconds).toBe(180);
     expect(config.agent.trivial.keepAlive).toBe('30m');
-    // v1.91 defaults
-    expect(config.agent.internalPromptMode).toBe('minimal');
-    expect(config.agent.promptBudget.enrichment).toBe(10000);
-    expect(config.agent.promptBudget.autonomous).toBe(60000);
-    expect(config.agent.promptBudget.trivial).toBe(10000);
-    expect(config.agent.promptBudget.chat).toBe(120000);
   });
 
   it('rejects invalid enum values', () => {
