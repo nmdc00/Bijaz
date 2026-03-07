@@ -1,5 +1,101 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 
+/**
+ * Tool subset categories for scoping tool schemas per LLM call type.
+ * Reduces input tokens by sending only relevant tools.
+ */
+export type ToolSubset = 'discovery' | 'execution' | 'chat' | 'trivial' | 'full';
+
+const TOOL_SUBSETS: Record<Exclude<ToolSubset, 'full'>, Set<string>> = {
+  discovery: new Set([
+    'perp_market_list',
+    'perp_market_get',
+    'perp_positions',
+    'get_positions',
+    'get_portfolio',
+    'signal_price_vol_regime',
+    'signal_cross_asset_divergence',
+    'signal_hyperliquid_funding_oi_skew',
+    'signal_hyperliquid_orderflow_imbalance',
+    'discovery_run',
+    'discovery_select_markets',
+    'discovery_report',
+    'current_time',
+  ]),
+  execution: new Set([
+    'perp_place_order',
+    'perp_cancel_order',
+    'perp_open_orders',
+    'perp_positions',
+    'perp_market_get',
+    'get_portfolio',
+    'get_positions',
+    'position_analysis',
+    'paper_promotion_report',
+    'current_time',
+    'calibration_stats',
+    'perp_analyze',
+  ]),
+  chat: new Set([
+    'intel_search',
+    'intel_recent',
+    'web_search',
+    'web_fetch',
+    'qmd_query',
+    'qmd_index',
+    'twitter_search',
+    'current_time',
+    'get_portfolio',
+    'get_positions',
+    'get_open_orders',
+    'perp_market_list',
+    'perp_market_get',
+    'perp_positions',
+    'perp_place_order',
+    'perp_cancel_order',
+    'perp_open_orders',
+    'perp_analyze',
+    'position_analysis',
+    'discovery_report',
+    'trade_review',
+    'perp_trade_journal_list',
+    'paper_promotion_report',
+    'calibration_stats',
+    'evaluation_summary',
+    'mentat_query',
+    'mentat_store_assumption',
+    'mentat_store_fragility',
+    'mentat_store_mechanism',
+    'agent_incidents_recent',
+    'playbook_search',
+    'playbook_get',
+    'playbook_upsert',
+  ]),
+  trivial: new Set([
+    'current_time',
+    'get_portfolio',
+    'get_positions',
+    'perp_positions',
+  ]),
+};
+
+/**
+ * Get tools filtered by subset. Returns all tools for 'full' or unrecognized subsets.
+ */
+export function getToolsForSubset(subset: ToolSubset): Tool[] {
+  if (subset === 'full') return THUFIR_TOOLS;
+  const allowed = TOOL_SUBSETS[subset];
+  if (!allowed) return THUFIR_TOOLS;
+  return THUFIR_TOOLS.filter((tool) => allowed.has(tool.name));
+}
+
+/**
+ * Get the set of tool names for a given subset (for testing/introspection).
+ */
+export function getToolSubsetNames(subset: Exclude<ToolSubset, 'full'>): ReadonlySet<string> {
+  return TOOL_SUBSETS[subset];
+}
+
 export const THUFIR_TOOLS: Tool[] = [
   {
     name: 'intel_search',
