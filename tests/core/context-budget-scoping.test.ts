@@ -2,9 +2,10 @@
  * context-budget-scoping.test.ts
  *
  * Verifies per-call-kind maxPromptChars overrides (v1.91 branch #5).
- * - trivial kind    → promptBudget.trivial   (default 10K)
- * - autonomous ctx  → promptBudget.autonomous (default 25K)
- * - chat / default  → promptBudget.chat       (default 120K)
+ * - trivial kind        → promptBudget.trivial    (default 10K)
+ * - enrichment reason   → promptBudget.enrichment (default 10K)
+ * - autonomous ctx      → promptBudget.autonomous (default 60K)
+ * - chat / default      → promptBudget.chat       (default 120K)
  */
 import { describe, it, expect } from 'vitest';
 import { resolveMaxPromptChars, finalizeMessages } from '../../src/core/llm.js';
@@ -12,7 +13,7 @@ import { withExecutionContext } from '../../src/core/llm_infra.js';
 import type { ThufirConfig } from '../../src/core/config.js';
 import type { LlmClientMeta } from '../../src/core/llm.js';
 
-function makeConfig(promptBudget?: Partial<{ autonomous: number; trivial: number; chat: number }>): ThufirConfig {
+function makeConfig(promptBudget?: Partial<{ enrichment: number; autonomous: number; trivial: number; chat: number }>): ThufirConfig {
   return {
     agent: {
       provider: 'anthropic',
@@ -21,7 +22,8 @@ function makeConfig(promptBudget?: Partial<{ autonomous: number; trivial: number
       maxPromptChars: 120000,
       maxToolResultChars: 8000,
       promptBudget: {
-        autonomous: promptBudget?.autonomous ?? 25000,
+        enrichment: promptBudget?.enrichment ?? 10000,
+        autonomous: promptBudget?.autonomous ?? 60000,
         trivial: promptBudget?.trivial ?? 10000,
         chat: promptBudget?.chat ?? 120000,
       },
@@ -39,12 +41,22 @@ describe('resolveMaxPromptChars', () => {
   });
 
   it('returns autonomous budget when execution context source is autonomous', async () => {
-    const config = makeConfig({ autonomous: 25000 });
+    const config = makeConfig({ autonomous: 60000 });
     const result = await withExecutionContext(
       { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'test' },
       async () => resolveMaxPromptChars(config, primaryMeta)
     );
-    expect(result).toBe(25000);
+    expect(result).toBe(60000);
+  });
+
+  it('returns enrichment budget for autonomous_async_execution_enrichment reason', async () => {
+    const config = makeConfig({ enrichment: 10000, autonomous: 60000 });
+    const result = await withExecutionContext(
+      { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'autonomous_async_execution_enrichment' },
+      async () => resolveMaxPromptChars(config, primaryMeta)
+    );
+    // enrichment reason takes priority over autonomous source
+    expect(result).toBe(10000);
   });
 
   it('returns chat budget for primary kind outside autonomous context', () => {
@@ -58,7 +70,7 @@ describe('resolveMaxPromptChars', () => {
   });
 
   it('trivial kind takes precedence over autonomous context', async () => {
-    const config = makeConfig({ trivial: 10000, autonomous: 25000 });
+    const config = makeConfig({ trivial: 10000, autonomous: 60000 });
     const result = await withExecutionContext(
       { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'test' },
       async () => resolveMaxPromptChars(config, trivialMeta)
@@ -84,6 +96,25 @@ describe('resolveMaxPromptChars', () => {
         promptBudget: { autonomous: 25000, trivial: 10000, chat: 120000 },
       },
     } as unknown as ThufirConfig;
+    expect(resolveMaxPromptChars(config, primaryMeta)).toBe(120000);
+  });
+
+  it('falls back to agent.maxPromptChars when promptBudget is absent', () => {
+    const config = {
+      agent: {
+        provider: 'anthropic',
+        model: 'test',
+        workspace: '/tmp/nonexistent',
+        maxPromptChars: 45000,
+        maxToolResultChars: 8000,
+        // no promptBudget field
+      },
+    } as unknown as ThufirConfig;
+    expect(resolveMaxPromptChars(config, primaryMeta)).toBe(45000);
+  });
+
+  it('falls back to 120000 hard-coded default when neither promptBudget nor maxPromptChars is set', () => {
+    const config = { agent: {} } as unknown as ThufirConfig;
     expect(resolveMaxPromptChars(config, primaryMeta)).toBe(120000);
   });
 });
@@ -119,7 +150,7 @@ describe('finalizeMessages respects per-kind budgets', () => {
     const config = makeConfig({ autonomous: 25000, chat: 120000 });
 
     const autoResult = await withExecutionContext(
-      { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'test' },
+      { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'not-enrichment' },
       async () => finalizeMessages(messages, config, primaryMeta)
     );
     const chatResult = finalizeMessages(messages, config, primaryMeta);

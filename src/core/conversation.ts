@@ -323,7 +323,7 @@ export class ConversationHandler {
       );
     }
     if (shouldUseExecutorModel(config)) {
-      const executor = createAgenticExecutorClient(config, context, undefined, 'execution');
+      const executor = createAgenticExecutorClient(config, context, undefined, 'chat');
       const fallback = this.agenticLlm ?? this.agenticOpenAi;
       this.agenticLlm = new OrchestratorClient(this.llm, executor, fallback, this.logger);
     }

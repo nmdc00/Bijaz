@@ -64,8 +64,11 @@ export function resolveMaxPromptChars(config: ThufirConfig, meta?: LlmClientMeta
     return budget?.trivial ?? 10000;
   }
   const ctx = getExecutionContext();
+  if (ctx?.reason === 'autonomous_async_execution_enrichment') {
+    return budget?.enrichment ?? 10000;
+  }
   if (ctx?.source === 'autonomous') {
-    return budget?.autonomous ?? 25000;
+    return budget?.autonomous ?? 60000;
   }
   return budget?.chat ?? config.agent?.maxPromptChars ?? 120000;
 }

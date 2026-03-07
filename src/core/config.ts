@@ -118,7 +118,8 @@ const ConfigSchema = z.object({
       .default({}),
     promptBudget: z
       .object({
-        autonomous: z.number().default(25000),
+        enrichment: z.number().default(10000),
+        autonomous: z.number().default(60000),
         trivial: z.number().default(10000),
         chat: z.number().default(120000),
       })

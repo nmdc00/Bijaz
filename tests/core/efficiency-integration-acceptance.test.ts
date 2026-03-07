@@ -91,7 +91,7 @@ function makeConfig(): ThufirConfig {
       maxToolResultChars: 8000,
       identityPromptMode: 'full',
       internalPromptMode: 'none',
-      promptBudget: { autonomous: 25000, trivial: 10000, chat: 120000 },
+      promptBudget: { enrichment: 10000, autonomous: 60000, trivial: 10000, chat: 120000 },
     },
   } as unknown as ThufirConfig;
 }
@@ -214,7 +214,13 @@ describe('v1.91 efficiency integration acceptance', () => {
       { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'scan' },
       async () => resolveMaxPromptChars(config, primaryMeta)
     );
-    expect(autoResult).toBe(25000);
+    expect(autoResult).toBe(60000);
+
+    const enrichmentResult = await withExecutionContext(
+      { mode: 'LIGHT_REASONING', source: 'autonomous', reason: 'autonomous_async_execution_enrichment' },
+      async () => resolveMaxPromptChars(config, primaryMeta)
+    );
+    expect(enrichmentResult).toBe(10000);
   });
 
   it('overall: ≥40% reduction in estimated input tokens for autonomous scan enrichment', () => {
