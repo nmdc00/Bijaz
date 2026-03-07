@@ -84,6 +84,12 @@ agent:
     keepWarmEnabled: true
     keepWarmIntervalSeconds: 180
     keepAlive: 30m
+  # Per-call-kind prompt char budgets (controls trimMessagesByCharBudget ceiling)
+  promptBudget:
+    enrichment: 10000   # Autonomous enrichment/annotation synthesis — always short
+    autonomous: 60000   # Autonomous primary reasoning calls
+    trivial: 10000      # Trivial/local model calls
+    chat: 120000        # Full conversation context (default)
   # Global LLM budget (rolling hour)
   llmBudget:
     enabled: true
