@@ -306,8 +306,8 @@ export class ConversationHandler {
     const hasAgentModel = Boolean(config.agent?.model);
     if (provider === 'anthropic' && hasAgentModel) {
       const primary = new AgenticAnthropicClient(config, context);
-      const fallbackModel = config.agent?.openaiModel ?? config.agent?.fallbackModel ?? 'gpt-5.2';
-      const fallback = new AgenticOpenAiClient(config, context, fallbackModel);
+      const fallbackModel = config.agent?.fallbackModel;
+      const fallback = new AgenticAnthropicClient(config, context, fallbackModel);
       this.agenticLlm = wrapWithLimiter(
         wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
       );
@@ -317,10 +317,10 @@ export class ConversationHandler {
         wrapWithInfra(new AgenticOpenAiClient(config, context), config)
       );
     }
-    if (config.agent?.model || config.agent?.openaiModel) {
-      this.agenticOpenAi = wrapWithLimiter(
-        wrapWithInfra(new AgenticOpenAiClient(config, context), config)
-      );
+    if (config.agent?.model) {
+      this.agenticOpenAi = provider === 'anthropic'
+        ? wrapWithLimiter(wrapWithInfra(new AgenticAnthropicClient(config, context, config.agent?.fallbackModel), config))
+        : wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, context), config));
     }
     if (shouldUseExecutorModel(config)) {
       const executor = createAgenticExecutorClient(config, context, undefined, 'chat');
