@@ -309,7 +309,12 @@ export class ConversationHandler {
       const fallbackModel = config.agent?.fallbackModel;
       const fallback = new AgenticAnthropicClient(config, context, fallbackModel);
       this.agenticLlm = wrapWithLimiter(
-        wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+        new FallbackLlmClient(
+          wrapWithInfra(primary, config),
+          wrapWithInfra(fallback, config),
+          isRateLimitError,
+          config
+        )
       );
     }
     if (provider === 'openai' && hasAgentModel) {

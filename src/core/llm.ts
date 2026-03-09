@@ -412,13 +412,13 @@ export function createLlmClient(config: ThufirConfig): LlmClient {
   assertLocalProviderNotAllowed(config.agent.provider, 'primary LLM usage');
   switch (config.agent.provider) {
     case 'anthropic':
-      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+      return wrapWithLimiter(createAnthropicClientWithFallback(config));
     case 'openai':
       return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config), config));
     case 'local':
       return wrapWithLimiter(wrapWithInfra(new LocalClient(config), config));
     default:
-      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+      return wrapWithLimiter(createAnthropicClientWithFallback(config));
   }
 }
 
@@ -470,7 +470,12 @@ export function createAgenticExecutorClient(
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
     const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel, toolSubset);
     return wrapWithLimiter(
-      wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+      new FallbackLlmClient(
+        wrapWithInfra(primary, config),
+        wrapWithInfra(fallback, config),
+        isRateLimitError,
+        config
+      )
     );
   }
   return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model, toolSubset), config));
@@ -536,8 +541,10 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
     const fallback = new TrivialTaskClient(fallbackRemote, fallbackDefaults);
 
     return wrapWithLimiter(
-      wrapWithInfra(
-        new FallbackLlmClient(primary, fallback, () => true, config),
+      new FallbackLlmClient(
+        wrapWithInfra(primary, config),
+        wrapWithInfra(fallback, config),
+        () => true,
         config
       )
     );
@@ -1636,6 +1643,7 @@ export class FallbackLlmClient implements LlmClient {
     private config?: ThufirConfig,
     logger?: Logger
   ) {
+    this.meta = primary.meta;
     this.logger = logger ?? new Logger('info');
   }
 
@@ -1744,5 +1752,12 @@ function createAnthropicClientWithFallback(config: ThufirConfig): LlmClient {
   const fallbackModel =
     config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
   const fallback = new AnthropicClient(config, fallbackModel);
-  return new FallbackLlmClient(primary, fallback, isRateLimitError, config);
+  // Wrap each leg individually so InfraLlmClient tracks cooldowns per real client,
+  // not against the FallbackLlmClient wrapper (which had no meta → defaulted to openai:unknown).
+  return new FallbackLlmClient(
+    wrapWithInfra(primary, config),
+    wrapWithInfra(fallback, config),
+    isRateLimitError,
+    config
+  );
 }
