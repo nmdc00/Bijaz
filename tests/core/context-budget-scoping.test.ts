@@ -121,7 +121,11 @@ describe('resolveMaxPromptChars', () => {
 
 describe('finalizeMessages respects per-kind budgets', () => {
   it('trivial messages are capped at trivial budget', () => {
-    const config = makeConfig({ trivial: 500 });
+    // Use internalPromptMode: 'none' to isolate budget trimming from identity injection
+    const config = {
+      ...makeConfig({ trivial: 500 }),
+      agent: { ...makeConfig({ trivial: 500 }).agent, internalPromptMode: 'none' as const },
+    };
     // Build messages that total well over 500 chars
     const messages = [
       { role: 'system' as const, content: 'A'.repeat(300) },

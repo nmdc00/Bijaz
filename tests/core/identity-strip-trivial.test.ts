@@ -17,14 +17,14 @@ function makeConfig(overrides?: Partial<ThufirConfig['agent']>): ThufirConfig {
 }
 
 describe('resolveIdentityPromptMode', () => {
-  it('returns "none" for trivial kind by default', () => {
+  it('returns "minimal" for trivial kind by default', () => {
     const config = makeConfig();
-    expect(resolveIdentityPromptMode(config, 'trivial')).toBe('none');
+    expect(resolveIdentityPromptMode(config, 'trivial')).toBe('minimal');
   });
 
-  it('returns "minimal" for trivial kind when configured', () => {
-    const config = makeConfig({ internalPromptMode: 'minimal' });
-    expect(resolveIdentityPromptMode(config, 'trivial')).toBe('minimal');
+  it('returns "none" for trivial kind when explicitly configured', () => {
+    const config = makeConfig({ internalPromptMode: 'none' });
+    expect(resolveIdentityPromptMode(config, 'trivial')).toBe('none');
   });
 
   it('returns "full" for primary kind by default', () => {
@@ -43,8 +43,8 @@ describe('resolveIdentityPromptMode', () => {
   });
 });
 
-describe('finalizeMessages with none mode', () => {
-  it('does not inject identity content for trivial calls', () => {
+describe('finalizeMessages trivial mode', () => {
+  it('injects hard identity marker for trivial calls by default (minimal mode)', () => {
     const config = makeConfig();
     const messages = [
       { role: 'system' as const, content: 'Classify this input.' },
@@ -58,9 +58,27 @@ describe('finalizeMessages with none mode', () => {
     });
 
     const systemMsg = result.find((m) => m.role === 'system');
-    // System content should NOT contain the identity marker
-    expect(systemMsg?.content).not.toContain(IDENTITY_MARKER);
+    // Default minimal mode still injects the identity marker
+    expect(systemMsg?.content).toContain(IDENTITY_MARKER);
     // Should still contain the original system content
+    expect(systemMsg?.content).toContain('Classify this input.');
+  });
+
+  it('does not inject identity for trivial calls when internalPromptMode is "none"', () => {
+    const config = makeConfig({ internalPromptMode: 'none' });
+    const messages = [
+      { role: 'system' as const, content: 'Classify this input.' },
+      { role: 'user' as const, content: 'Hello world' },
+    ];
+
+    const result = finalizeMessages(messages, config, {
+      provider: 'anthropic',
+      model: 'test',
+      kind: 'trivial',
+    });
+
+    const systemMsg = result.find((m) => m.role === 'system');
+    expect(systemMsg?.content).not.toContain(IDENTITY_MARKER);
     expect(systemMsg?.content).toContain('Classify this input.');
   });
 
@@ -78,7 +96,6 @@ describe('finalizeMessages with none mode', () => {
     });
 
     const systemMsg = result.find((m) => m.role === 'system');
-    // Should contain the identity marker for non-trivial calls
     expect(systemMsg?.content).toContain(IDENTITY_MARKER);
   });
 

@@ -78,7 +78,7 @@ export function resolveIdentityPromptMode(
   kind?: LlmClientMeta['kind']
 ): 'full' | 'minimal' | 'none' {
   if (kind === 'trivial') {
-    return config.agent?.internalPromptMode ?? 'none';
+    return config.agent?.internalPromptMode ?? 'minimal';
   }
   return config.agent?.identityPromptMode ?? 'full';
 }
