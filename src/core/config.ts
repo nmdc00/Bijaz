@@ -768,6 +768,15 @@ const ConfigSchema = z.object({
           downweightMultiplier: z.number().default(0.6),
         })
         .default({}),
+      adaptiveEdge: z
+        .object({
+          enabled: z.boolean().default(true),
+          priorEdge: z.number().min(0).max(1).default(0.015),
+          minSamples: z.number().int().min(1).default(10),
+          signalScaleFactor: z.number().min(0).max(1).default(0.5),
+          decayHalfLifeDays: z.number().positive().nullable().default(null),
+        })
+        .default({}),
       asyncEnrichment: z
         .object({
           enabled: z.boolean().default(false),
