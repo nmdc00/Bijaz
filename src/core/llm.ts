@@ -78,7 +78,7 @@ export function resolveIdentityPromptMode(
   kind?: LlmClientMeta['kind']
 ): 'full' | 'minimal' | 'none' {
   if (kind === 'trivial') {
-    return config.agent?.internalPromptMode ?? 'none';
+    return config.agent?.internalPromptMode ?? 'minimal';
   }
   return config.agent?.identityPromptMode ?? 'full';
 }
@@ -412,13 +412,13 @@ export function createLlmClient(config: ThufirConfig): LlmClient {
   assertLocalProviderNotAllowed(config.agent.provider, 'primary LLM usage');
   switch (config.agent.provider) {
     case 'anthropic':
-      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+      return wrapWithLimiter(createAnthropicClientWithFallback(config));
     case 'openai':
       return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config), config));
     case 'local':
       return wrapWithLimiter(wrapWithInfra(new LocalClient(config), config));
     default:
-      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+      return wrapWithLimiter(createAnthropicClientWithFallback(config));
   }
 }
 
@@ -470,7 +470,12 @@ export function createAgenticExecutorClient(
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
     const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel, toolSubset);
     return wrapWithLimiter(
-      wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+      new FallbackLlmClient(
+        wrapWithInfra(primary, config),
+        wrapWithInfra(fallback, config),
+        isRateLimitError,
+        config
+      )
     );
   }
   return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model, toolSubset), config));
@@ -536,8 +541,10 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
     const fallback = new TrivialTaskClient(fallbackRemote, fallbackDefaults);
 
     return wrapWithLimiter(
-      wrapWithInfra(
-        new FallbackLlmClient(primary, fallback, () => true, config),
+      new FallbackLlmClient(
+        wrapWithInfra(primary, config),
+        wrapWithInfra(fallback, config),
+        () => true,
         config
       )
     );
@@ -1262,17 +1269,20 @@ export class AgenticOpenAiClient implements LlmClient {
                     .join('\n\n---\n\n') || undefined,
                   input: openaiMessages
                     .filter((msg) => msg.role !== 'system')
-                    .map((msg) => ({
-                      role: msg.role,
-                      content:
-                        msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
-                          ? msg.tool_calls.map((call) => ({
-                              type: 'function_call',
-                              name: call.function.name,
-                              arguments: call.function.arguments,
-                            }))
-                          : [{ type: 'text', text: msg.content ?? '' }],
-                    })),
+                    .flatMap((msg): unknown[] => {
+                      if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
+                        return msg.tool_calls.map((call) => ({
+                          type: 'function_call',
+                          name: call.function.name,
+                          arguments: call.function.arguments,
+                          call_id: call.id,
+                        }));
+                      }
+                      if (msg.role === 'tool') {
+                        return [{ type: 'function_call_output', call_id: (msg as any).tool_call_id, output: msg.content ?? '' }];
+                      }
+                      return [{ role: msg.role, content: [{ type: 'input_text', text: msg.content ?? '' }] }];
+                    }),
                   tools: scopedTools.map((tool) => ({
                     type: 'function',
                     name: tool.name,
@@ -1328,20 +1338,24 @@ export class AgenticOpenAiClient implements LlmClient {
 
       if (this.useResponsesApi) {
         const root = data.response ?? data;
-        const contentParts =
-          root.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
-        const toolCalls = contentParts
-          .filter((part) => part.type === 'function_call')
-          .map((part) => ({
-            id: 'call_id' in part && part.call_id ? part.call_id : `call_${Date.now()}`,
+        const outputItems = root.output ?? [];
+        // In Responses API, function calls are top-level output items (not nested in content)
+        const toolCalls = outputItems
+          .filter((item) => item.type === 'function_call')
+          .map((item) => ({
+            id: 'call_id' in item && (item as any).call_id ? (item as any).call_id : `call_${Date.now()}`,
             type: 'function' as const,
             function: {
-              name: (part as { name: string }).name,
-              arguments: (part as { arguments: string }).arguments,
+              name: (item as any).name,
+              arguments: (item as any).arguments,
             },
           }));
 
         if (toolCalls.length === 0) {
+          // Text content lives inside message items' content arrays
+          const contentParts = outputItems.flatMap((item) =>
+            item.type === 'message' && Array.isArray(item.content) ? item.content : []
+          );
           const text = contentParts
             .filter((part) => part.type === 'output_text')
             .map((part) => (part as { text?: string }).text ?? '')
@@ -1515,7 +1529,7 @@ class OpenAiClient implements LlmClient {
                   .filter((msg) => msg.role !== 'system')
                   .map((msg) => ({
                     role: msg.role,
-                    content: [{ type: 'text', text: msg.content }],
+                    content: [{ type: 'input_text', text: msg.content }],
                   })),
               }
             : {
@@ -1636,6 +1650,7 @@ export class FallbackLlmClient implements LlmClient {
     private config?: ThufirConfig,
     logger?: Logger
   ) {
+    this.meta = primary.meta;
     this.logger = logger ?? new Logger('info');
   }
 
@@ -1744,5 +1759,12 @@ function createAnthropicClientWithFallback(config: ThufirConfig): LlmClient {
   const fallbackModel =
     config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
   const fallback = new AnthropicClient(config, fallbackModel);
-  return new FallbackLlmClient(primary, fallback, isRateLimitError, config);
+  // Wrap each leg individually so InfraLlmClient tracks cooldowns per real client,
+  // not against the FallbackLlmClient wrapper (which had no meta → defaulted to openai:unknown).
+  return new FallbackLlmClient(
+    wrapWithInfra(primary, config),
+    wrapWithInfra(fallback, config),
+    isRateLimitError,
+    config
+  );
 }
