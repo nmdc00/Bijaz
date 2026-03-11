@@ -533,9 +533,8 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
     };
 
     const primary = new TrivialTaskClient(guarded, localDefaults);
-    // Under llm-mux proxy, OpenAI requests may be unsupported; use Anthropic as the default remote fallback.
     const fallbackRemote =
-      config.agent.provider === 'anthropic' || config.agent.useProxy
+      config.agent.provider === 'anthropic'
         ? new AnthropicClient(config, config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022', 'trivial')
         : new OpenAiClient(config, config.agent.openaiModel ?? config.agent.model, 'trivial');
     const fallback = new TrivialTaskClient(fallbackRemote, fallbackDefaults);
