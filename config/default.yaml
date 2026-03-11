@@ -243,6 +243,12 @@ autonomy:
     blockBelowScore: 0.45
     downweightBelowScore: 0.60
     downweightMultiplier: 0.60
+  adaptiveEdge:
+    enabled: true              # Replace synthetic confidence*0.1 with history-grounded edge
+    priorEdge: 0.015           # Edge used before minSamples reached per segment (1.5%)
+    minSamples: 10             # Closed trades needed before empirical estimate kicks in
+    signalScaleFactor: 0.5     # How much discovery confidence modulates edge (0=ignore, 1=full)
+    decayHalfLifeDays: null    # Time decay for old trades (null=off until enough data)
   discoverySelection:
     enabled: true
     fullUniverseWhenSymbolsEmpty: true  # If hyperliquid.symbols is [], rank full perp universe
