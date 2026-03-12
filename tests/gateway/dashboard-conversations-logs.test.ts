@@ -72,6 +72,31 @@ describe('dashboard conversations and logs api', () => {
     expect(payload.sessions[1]?.firstMessage).toContain('First user message');
   });
 
+  it('excludes internal heartbeat sessions from the dashboard conversation list', () => {
+    const db = createDb('thufir-dashboard-conversations-heartbeat-');
+    storeChatMessage({
+      sessionId: '__heartbeat__',
+      role: 'user',
+      content: 'Read HEARTBEAT.md',
+      createdAt: '2026-03-12T12:00:00.000Z',
+    });
+    storeChatMessage({
+      sessionId: '__heartbeat__',
+      role: 'assistant',
+      content: 'HEARTBEAT_OK',
+      createdAt: '2026-03-12T12:00:01.000Z',
+    });
+    storeChatMessage({
+      sessionId: 'session-real',
+      role: 'user',
+      content: 'Is there any news that would cause oil price to rise further?',
+      createdAt: '2026-03-12T12:01:00.000Z',
+    });
+
+    const payload = buildConversationsListResponse({ db });
+    expect(payload.sessions.map((item) => item.sessionId)).toEqual(['session-real']);
+  });
+
   it('returns thread messages in ascending order and filters out system messages', () => {
     const db = createDb('thufir-dashboard-thread-');
     storeChatMessage({
