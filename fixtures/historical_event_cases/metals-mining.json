@@ -1,0 +1,248 @@
+[
+  {
+    "case_key": "2022-lme-nickel-short-squeeze",
+    "event_date": "2022-03-08",
+    "event_type": "market_structure_squeeze",
+    "title": "LME Nickel Short Squeeze → Price Doubles to $100k/tonne",
+    "summary": "A massive concentrated short position held by Tsingshan Holding Group was squeezed as nickel prices surged on Russia-Ukraine supply fears. LME nickel price doubled in 48 hours to above $100,000 per tonne before the LME suspended trading and controversially cancelled executed trades.",
+    "domain": "metals",
+    "actors": ["Tsingshan Holding Group", "Xiang Guangda", "LME", "Norilsk Nickel"],
+    "locations": ["United Kingdom", "China", "Russia"],
+    "channels": ["market_structure", "geopolitical_risk", "supply"],
+    "first_order_assets": ["LME Nickel"],
+    "second_order_assets": ["stainless steel", "EV battery costs", "nickel pig iron"],
+    "mechanism": "A concentrated short position by Chinese stainless steel giant Tsingshan was caught offside by supply disruption fears following Russia's invasion of Ukraine. Forced margin calls and short covering drove nickel prices to historically unprecedented levels, triggering the LME to suspend trading and cancel trades — a decision that damaged exchange credibility.",
+    "causal_chain": [
+      "Russia invasion of Ukraine raises supply risk for Norilsk Nickel (~10% of global mined nickel)",
+      "nickel price rises sharply, triggering margin calls on large concentrated short",
+      "Tsingshan and brokers forced to buy to cover, accelerating the move",
+      "LME nickel reaches $101,365/tonne, more than double its level two days prior",
+      "LME suspends trading and cancels $4bn of trades executed above $80,000",
+      "Tsingshan negotiates standstill agreement with creditor banks"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate"],
+      "confidence": "high",
+      "note": "Supply shock plus squeeze dynamics; direction clear but magnitude extreme and unsustainable"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "LME nickel reached $101,365/tonne intraday on March 8, 2022. The LME halted trading and cancelled trades — the first such cancellation in decades. Nickel retraced sharply once trading resumed with circuit breakers in place.",
+      "chart_note": "LME official trading records and MacroTrends show the spike and subsequent retracement to ~$30k range by mid-2022",
+      "priced_in_note": null,
+      "reversal_note": "Full reversal within months as supply fears proved overstated and Tsingshan's position was unwound"
+    },
+    "regime_tags": ["squeeze", "market_structure", "supply_shock", "geopolitical", "metals_bull"],
+    "sources": [
+      {"title": "LME suspends nickel trading after prices double to $100,000", "publisher": "Financial Times", "url": "https://www.ft.com/content/778b6f87-d7e1-4b4b-8e14-fc0d07a37b00", "source_date": "2022-03-08", "source_type": "event"},
+      {"title": "LME Suspends Nickel Trading After Unprecedented Price Surge", "publisher": "Reuters", "url": "https://www.reuters.com/markets/commodities/lme-suspends-nickel-trading-2022-03-08/", "source_date": "2022-03-08", "source_type": "event"},
+      {"title": "LME Nickel Prices - Historical Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1476/nickel-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2020-indonesia-nickel-ore-export-ban",
+    "event_date": "2020-01-01",
+    "event_type": "export_ban",
+    "title": "Indonesia Nickel Ore Export Ban → Supply Tightening",
+    "summary": "Indonesia, the world's largest nickel ore producer, banned the export of unprocessed nickel ore effective January 2020 to incentivize domestic smelting investment. The ban removed a major source of feedstock for Chinese nickel pig iron producers and supported global nickel prices.",
+    "domain": "metals",
+    "actors": ["Indonesian government", "Chinese NPI producers", "LME"],
+    "locations": ["Indonesia", "China"],
+    "channels": ["supply", "trade_policy"],
+    "first_order_assets": ["LME Nickel", "nickel pig iron (NPI)"],
+    "second_order_assets": ["stainless steel", "EV battery materials"],
+    "mechanism": "Indonesia's export ban on raw nickel ore removed feedstock for Chinese nickel pig iron smelters that had relied heavily on Indonesian ore. This tightened the global nickel supply chain and pushed prices higher. Chinese producers were forced to seek alternative sources from the Philippines and elsewhere at higher cost.",
+    "causal_chain": [
+      "Indonesia announces and then enforces raw nickel ore export ban",
+      "Chinese NPI producers lose primary low-cost feedstock source",
+      "NPI production cost rises, supporting nickel price floor",
+      "Philippines partially offsets but at higher cost",
+      "LME nickel prices drift higher in anticipation and then on enforcement"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish nickel on supply side; tempo depends on pace of Indonesian downstream investment and Philippine offset"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Nickel prices rose ahead of and following the ban. The medium-term effect was partially offset by increased Philippine exports and Indonesia's own downstream NPI expansion, but the ban structurally tightened the seaborne ore market.",
+      "chart_note": "MacroTrends nickel chart shows price trending higher through 2021",
+      "priced_in_note": "Substantial pre-announcement pricing as ban had been telegraphed",
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "trade_policy", "metals_bull"],
+    "sources": [
+      {"title": "Indonesia's nickel ore export ban to pressure NPI, steel", "publisher": "S&P Global Platts", "url": "https://www.spglobal.com/commodityinsights/en/market-insights/latest-news/metals/010220-indonesias-nickel-ore-export-ban-to-pressure-npi-steel", "source_date": "2020-01-02", "source_type": "event"},
+      {"title": "Nickel Prices - Historical Annual Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1476/nickel-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2017-escondida-strike-copper",
+    "event_date": "2017-02-09",
+    "event_type": "labor_disruption",
+    "title": "Escondida Strike → Copper Rally",
+    "summary": "Workers at BHP's Escondida mine in Chile — the world's largest copper mine, producing roughly 5% of global supply — went on a 44-day strike after wage negotiations failed. The disruption was the longest in the mine's history and contributed to a copper price rally.",
+    "domain": "metals",
+    "actors": ["BHP", "Escondida mine workers union", "LME"],
+    "locations": ["Chile", "Escondida"],
+    "channels": ["supply", "labor"],
+    "first_order_assets": ["LME Copper", "copper futures"],
+    "second_order_assets": ["Chilean peso", "construction materials", "wire and cable"],
+    "mechanism": "A strike at the world's largest copper mine removed approximately 5% of annual global copper supply for the duration of the dispute. Market participants priced in supply deficit expectations, supporting copper prices during the strike. The impact was tempered by inventory drawdowns and some rerouting of demand to secondary sources.",
+    "causal_chain": [
+      "workers reject BHP contract offer and vote to strike",
+      "Escondida production halts — removes ~1 million tonnes annualised of supply",
+      "copper market prices near-term supply shortfall",
+      "LME copper rises during strike period",
+      "strike ends after 44 days with mediated agreement",
+      "prices partially retrace as production resumes"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish copper while strike persists; reversal likely on resolution"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "LME copper rose approximately 5% during the strike period from around $5,900/tonne to above $6,100/tonne. The 44-day strike was the longest in Escondida's history. Prices retraced after the settlement.",
+      "chart_note": "MacroTrends copper chart confirms early 2017 price rise",
+      "priced_in_note": null,
+      "reversal_note": "Copper retraced on strike resolution as supply resumed"
+    },
+    "regime_tags": ["supply_shock", "labor", "metals_bull"],
+    "sources": [
+      {"title": "Escondida copper mine strike ends after 44 days", "publisher": "Reuters", "url": "https://www.reuters.com/article/us-chile-copper-escondida-idUSKBN16K1IH", "source_date": "2017-03-25", "source_type": "event"},
+      {"title": "Copper Prices - Historical Annual Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1476/copper-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2018-rusal-sanctions-aluminum",
+    "event_date": "2018-04-06",
+    "event_type": "sanctions",
+    "title": "US Rusal Sanctions → Aluminum Spike",
+    "summary": "The US Treasury OFAC placed Rusal — the world's second-largest aluminum producer at roughly 6% of global supply — on the SDN sanctions list. Aluminum prices surged approximately 30% in the following days as market participants scrambled to find alternative supply and shed sanctioned material.",
+    "domain": "metals",
+    "actors": ["US Treasury OFAC", "Rusal", "Oleg Deripaska", "EN+ Group"],
+    "locations": ["Russia", "United States"],
+    "channels": ["supply", "sanctions", "geopolitical_risk"],
+    "first_order_assets": ["LME Aluminum"],
+    "second_order_assets": ["alumina", "bauxite", "automotive aluminum sheet", "aerospace aluminum"],
+    "mechanism": "Sanctioning a top-two global producer of aluminum created immediate uncertainty about supply continuity. Downstream consumers needed to quickly establish that their supply chains were sanctions-compliant, forcing spot market buying and de-facto removal of Rusal supply from accessible markets. LME warehouse inventory dynamics amplified the move.",
+    "causal_chain": [
+      "OFAC adds Rusal and Deripaska to SDN list",
+      "existing contracts with Rusal become sanctionable",
+      "downstream buyers scramble to source non-Rusal metal",
+      "LME aluminum surges ~30% in three days",
+      "US Treasury issues general licenses to allow wind-down",
+      "aluminum retraces as Deripaska agrees to reduce control of Rusal/EN+"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Strong bullish signal; tempo of reversal depends on sanctions wind-down and ownership restructuring"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "LME aluminum rose from approximately $2,000/tonne to over $2,600/tonne in the days following the sanctions announcement — a ~30% move. Prices retraced after OFAC issued wind-down general licenses and Deripaska agreed to reduce his ownership stake.",
+      "chart_note": "MacroTrends aluminum chart shows the sharp April 2018 spike and subsequent retracement",
+      "priced_in_note": null,
+      "reversal_note": "OFAC partial wind-down and restructuring of EN+ Group led to sanctions relief in Jan 2019; prices retreated well before"
+    },
+    "regime_tags": ["supply_shock", "sanctions", "geopolitical", "metals_bull"],
+    "sources": [
+      {"title": "Treasury Designates Russian Oligarchs, Officials, and Entities in Response to Worldwide Malign Activity", "publisher": "US Treasury OFAC", "url": "https://home.treasury.gov/news/press-releases/sm0338", "source_date": "2018-04-06", "source_type": "official"},
+      {"title": "Aluminum prices surge to 7-year high after US sanctions on Rusal", "publisher": "Reuters", "url": "https://www.reuters.com/article/us-usa-russia-sanctions-aluminium-idUSKBN1HF0QT", "source_date": "2018-04-09", "source_type": "event"},
+      {"title": "Aluminum Prices - Historical Annual Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1476/aluminum-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2021-china-power-crunch-aluminum-zinc",
+    "event_date": "2021-09-01",
+    "event_type": "energy_supply_shock",
+    "title": "China Power Crunch → Aluminum and Zinc Smelter Cuts",
+    "summary": "China's severe power rationing crisis — driven by coal shortages, policy-mandated energy consumption caps, and surging electricity demand — forced aluminum smelters in Yunnan, Guangxi, and other provinces to curtail production. Aluminum and zinc rallied sharply as markets priced a supply shortfall from the world's dominant producer.",
+    "domain": "metals",
+    "actors": ["Chinese government", "National Development and Reform Commission", "aluminum smelters"],
+    "locations": ["China", "Yunnan", "Guangxi", "Gansu"],
+    "channels": ["energy", "supply", "policy"],
+    "first_order_assets": ["LME Aluminum", "LME Zinc"],
+    "second_order_assets": ["carbon policy", "coal", "steel", "construction"],
+    "mechanism": "China produces roughly 57% of global aluminum and 45% of global zinc. Power rationing that forced smelter curtailments created a direct supply shock in both markets. The policy dimension — China's dual-carbon goals and energy intensity targets — added a structural supply constraint narrative on top of the cyclical energy shock.",
+    "causal_chain": [
+      "coal shortages and provincial energy consumption caps force power rationing",
+      "smelters in Yunnan and other provinces ordered to cut output",
+      "aluminum production falls as China loses millions of tonnes of annualised capacity",
+      "LME aluminum and zinc rally on supply reduction at dominant producer",
+      "subsequent coal policy loosening and winter power stabilization partially reverses"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish aluminum and zinc; persistence depends on duration of power constraints and coal policy"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "LME aluminum rose from ~$2,400/tonne in August 2021 to above $3,200/tonne by October 2021. LME zinc also rallied. Both retraced into 2022 as Chinese power supply stabilized and coal policy was loosened.",
+      "chart_note": "MacroTrends aluminum and zinc charts show clear Q3-Q4 2021 rally",
+      "priced_in_note": null,
+      "reversal_note": "Coal supply relaxation and improved power availability led to production resumption and price retracement"
+    },
+    "regime_tags": ["supply_shock", "energy", "china", "policy", "metals_bull"],
+    "sources": [
+      {"title": "China's power crunch cuts output of key metals", "publisher": "Reuters", "url": "https://www.reuters.com/business/energy/chinas-power-crunch-hits-key-metals-production-2021-09-28/", "source_date": "2021-09-28", "source_type": "event"},
+      {"title": "Aluminum Prices - Historical Annual Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1476/aluminum-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2019-palladium-structural-deficit",
+    "event_date": "2019-01-01",
+    "event_type": "structural_supply_deficit",
+    "title": "Palladium Structural Deficit → $500 to $2,800 Multi-Year Rally",
+    "summary": "Palladium entered a persistent structural supply deficit driven by tightening gasoline car emissions regulations globally (requiring more palladium in catalytic converters) against constrained supply concentrated in South Africa and Russia. The price rose from roughly $500/oz in 2016 to a peak above $2,800/oz in early 2020.",
+    "domain": "metals",
+    "actors": ["Anglo American Platinum", "Norilsk Nickel", "auto OEMs", "EU/China emissions regulators"],
+    "locations": ["South Africa", "Russia", "global auto markets"],
+    "channels": ["supply", "demand", "regulation"],
+    "first_order_assets": ["palladium", "platinum"],
+    "second_order_assets": ["rhodium", "auto production costs", "catalytic converter manufacturers"],
+    "mechanism": "Palladium supply is highly concentrated (South Africa + Russia = ~85% of mine output) with minimal above-ground inventory. Increasingly strict auto emissions standards in Europe, China, and North America raised the palladium loading required per vehicle. The demand-supply gap could not be closed quickly given the long lead times in mine development, driving a sustained multi-year price appreciation.",
+    "causal_chain": [
+      "EU and China tighten gasoline exhaust emissions standards",
+      "palladium loading per catalytic converter rises",
+      "auto industry demand growth outpaces South Africa and Russia mine supply",
+      "above-ground stocks depleted over multiple years",
+      "palladium price rises from ~$500 (2016) to $800 (2018) to $1,500 (2019) to >$2,800 (Jan 2020)",
+      "peak followed by demand destruction fears (COVID) and gradual thrifting/substitution back toward platinum"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["medium", "long"],
+      "confidence": "high",
+      "note": "Bullish multi-year; structural deficit with concentrated supply and regulatory demand floor; plateau or reversal requires EV substitution or emissions regulation change"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Palladium rose from approximately $500/oz in late 2016 to a peak of $2,875/oz in February 2020. It then sold off sharply on COVID demand fears and later as EV penetration and auto production cuts reduced catalytic converter demand.",
+      "chart_note": "MacroTrends palladium chart confirms the multi-year rally and 2020 peak",
+      "priced_in_note": null,
+      "reversal_note": "COVID auto demand destruction, then structural shift toward EVs, led to palladium's decline from 2022 onward"
+    },
+    "regime_tags": ["structural_deficit", "regulation", "supply_concentration", "metals_bull"],
+    "sources": [
+      {"title": "Palladium prices hit all-time high above $2,500 on supply concerns", "publisher": "Reuters", "url": "https://www.reuters.com/article/us-palladium-prices-idUSKBN1ZB1R3", "source_date": "2020-01-17", "source_type": "event"},
+      {"title": "Palladium Prices - Historical Annual Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/2542/palladium-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  }
+]

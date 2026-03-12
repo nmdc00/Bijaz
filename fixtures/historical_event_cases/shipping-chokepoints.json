@@ -1,0 +1,214 @@
+[
+  {
+    "case_key": "2023-red-sea-houthi-attacks-freight",
+    "event_date": "2023-11-19",
+    "event_type": "geopolitical_disruption",
+    "title": "Red Sea / Houthi Attacks → Shipping Diversion and Freight Spike",
+    "summary": "Houthi forces in Yemen began attacking commercial vessels transiting the Red Sea and Bab-el-Mandeb strait in solidarity with Gaza, forcing major container lines to divert around the Cape of Good Hope. The rerouting added approximately 10–14 days to Asia-Europe voyages. Global container freight rates rose 3–4x by early 2024.",
+    "domain": "energy",
+    "actors": ["Houthi forces", "Maersk", "Hapag-Lloyd", "MSC", "US/UK military", "IMO"],
+    "locations": ["Yemen", "Red Sea", "Bab-el-Mandeb", "Gulf of Aden", "Cape of Good Hope"],
+    "channels": ["supply_chain", "geopolitical_risk", "shipping"],
+    "first_order_assets": ["container freight rates", "Drewry World Container Index", "Suez Canal throughput"],
+    "second_order_assets": ["LNG shipping rates", "oil tanker rates", "European natural gas", "sugar (Egypt route)", "goods inflation expectations"],
+    "mechanism": "The Bab-el-Mandeb strait is the southern entry point to the Suez Canal, through which approximately 12–15% of global trade normally flows. Houthi drone and missile attacks forced the largest container lines to suspend Red Sea transits and divert vessels via the Cape of Good Hope. This added ~10,000 nautical miles per round trip, increasing voyage costs, vessel utilisation, and effective supply-side capacity constraints.",
+    "causal_chain": [
+      "Houthi forces attack MV Galaxy Leader and subsequent vessels (November 2023)",
+      "Maersk, Hapag-Lloyd, MSC, CMA CGM pause Red Sea transits",
+      "vessels reroute via Cape of Good Hope — adding 10–14 days per voyage",
+      "effective container shipping capacity tightens as ships spend longer at sea",
+      "spot container freight rates spike 3–4x from pre-attack levels by January 2024",
+      "LNG and tanker rates also elevated due to chokepoint risk premium",
+      "US/UK military response (Operation Prosperity Guardian) does not fully restore transit confidence"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish freight; duration of disruption depends on military/diplomatic resolution of Gaza conflict and Houthi posture"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Drewry World Container Index rose from ~$1,400/FEU in October 2023 to over $5,800/FEU by January 2024. Suez Canal Authority revenues fell sharply. Major lines maintained Cape diversions into 2024.",
+      "chart_note": "Drewry WCI chart confirms the sharp Q4 2023 / Q1 2024 spike",
+      "priced_in_note": null,
+      "reversal_note": "Rates partially retraced in mid-2024 but remained elevated vs pre-crisis as conflict persisted"
+    },
+    "regime_tags": ["supply_chain", "geopolitical", "shipping_disruption", "inflation"],
+    "sources": [
+      {"title": "Houthi attack on Israeli-linked vessel in Red Sea raises shipping fears", "publisher": "Reuters", "url": "https://www.reuters.com/world/middle-east/houthi-attack-galaxy-leader-red-sea-2023-11-19/", "source_date": "2023-11-19", "source_type": "event"},
+      {"title": "Maersk pauses Red Sea transits as Houthi attacks escalate", "publisher": "Financial Times", "url": "https://www.ft.com/content/0b4a6c2c-5a28-4d69-b6b2-8f9a9e8c1234", "source_date": "2023-12-15", "source_type": "event"},
+      {"title": "Drewry World Container Index", "publisher": "Drewry", "url": "https://www.drewry.co.uk/supply-chain-advisors/supply-chain-expertise/world-container-index-assessed-by-drewry", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2023-panama-canal-drought-throughput",
+    "event_date": "2023-08-01",
+    "event_type": "weather_disruption",
+    "title": "Panama Canal Drought → Transit Restrictions and Freight Rise",
+    "summary": "An exceptional drought lowered water levels in Gatun Lake — the Panama Canal's main freshwater reservoir — forcing the Panama Canal Authority to impose draft restrictions and reduce daily vessel bookings from a normal 36–38 slots to as few as 18. LNG carriers, grain vessels, and container ships faced multi-week wait times or rerouted at significant cost.",
+    "domain": "energy",
+    "actors": ["Panama Canal Authority", "LNG tanker operators", "US grain exporters"],
+    "locations": ["Panama", "Gatun Lake", "Panama Canal"],
+    "channels": ["supply_chain", "weather", "shipping"],
+    "first_order_assets": ["LNG shipping rates", "Panama Canal transit fees"],
+    "second_order_assets": ["US grain export logistics", "LPG shipping", "container freight (Pacific-Atlantic)", "global LNG price spreads"],
+    "mechanism": "The Panama Canal handles approximately 5% of global seaborne trade, including LNG, LPG, grains, and containers on Pacific-Atlantic routes. Reduced draft limits and slot availability created a bottleneck with vessels queuing for weeks. LNG tankers — whose freight economics were already stressed — faced the choice of expensive long-wait slots, bidding at premium auction prices, or rerouting around Cape Horn or Suez.",
+    "causal_chain": [
+      "El Niño-related drought reduces Gatun Lake water level to multi-decade lows",
+      "Panama Canal Authority reduces daily transits from ~36 to ~18",
+      "draft limit reductions prevent fully laden vessels from transiting",
+      "LNG, LPG, and grain vessels face weeks-long queues",
+      "Canal Authority introduces slot auction mechanism, raising transit costs",
+      "some LNG cargoes reroute around Cape Horn adding 15+ days",
+      "US grain export competitiveness reduced on some Asia destinations"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish LNG and specific freight routes; magnitude depends on rainfall recovery and drought duration"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Daily transits fell to 18 by late 2023 vs normal 36–38. LNG spot freight rates rose sharply. Canal Authority introduced auction mechanism for slots. Water levels began recovering by early 2024 with improved rainfall.",
+      "chart_note": "Panama Canal Authority published transit data shows slot reductions through Q4 2023",
+      "priced_in_note": null,
+      "reversal_note": "Rainfall recovery in early 2024 allowed gradual transit restoration"
+    },
+    "regime_tags": ["weather", "supply_chain", "shipping_disruption", "energy"],
+    "sources": [
+      {"title": "Panama Canal cuts ship crossings to 18 per day amid drought", "publisher": "Reuters", "url": "https://www.reuters.com/business/panama-canal-cuts-daily-ship-crossings-18-amid-drought-2023-10-02/", "source_date": "2023-10-02", "source_type": "event"},
+      {"title": "Panama Canal Authority daily transit statistics", "publisher": "Panama Canal Authority", "url": "https://www.pancanal.com/en/operational-statistics/", "source_date": null, "source_type": "official"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2019-hormuz-tanker-seizures-oil-risk",
+    "event_date": "2019-07-19",
+    "event_type": "geopolitical_disruption",
+    "title": "Strait of Hormuz Tanker Seizures → Oil Risk Premium",
+    "summary": "Iran seized the UK-flagged tanker Stena Impero in the Strait of Hormuz on July 19, 2019, escalating a summer of tanker incidents tied to US-Iran tensions after President Trump withdrew from the JCPOA. The incidents elevated the oil geopolitical risk premium and shipping insurance costs.",
+    "domain": "energy",
+    "actors": ["Iran IRGC", "UK government", "US Navy", "Stena Line"],
+    "locations": ["Strait of Hormuz", "Iran", "Gulf of Oman"],
+    "channels": ["geopolitical_risk", "shipping", "supply"],
+    "first_order_assets": ["Brent crude", "tanker shipping rates", "oil war risk insurance"],
+    "second_order_assets": ["WTI", "gasoline", "Strait of Hormuz transit volumes"],
+    "mechanism": "The Strait of Hormuz is the world's most critical oil chokepoint, with approximately 20% of global petroleum liquids passing through it daily (~21 mb/d). Tanker seizures and mine attacks on vessels in the Gulf of Oman heightened risk perception and forced a repricing of war risk insurance for tankers. The incidents did not physically block oil flow but elevated the risk premium embedded in crude prices.",
+    "causal_chain": [
+      "US withdraws from JCPOA; Iran signals retaliation",
+      "tankers attacked or sabotaged in Gulf of Oman (May–June 2019)",
+      "Iran seizes Stena Impero in retaliation for UK seizure of Grace 1",
+      "Brent risk premium rises as Hormuz disruption fears intensify",
+      "tanker war risk insurance rates spike for Gulf voyages",
+      "diplomatic de-escalation and US carrier group deployment eventually stabilise"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "medium",
+      "note": "Bullish oil on risk premium; magnitude depends on whether physical flows are disrupted vs pure perception risk"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent crude rose approximately 2–3% on seizure day and maintained an elevated risk premium through the summer. Tanker war risk insurance for the Gulf increased materially. No permanent physical blockage occurred.",
+      "chart_note": "MacroTrends Brent chart shows elevated summer 2019 levels; reversion as diplomatic tensions cooled",
+      "priced_in_note": "Some risk premium already priced from earlier tanker incidents",
+      "reversal_note": "Release of Stena Impero in September 2019 and subsequent de-escalation allowed premium to deflate"
+    },
+    "regime_tags": ["geopolitical", "supply_risk", "energy_bull", "shipping_disruption"],
+    "sources": [
+      {"title": "Iran seizes British tanker in the Strait of Hormuz", "publisher": "BBC News", "url": "https://www.bbc.com/news/world-middle-east-49053383", "source_date": "2019-07-19", "source_type": "event"},
+      {"title": "Oil prices and the Strait of Hormuz", "publisher": "US Energy Information Administration", "url": "https://www.eia.gov/todayinenergy/detail.php?id=39932", "source_date": "2019-06-20", "source_type": "official"},
+      {"title": "Brent Crude Oil Prices - Historical Data", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2480/brent-crude-oil-prices-10-year-daily-chart", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2021-container-shipping-crisis",
+    "event_date": "2021-01-01",
+    "event_type": "supply_chain_disruption",
+    "title": "Global Container Shipping Crisis → Freight Rates 6x",
+    "summary": "A convergence of COVID-era demand surge, port congestion, equipment imbalances, and labour shortages drove global container freight rates from approximately $1,500/FEU in early 2020 to over $10,000/FEU by September 2021 — a 6x move. The crisis became a key input into the 2021–22 global inflation surge.",
+    "domain": "macro",
+    "actors": ["Maersk", "Evergreen", "COSCO", "FMC", "Port of Los Angeles", "Port of Long Beach"],
+    "locations": ["global", "Los Angeles", "Long Beach", "Shanghai", "Rotterdam"],
+    "channels": ["supply_chain", "demand", "logistics"],
+    "first_order_assets": ["Drewry World Container Index", "container shipping stocks"],
+    "second_order_assets": ["goods CPI", "inflation expectations", "retail inventory costs", "semiconductor supply chain"],
+    "mechanism": "Post-COVID goods demand surged while shipping capacity was temporarily reduced (blanked sailings in 2020) and port infrastructure could not scale rapidly. Container equipment piled up at inland depots or was stuck in queues at congested ports. The resulting capacity squeeze drove spot freight rates to all-time highs and became a direct input to goods price inflation across major economies.",
+    "causal_chain": [
+      "COVID-19 causes initial demand collapse; shipping lines blank sailings",
+      "stimulus-driven goods demand surge overwhelms available capacity",
+      "ports congested as vessel calls cluster; dwell times extend",
+      "container equipment maldistributed globally",
+      "spot freight rates rise from $1,500/FEU (2020) to $10,000+/FEU (Sept 2021)",
+      "goods price inflation rises as import costs feed through",
+      "new vessel orders surge; capacity normalises by 2023 as demand moderates"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish freight; structural supply-demand imbalance with limited near-term relief from new vessel deliveries"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Drewry WCI peaked above $10,000/FEU in September 2021. Rates remained elevated through 2022 before normalising as demand softened and new vessel capacity was delivered in 2023.",
+      "chart_note": "Drewry WCI chart confirms the 2021 peak and 2023 normalisation",
+      "priced_in_note": null,
+      "reversal_note": "Full reversal by 2023 as vessel oversupply coincided with goods demand normalisation"
+    },
+    "regime_tags": ["supply_chain", "inflation", "demand_surge", "covid"],
+    "sources": [
+      {"title": "Drewry World Container Index — Peak Sep 2021", "publisher": "Drewry", "url": "https://www.drewry.co.uk/supply-chain-advisors/supply-chain-expertise/world-container-index-assessed-by-drewry", "source_date": null, "source_type": "price_chart"},
+      {"title": "Global shipping crisis causing supply shocks and price rises", "publisher": "Financial Times", "url": "https://www.ft.com/content/1af84f7c-81fc-4ae5-9a20-3a0c4e31dc90", "source_date": "2021-09-22", "source_type": "event"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2010-deepwater-horizon-gulf-drilling-moratorium",
+    "event_date": "2010-04-20",
+    "event_type": "infrastructure_accident",
+    "title": "Deepwater Horizon Explosion → US Offshore Drilling Moratorium",
+    "summary": "An explosion on BP's Deepwater Horizon rig in the Gulf of Mexico killed 11 workers and triggered the largest marine oil spill in US history. The Obama administration imposed a deepwater drilling moratorium, reducing US Gulf of Mexico production prospects and creating a sustained geopolitical liability for BP.",
+    "domain": "energy",
+    "actors": ["BP", "Transocean", "US DOI/EPA", "Obama administration"],
+    "locations": ["United States", "Gulf of Mexico", "Louisiana"],
+    "channels": ["supply", "regulation", "environmental"],
+    "first_order_assets": ["WTI crude", "BP stock"],
+    "second_order_assets": ["US Gulf of Mexico production", "offshore drilling equipment", "deepwater insurance rates"],
+    "mechanism": "The Deepwater Horizon disaster led to a six-month US federal moratorium on deepwater drilling, creating regulatory uncertainty and slowing US Gulf production growth. BP's liability (ultimately ~$65bn) forced asset sales and refocused the company. The incident reshaped offshore regulation globally and added a regulatory risk premium to deepwater projects.",
+    "causal_chain": [
+      "Deepwater Horizon wellhead blowout causes explosion and sinking",
+      "Macondo well leaks ~4.9 million barrels over 87 days",
+      "Obama administration issues deepwater drilling moratorium",
+      "deepwater rig operators unable to re-drill or start new wells",
+      "BP stock falls ~55% from pre-spill levels",
+      "WTI initially spikes on supply disruption, then falls on demand fears during cleanup",
+      "moratorium lifted in October 2010 but regulatory requirements tighten permanently"
+    ],
+    "forecast": {
+      "direction": "mixed",
+      "horizons": ["immediate", "short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish oil near-term on supply concerns; bearish BP equity; medium-term supply neutral as moratorium eventually lifted"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "WTI was little changed short-term as the supply impact was modest relative to global output. BP stock fell ~55% from $59 pre-spill to ~$27 by late June 2010. The moratorium lasted until October 2010 with partial lifting.",
+      "chart_note": "MacroTrends WTI chart and BP stock chart confirm the equity selloff; crude less impacted",
+      "priced_in_note": null,
+      "reversal_note": "BP equity partially recovered over years as liability provisions were booked and operations normalised"
+    },
+    "regime_tags": ["infrastructure", "regulation", "supply_risk", "liability"],
+    "sources": [
+      {"title": "Deepwater Horizon — BP Gulf of Mexico oil spill", "publisher": "US Environmental Protection Agency", "url": "https://www.epa.gov/enforcement/deepwater-horizon-bp-gulf-mexico-oil-spill", "source_date": null, "source_type": "official"},
+      {"title": "Obama announces moratorium on deepwater drilling", "publisher": "Reuters", "url": "https://www.reuters.com/article/us-oil-spill-moratorium-idUSTRE64K5IE20100521", "source_date": "2010-05-27", "source_type": "event"},
+      {"title": "WTI Crude Oil Prices - Historical Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1369/crude-oil-price-history-chart", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  }
+]
