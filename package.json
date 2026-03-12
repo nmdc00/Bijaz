@@ -8,8 +8,10 @@
     "thufir": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm build:dashboard && tsc",
+    "build:dashboard": "pnpm --filter dashboard build",
     "dev": "tsx watch src/index.ts",
+    "dev:dashboard": "pnpm --filter dashboard dev",
     "start": "node dist/index.js",
     "thufir": "tsx src/cli/index.ts",
     "gateway": "tsx src/gateway/index.ts",

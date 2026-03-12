@@ -33,6 +33,7 @@ pnpm-debug.log*
 # Testing
 coverage/
 .nyc_output/
+src/gateway/dashboard-dist/
 
 # Data directories (contain user data)
 data/
