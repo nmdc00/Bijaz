@@ -1,0 +1,316 @@
+[
+  {
+    "case_key": "2019-abqaiq-attack-oil",
+    "event_date": "2019-09-14",
+    "event_type": "infrastructure_attack",
+    "title": "Abqaiq/Khurais Attack → Oil Spike",
+    "summary": "Drone and missile attacks on Saudi Arabia's Abqaiq processing facility and Khurais oil field temporarily removed approximately 5% of global oil supply, causing the largest single-day oil price spike in decades.",
+    "domain": "energy",
+    "actors": ["Houthi militants", "Saudi Aramco", "IEA"],
+    "locations": ["Saudi Arabia", "Abqaiq", "Khurais"],
+    "channels": ["supply", "infrastructure", "geopolitical_risk"],
+    "first_order_assets": ["Brent", "WTI"],
+    "second_order_assets": ["gasoline", "inflation expectations"],
+    "mechanism": "A major attack on Saudi processing and output infrastructure temporarily removed a large share of global oil supply. The market priced both the immediate supply loss and elevated geopolitical risk premium.",
+    "causal_chain": [
+      "attacks disable ~5.7 mb/d of Saudi processing capacity",
+      "market prices near-term supply loss and geopolitical escalation",
+      "crude risk premium rises sharply on Sunday open",
+      "oil benchmarks gap higher on Monday open"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish oil immediately; duration of impact and restoration timeline determines persistence"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent spiked as much as 19.5% intraday to $71.95. CNBC reported the largest single-day percentage gain in history. MacroTrends Brent chart shows 2019 high at $74.94.",
+      "chart_note": "MacroTrends Brent chart confirms spike; CNBC reported 19.5% intraday move",
+      "priced_in_note": null,
+      "reversal_note": "Prices retraced significantly within days as Saudi Arabia signaled faster-than-expected restoration"
+    },
+    "regime_tags": ["supply_shock", "geopolitical", "infrastructure", "energy_bull"],
+    "sources": [
+      {"title": "Oil price risk premium is back after attacks wipe out 5% of global supply", "publisher": "CNBC", "url": "https://www.cnbc.com/2019/09/16/oil-prices-saudi-drone-strikes-wipe-out-5percent-of-global-supply.html", "source_date": "2019-09-16", "source_type": "event"},
+      {"title": "Oil drops 5% one day after historic surge", "publisher": "CNBC", "url": "https://www.cnbc.com/2019/09/17/oil-slips-following-the-biggest-climb-in-history-after-saudi-attacks.html", "source_date": "2019-09-17", "source_type": "event"},
+      {"title": "Brent Crude Oil Prices 10 Year Daily Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2480/brent-crude-oil-prices-10-year-daily-chart", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2022-freeport-lng-outage-henry-hub",
+    "event_date": "2022-06-08",
+    "event_type": "infrastructure_outage",
+    "title": "Freeport LNG Outage → Henry Hub Selloff",
+    "summary": "An explosion at the Freeport LNG export terminal reduced U.S. LNG export capacity by ~2 Bcf/d, leaving more gas in the domestic market and sending Henry Hub sharply lower.",
+    "domain": "energy",
+    "actors": ["Freeport LNG", "EIA"],
+    "locations": ["United States", "Texas", "Freeport LNG terminal"],
+    "channels": ["demand", "export_capacity"],
+    "first_order_assets": ["Henry Hub natural gas"],
+    "second_order_assets": ["U.S. gas balances", "LNG export expectations", "European gas"],
+    "mechanism": "The Freeport outage reduced U.S. LNG export demand, leaving more gas in the domestic balance and pushing Henry Hub lower. The mirror effect was supportive for European gas, which lost an import source.",
+    "causal_chain": [
+      "Freeport LNG terminal shuts down after explosion",
+      "U.S. gas export capacity falls by ~2 Bcf/d",
+      "more gas remains in domestic U.S. balance",
+      "Henry Hub reprices lower",
+      "European TTF stays elevated as one LNG source is removed"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish Henry Hub while outage persists; bullish TTF/European gas as substitute"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "EIA reported Henry Hub fell $1.27/MMBtu to $8.16 on June 9, and ended June at $6.54.",
+      "chart_note": "MacroTrends natural gas chart shows 2022 volatile profile with summer decline",
+      "priced_in_note": null,
+      "reversal_note": "Henry Hub recovered partially when Freeport resumed partial operations in late 2022"
+    },
+    "regime_tags": ["supply_shock", "infrastructure", "outage", "energy_bear_domestic", "energy_bull_europe"],
+    "sources": [
+      {"title": "Freeport LNG outage shifts US supply and demand balance", "publisher": "EIA", "url": "https://www.eia.gov/pressroom/releases/press512.php", "source_date": "2022-07-12", "source_type": "event"},
+      {"title": "Natural Gas Prices Historical Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2478/natural-gas-prices-historical-chart", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2021-colonial-pipeline-hack",
+    "event_date": "2021-05-07",
+    "event_type": "infrastructure_attack",
+    "title": "Colonial Pipeline Ransomware Attack → U.S. Gasoline Shortage",
+    "summary": "A ransomware attack forced Colonial Pipeline to shut down its main pipeline, causing fuel shortages across the U.S. East Coast and a spike in gasoline and diesel prices.",
+    "domain": "energy",
+    "actors": ["DarkSide ransomware group", "Colonial Pipeline", "DOE"],
+    "locations": ["United States", "Southeast", "East Coast"],
+    "channels": ["supply", "infrastructure", "fuel_distribution"],
+    "first_order_assets": ["RBOB gasoline", "ULSD diesel"],
+    "second_order_assets": ["crude oil", "transportation costs"],
+    "mechanism": "Colonial Pipeline carries ~45% of fuel consumed on the U.S. East Coast. A shutdown of even a few days created localized supply stress and panic buying, driving up prices at the rack.",
+    "causal_chain": [
+      "ransomware attack forces Colonial Pipeline to halt operations",
+      "~2.5 million b/d of refined product flow disrupted",
+      "U.S. East Coast fuel inventories begin drawing",
+      "panic buying at retail level amplifies supply stress",
+      "gasoline and diesel futures spike"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish East Coast gasoline and diesel; effect concentrated regionally"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "RBOB gasoline futures spiked ~4-5%. Some gas stations ran out of fuel. Pipeline resumed within ~6 days.",
+      "chart_note": "Provisional — gasoline futures chart confirms May 2021 spike",
+      "priced_in_note": null,
+      "reversal_note": "Prices normalized quickly as pipeline restarted within days"
+    },
+    "regime_tags": ["infrastructure", "supply_disruption", "energy_bull"],
+    "sources": [
+      {"title": "Colonial Pipeline ransomware attack coverage", "publisher": "DOE", "url": null, "source_date": "2021-05-07", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-nord-stream-sabotage",
+    "event_date": "2022-09-26",
+    "event_type": "infrastructure_attack",
+    "title": "Nord Stream Pipeline Sabotage → European Gas Rally",
+    "summary": "Sabotage explosions damaged three of the four strings of the Nord Stream 1 and 2 pipelines under the Baltic Sea, permanently removing Russian pipeline gas transit capacity to Europe.",
+    "domain": "energy",
+    "actors": ["Unknown actors", "Russia", "EU"],
+    "locations": ["Baltic Sea", "Russia", "Germany", "Europe"],
+    "channels": ["supply", "infrastructure", "pipeline_flows"],
+    "first_order_assets": ["European natural gas (TTF)", "NBP"],
+    "second_order_assets": ["European power prices", "European industrial gas users"],
+    "mechanism": "Although both pipelines were already not flowing commercially by September 2022 (Nord Stream 1 throttled, Nord Stream 2 never certified), the sabotage permanently removed the option of resumed Russian gas flows through these routes, reducing Europe's medium-term supply flexibility.",
+    "causal_chain": [
+      "explosions damage Nord Stream pipelines at depth",
+      "three of four pipeline strings take on water and are rendered inoperable",
+      "market prices removal of any restart optionality",
+      "European gas prices spike on the news",
+      "EU energy security concerns deepen"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish European gas; removes optionality of Russian supply restoration through this route"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "TTF spiked on the news but remained volatile. The fundamental impact was confirmatory rather than new information since flows were already minimal.",
+      "chart_note": "Provisional — TTF chart confirms September 2022 spike on sabotage news",
+      "priced_in_note": "Russian gas flows had already been near zero; much of the supply disruption was already priced",
+      "reversal_note": "European gas prices declined sharply in late 2022 and 2023 as LNG imports rose and demand fell"
+    },
+    "regime_tags": ["infrastructure", "geopolitical", "sabotage", "energy_bull"],
+    "sources": [
+      {"title": "Nord Stream pipeline sabotage reporting", "publisher": "Reuters", "url": null, "source_date": "2022-09-26", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2021-texas-freeze-natgas",
+    "event_date": "2021-02-10",
+    "event_type": "weather_shock",
+    "title": "Texas Winter Storm Uri → Natural Gas Spot Price Spike",
+    "summary": "An unprecedented winter storm caused widespread power grid failures in Texas, freezing natural gas production and causing the Henry Hub spot price to spike to extreme levels.",
+    "domain": "energy",
+    "actors": ["ERCOT", "Texas gas producers", "FERC"],
+    "locations": ["Texas", "United States", "South Central"],
+    "channels": ["supply", "production_freeze", "demand_surge"],
+    "first_order_assets": ["Henry Hub natural gas"],
+    "second_order_assets": ["ERCOT power prices", "propane", "NGLs"],
+    "mechanism": "The simultaneous collapse of gas supply (frozen wellheads) and surge in heating demand during an extreme cold snap caused a localized physical shortage. Spot prices spiked to extraordinary levels before production recovered.",
+    "causal_chain": [
+      "Winter Storm Uri brings record cold to Texas",
+      "gas wellheads, pipes and processing plants freeze",
+      "Texas gas supply falls by ~10-15 Bcf/d",
+      "heating demand surges simultaneously",
+      "Henry Hub spot prices spike to $100+/MMBtu in some regional hubs"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate"],
+      "confidence": "high",
+      "note": "Extremely bullish natural gas spot while freeze persists; effect concentrated in affected region"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Texas spot gas prices spiked to extreme levels. Waha (Texas hub) briefly reached $400+/MMBtu. Henry Hub prompt month spiked sharply. Widespread power outages for days.",
+      "chart_note": "Provisional — Henry Hub chart confirms February 2021 spike",
+      "priced_in_note": null,
+      "reversal_note": "Prices normalized within days as temperatures recovered and production resumed"
+    },
+    "regime_tags": ["weather_shock", "infrastructure", "demand_surge", "energy_bull"],
+    "sources": [
+      {"title": "Texas winter storm Uri natural gas pricing analysis", "publisher": "EIA", "url": null, "source_date": "2021-03", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2011-libyan-civil-war-brent",
+    "event_date": "2011-02-17",
+    "event_type": "supply_disruption",
+    "title": "Libyan Civil War → Brent Oil Spike",
+    "summary": "The outbreak of civil war in Libya in early 2011 removed nearly 1.5 million barrels per day of light sweet crude from the market, driving a sustained Brent rally and widening the WTI-Brent spread.",
+    "domain": "energy",
+    "actors": ["Libya", "Gaddafi government", "rebels", "NATO", "IEA"],
+    "locations": ["Libya", "North Africa"],
+    "channels": ["supply", "production"],
+    "first_order_assets": ["Brent crude"],
+    "second_order_assets": ["WTI-Brent spread", "light sweet crude premiums", "Mediterranean refiners"],
+    "mechanism": "Libya was a top-10 OPEC producer of light sweet crude especially valued by European refiners. Civil war production shutdown tightened the specific grade that European refineries were configured for.",
+    "causal_chain": [
+      "civil unrest escalates to civil war in February 2011",
+      "oil production facilities evacuated and shut",
+      "Libyan output falls from ~1.5 mb/d to near zero",
+      "European refiners scramble for light sweet crude alternatives",
+      "Brent spikes toward $120; WTI-Brent spread widens"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish Brent specifically; light sweet crude grade tightness adds premium beyond headline Brent move"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent rallied from ~$100 to ~$120+ by April 2011. IEA released emergency stocks to help offset the supply loss.",
+      "chart_note": "Provisional — Brent chart confirms H1 2011 elevated pricing above $110",
+      "priced_in_note": null,
+      "reversal_note": "Production eventually resumed partially in H2 2011 as rebels gained control"
+    },
+    "regime_tags": ["geopolitical", "supply_disruption", "energy_bull", "civil_war"],
+    "sources": [
+      {"title": "Libya production disruption", "publisher": "IEA", "url": null, "source_date": "2011-03", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2021-ever-given-suez-blockage",
+    "event_date": "2021-03-23",
+    "event_type": "shipping_disruption",
+    "title": "Ever Given Suez Canal Blockage → Oil and Freight Spike",
+    "summary": "The Ever Given container ship ran aground in the Suez Canal in March 2021, blocking transit for six days and affecting ~12% of global trade flows.",
+    "domain": "energy",
+    "actors": ["Evergreen Line", "SCA", "Lloyd's market"],
+    "locations": ["Suez Canal", "Egypt"],
+    "channels": ["supply", "shipping", "trade_flows"],
+    "first_order_assets": ["Brent crude", "shipping freight rates"],
+    "second_order_assets": ["LNG tanker freight", "consumer goods delays"],
+    "mechanism": "The Suez Canal handles ~12% of global trade and significant crude/LNG volumes. A blockage forces ships around the Cape of Good Hope, adding ~10 days and fuel costs. Short-term oil rally as supply routes lengthen and insurance/logistics costs rise.",
+    "causal_chain": [
+      "Ever Given runs aground blocking Suez Canal",
+      "~400 ships queue on both ends of canal",
+      "crude tankers rerouted via Cape of Good Hope",
+      "additional fuel and time costs raise delivered prices",
+      "oil and freight briefly spike on supply logistics concern"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "medium",
+      "note": "Mildly bullish crude and freight; impact limited by expectation of quick resolution"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent spiked ~4-5% on the event but retraced quickly once the channel was reopened after 6 days. Freight rates saw modest upward pressure.",
+      "chart_note": "Provisional — Brent chart shows brief March 2021 bump",
+      "priced_in_note": null,
+      "reversal_note": "Canal unblocked March 29; prices fully normalized within days. Insurance premiums lingered."
+    },
+    "regime_tags": ["shipping", "supply_disruption", "chokepoint", "energy_bull"],
+    "sources": [
+      {"title": "Suez Canal Ever Given grounding coverage", "publisher": "Reuters", "url": null, "source_date": "2021-03-23", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2016-nigeria-militant-attacks-brent",
+    "event_date": "2016-03-01",
+    "event_type": "supply_disruption",
+    "title": "Niger Delta Militant Attacks → Nigerian Output Fall and Brent Support",
+    "summary": "Renewed militant attacks on oil infrastructure in Nigeria's Niger Delta in early 2016 cut Nigerian crude output by ~400,000-700,000 b/d, contributing to Brent's recovery from multi-year lows.",
+    "domain": "energy",
+    "actors": ["Niger Delta Avengers", "Shell", "Chevron", "Nigerian government"],
+    "locations": ["Nigeria", "Niger Delta"],
+    "channels": ["supply", "infrastructure", "production"],
+    "first_order_assets": ["Brent crude", "Bonny Light crude"],
+    "second_order_assets": ["West African crude spreads"],
+    "mechanism": "Nigeria is a significant light sweet crude producer and OPEC member. Militant attacks on pipelines and loading facilities repeatedly disrupted output below the country's OPEC quota, tightening the West African light sweet market.",
+    "causal_chain": [
+      "Niger Delta Avengers begin pipeline and facility attacks",
+      "Nigerian crude production falls by ~400-700 kb/d",
+      "force majeure declared on several cargoes",
+      "West African light sweet crude tightens",
+      "Brent supported above OPEC-era lows"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Supportive for Brent; magnitude depends on how long militant activity persists and whether alternative light sweet origins can fill gap"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Nigerian production fell to ~30-year lows in 2016. Brent recovered from ~$27 lows in January 2016 to ~$55 by year-end, assisted by Nigeria shortfall plus OPEC discussions.",
+      "chart_note": "Provisional — Brent chart shows 2016 recovery from January lows",
+      "priced_in_note": "OPEC Vienna agreement in November 2016 was the dominant driver of the full-year Brent recovery",
+      "reversal_note": null
+    },
+    "regime_tags": ["geopolitical", "supply_disruption", "energy_bull"],
+    "sources": [
+      {"title": "Nigerian crude output disruptions 2016", "publisher": "IEA", "url": null, "source_date": "2016-06", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]

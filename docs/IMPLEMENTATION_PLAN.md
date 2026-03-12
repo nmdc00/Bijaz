@@ -36,3 +36,10 @@
 - Record trade artifacts
 - Track signal quality and drift
 - Iterate on sizing + prioritization
+
+## Phase 6: General Trader Pivot
+- Event normalization from raw intel into distinct market-relevant events
+- Structured thought artifacts with mechanism, causal chain, and impacted assets
+- Forecast -> outcome -> learning loop with scheduled resolution
+- Domain-aware market context abstraction so proactive/news loops are not perp-only
+- Commodity readiness scaffolding ahead of historical-event training
