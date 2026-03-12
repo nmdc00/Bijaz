@@ -1689,6 +1689,27 @@ export class FallbackLlmClient implements LlmClient {
   ): Promise<LlmResponse> {
     const primaryMeta = this.primary.meta ?? { provider: 'unknown', model: 'unknown' };
     const fallbackMeta = this.fallback.meta ?? { provider: 'unknown', model: 'unknown' };
+    const ctx = getExecutionContext();
+    const allowNonCritical = this.config?.agent?.allowFallbackNonCritical ?? true;
+    const suppressByReason = shouldSuppressNonCriticalFallback(this.config, ctx?.reason);
+    if (
+      !ctx?.critical &&
+      primaryMeta.provider === 'local' &&
+      primaryMeta.kind === 'trivial' &&
+      (!allowNonCritical || suppressByReason)
+    ) {
+      const reason = !allowNonCritical
+        ? 'local trivial LLM skipped because non-critical fallback is disabled'
+        : `local trivial LLM skipped for suppressed non-critical reason: ${ctx?.reason ?? 'unknown'}`;
+      this.logger?.warn('LLM local trivial call skipped (non-critical context)', {
+        from: primaryMeta,
+        to: fallbackMeta,
+        reasonCode: suppressByReason ? 'non_critical_reason_suppressed_preemptive' : 'allowFallbackNonCritical=false',
+        contextReason: ctx?.reason ?? null,
+        reason,
+      });
+      throw new Error(reason);
+    }
     if (primaryMeta.provider !== 'unknown' && primaryMeta.model !== 'unknown') {
       const cooldown = isCooling(primaryMeta.provider, primaryMeta.model);
       if (cooldown) {
@@ -1709,9 +1730,6 @@ export class FallbackLlmClient implements LlmClient {
         throw error;
       }
       const reason = extractErrorMessage(error);
-      const ctx = getExecutionContext();
-      const allowNonCritical = this.config?.agent?.allowFallbackNonCritical ?? true;
-      const suppressByReason = shouldSuppressNonCriticalFallback(this.config, ctx?.reason);
       if (!ctx?.critical && (!allowNonCritical || suppressByReason)) {
         this.logger?.warn('LLM fallback suppressed (non-critical context)', {
           from: primaryMeta,

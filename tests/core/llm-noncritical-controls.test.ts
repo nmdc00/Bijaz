@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  FallbackLlmClient,
   resolveNonCriticalReasonCooldownMs,
   shouldSuppressNonCriticalFallback,
 } from '../../src/core/llm.js';
+import { withExecutionContext } from '../../src/core/llm_infra.js';
 
 const config = {
   agent: {
@@ -29,5 +31,27 @@ describe('LLM non-critical controls', () => {
     expect(resolveNonCriticalReasonCooldownMs(config, 'proactive_query_refine')).toBe(60_000);
     expect(resolveNonCriticalReasonCooldownMs(config, 'proactive_follow_up_queries')).toBe(45_000);
     expect(resolveNonCriticalReasonCooldownMs(config, 'unknown_reason')).toBe(0);
+  });
+
+  it('preemptively skips local trivial calls for suppressed non-critical reasons', async () => {
+    const primary = {
+      meta: { provider: 'local', model: 'qwen2.5:1.5b-instruct', kind: 'trivial' },
+      complete: vi.fn(async () => ({ content: 'primary', model: 'qwen2.5:1.5b-instruct' })),
+    };
+    const fallback = {
+      meta: { provider: 'openai', model: 'gpt-5.1', kind: 'trivial' },
+      complete: vi.fn(async () => ({ content: 'fallback', model: 'gpt-5.1' })),
+    };
+    const client = new FallbackLlmClient(primary as any, fallback as any, () => true, config);
+
+    await expect(
+      withExecutionContext(
+        { mode: 'LIGHT_REASONING', critical: false, reason: 'info_digest', source: 'conversation' },
+        () => client.complete([{ role: 'user', content: 'ping' }])
+      )
+    ).rejects.toThrow(/skipped/i);
+
+    expect(primary.complete).not.toHaveBeenCalled();
+    expect(fallback.complete).not.toHaveBeenCalled();
   });
 });
