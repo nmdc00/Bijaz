@@ -15,8 +15,8 @@ agent:
   # OpenAI model (used for info gathering + execution)
   openaiModel: gpt-5.2
   # Executor model (orchestrator pattern)
-  executorModel: gpt-5.2
-  executorProvider: openai
+  executorModel: claude-sonnet-4-6
+  executorProvider: anthropic
   useExecutorModel: false
   useOrchestrator: false
   showToolTrace: false
@@ -84,6 +84,12 @@ agent:
     keepWarmEnabled: true
     keepWarmIntervalSeconds: 180
     keepAlive: 30m
+  # Per-call-kind prompt char budgets (controls trimMessagesByCharBudget ceiling)
+  promptBudget:
+    enrichment: 10000   # Autonomous enrichment/annotation synthesis — always short
+    autonomous: 60000   # Autonomous primary reasoning calls
+    trivial: 10000      # Trivial/local model calls
+    chat: 120000        # Full conversation context (default)
   # Global LLM budget (rolling hour)
   llmBudget:
     enabled: true
@@ -188,7 +194,7 @@ paper:
   initialCashUsdc: 200
   defaultMode: paper
   requireExplicitLive: true
-  liveSymbolsAllowlist: ['BTC', 'ETH']
+  liveSymbolsAllowlist: []  # No restriction — all discovered markets eligible for live execution
   promotionGates:
     minTrades: 25
     maxDrawdownR: 6
@@ -237,6 +243,12 @@ autonomy:
     blockBelowScore: 0.45
     downweightBelowScore: 0.60
     downweightMultiplier: 0.60
+  adaptiveEdge:
+    enabled: true              # Replace synthetic confidence*0.1 with history-grounded edge
+    priorEdge: 0.015           # Edge used before minSamples reached per segment (1.5%)
+    minSamples: 10             # Closed trades needed before empirical estimate kicks in
+    signalScaleFactor: 0.5     # How much discovery confidence modulates edge (0=ignore, 1=full)
+    decayHalfLifeDays: null    # Time decay for old trades (null=off until enough data)
   discoverySelection:
     enabled: true
     fullUniverseWhenSymbolsEmpty: true  # If hyperliquid.symbols is [], rank full perp universe
@@ -536,4 +548,4 @@ hyperliquid:
   privateKey: ""
   maxLeverage: 5
   defaultSlippageBps: 10
-  symbols: ["BTC", "ETH"]  # Set to [] to allow full-universe discovery preselection
+  symbols: []  # Full-universe discovery: selectDiscoveryMarkets ranks all perps by OI/volume/spread

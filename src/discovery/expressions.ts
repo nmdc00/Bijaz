@@ -1,3 +1,5 @@
+import { resolveAdaptiveEdge } from '../core/adaptive_edge.js';
+import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import type { ThufirConfig } from '../core/config.js';
 import type {
   ExpressionContextPack,
@@ -46,28 +48,12 @@ export function mapExpressionPlan(
   const priceVol = cluster.signals.find((s) => s.kind === 'price_vol_regime');
   const orderflow = cluster.signals.find((s) => s.kind === 'orderflow_imbalance');
 
-  let expectedEdge =
-    cluster.directionalBias === 'neutral' ? 0 : Math.min(1, confidence * 0.1);
-
-  if (reflex) {
-    const setupScore = typeof reflex.metrics.setupScore === 'number' ? reflex.metrics.setupScore : confidence;
-    const edgeScale = Number((config as any)?.reflexivity?.edgeScale ?? 0.2);
-    expectedEdge = Math.min(1, clamp01(setupScore) * edgeScale);
-
-    // Rough carry-cost penalty: when you are on the paying side of funding, reduce edge.
-    const fundingRate = typeof reflex.metrics.fundingRate === 'number' ? reflex.metrics.fundingRate : 0;
-    const paying =
-      (side === 'buy' && fundingRate > 0) || (side === 'sell' && fundingRate < 0);
-    if (paying) {
-      const carryPenalty = Math.min(0.05, Math.abs(fundingRate) * 100); // heuristically cap at 5%
-      expectedEdge = Math.max(0, expectedEdge - carryPenalty);
-    }
-  }
-
+  // Signal class must be derived before edge so segment lookup is correct.
+  // Bug fix: _reflex → 'liquidation_cascade' (was incorrectly 'news_event')
   const signalClass: ExpressionPlan['signalClass'] = hypothesis.id.includes('_revert')
     ? 'mean_reversion'
     : hypothesis.id.includes('_reflex')
-      ? 'news_event'
+      ? 'liquidation_cascade'
       : hypothesis.id.includes('_trend')
         ? 'momentum_breakout'
         : 'unknown';
@@ -82,13 +68,55 @@ export function mapExpressionPlan(
   const liquidityBucket: ExpressionPlan['liquidityBucket'] =
     tradeCount >= 18 ? 'deep' : tradeCount <= 4 ? 'thin' : 'normal';
 
+  // Adaptive edge: neutral bias zeroes momentum_breakout only (requires directional
+  // conviction). Mean reversion and liquidation_cascade have non-directional rationale.
+  const isMomentumInNeutral =
+    signalClass === 'momentum_breakout' && cluster.directionalBias === 'neutral';
+
+  let expectedEdge: number;
+  if (isMomentumInNeutral) {
+    expectedEdge = 0;
+  } else if ((config.autonomy as any)?.adaptiveEdge?.enabled !== false) {
+    const edgeResult = resolveAdaptiveEdge(
+      config,
+      listPerpTradeJournals({ limit: 500 }),
+      { signalClass, marketRegime, volatilityBucket, liquidityBucket },
+      confidence
+    );
+    expectedEdge = edgeResult.edge;
+  } else {
+    // Legacy path (adaptiveEdge.enabled: false)
+    expectedEdge =
+      cluster.directionalBias === 'neutral' ? 0 : Math.min(1, confidence * 0.1);
+    if (reflex) {
+      const setupScore =
+        typeof reflex.metrics.setupScore === 'number' ? reflex.metrics.setupScore : confidence;
+      const edgeScale = Number((config as any)?.reflexivity?.edgeScale ?? 0.2);
+      expectedEdge = Math.min(1, clamp01(setupScore) * edgeScale);
+    }
+  }
+
+  // Carry-cost penalty for liquidation_cascade (reflex) hypotheses: paying funding
+  // reduces expected edge since carry works against the position.
+  if (reflex && signalClass === 'liquidation_cascade') {
+    const fundingRate =
+      typeof reflex.metrics.fundingRate === 'number' ? reflex.metrics.fundingRate : 0;
+    const paying =
+      (side === 'buy' && fundingRate > 0) || (side === 'sell' && fundingRate < 0);
+    if (paying) {
+      const carryPenalty = Math.min(0.05, Math.abs(fundingRate) * 100);
+      expectedEdge = Math.max(0, expectedEdge - carryPenalty);
+    }
+  }
+
   const newsTtlMinutes = Number((config.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120);
   const noveltyScore =
     typeof reflex?.metrics?.setupScore === 'number' ? clamp01(Number(reflex.metrics.setupScore)) : confidence;
   const marketConfirmationScore = clamp01(Math.abs(Number(orderflow?.metrics?.imbalance ?? 0)) * 2);
   const liquidityScore = clamp01(tradeCount / 20);
   const volatilityScore = clamp01(Math.abs(volZ));
-  const isNewsEvent = signalClass === 'news_event';
+  // After the _reflex bug fix, no signal class produced here is 'news_event'.
+  const isNewsEvent = false;
 
   return {
     id: `expr_${hypothesis.id}`,
