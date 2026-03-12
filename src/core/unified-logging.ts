@@ -10,8 +10,12 @@ function expandHome(path: string): string {
   return path;
 }
 
+const LOG_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] (DEBUG|INFO|WARN|ERROR):/;
+
 function serializeLine(level: Level, args: unknown[]): string {
   const msg = format(...(args as any[]));
+  // Logger already formats lines with a timestamp+level prefix — don't double-prefix.
+  if (LOG_PREFIX_RE.test(msg)) return `${msg}\n`;
   return `[${new Date().toISOString()}] ${level.toUpperCase()}: ${msg}\n`;
 }
 

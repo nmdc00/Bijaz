@@ -68,7 +68,13 @@ export async function signalPriceVolRegime(
   if (cached !== undefined) return cached;
 
   const priceService = new PriceService(config);
-  const candles = await priceService.getCandles(symbol, '1h', 80);
+  let candles: Awaited<ReturnType<typeof priceService.getCandles>>;
+  try {
+    candles = await priceService.getCandles(symbol, '1h', 80);
+  } catch {
+    signalCache.set(cacheKey, null, getSignalCacheTtlMs(config));
+    return null;
+  }
   if (candles.length < 30) return null;
 
   const closes = candles.map((c) => c.close);
