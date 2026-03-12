@@ -3921,57 +3921,6 @@ function getQmdKnowledgePath(ctx: ToolExecutorContext): string {
   return ctx.config.qmd?.knowledgePath ?? join(homedir(), '.thufir', 'knowledge');
 }
 
-function buildQmdCliArgs(
-  mode: 'query' | 'search' | 'vsearch',
-  query: string,
-  limit: number,
-  collection?: string
-): string[] {
-  const args = [mode, JSON.stringify(query), '--json', '-n', String(limit)];
-  if (collection) {
-    args.push('-c', collection);
-  }
-  return args;
-}
-
-async function runQmdCommand(
-  qmdCommand: string,
-  args: string[],
-  timeout = 30000
-): Promise<{ stdout: string; stderr: string }> {
-  return execAsync(`${JSON.stringify(qmdCommand)} ${args.join(' ')}`, {
-    timeout,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-}
-
-function isQmdDeepQueryCrash(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes('segmentation fault') ||
-    lower.includes('bun has crashed') ||
-    lower.includes('panic:') ||
-    lower.includes('timed out') ||
-    lower.includes('exit code 124') ||
-    lower.includes('exit code 137') ||
-    lower.includes(' killed') ||
-    lower.includes('dumped core')
-  );
-}
-
-function parseQmdOutput(stdout: string): unknown {
-  const trimmed = stdout.trim();
-  if (!trimmed || trimmed === 'No results found.') {
-    return [];
-  }
-
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return { raw: trimmed };
-  }
-}
-
 /**
  * Search the local knowledge base using QMD hybrid search.
  */
@@ -4006,11 +3955,26 @@ async function qmdQuery(
   }
 
   try {
-    const args = buildQmdCliArgs(mode as 'query' | 'search' | 'vsearch', query, limit, collection);
-    const { stdout, stderr } = await runQmdCommand(qmdCommand, args);
+    const args = [mode, JSON.stringify(query), '--format', 'json', '--limit', String(limit)];
+    if (collection) {
+      args.push('--collection', collection);
+    }
+
+    const { stdout, stderr } = await execAsync(`${JSON.stringify(qmdCommand)} ${args.join(' ')}`, {
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
 
     if (stderr && !stdout) {
       return { success: false, error: stderr.trim() };
+    }
+
+    let results: unknown;
+    try {
+      results = JSON.parse(stdout);
+    } catch {
+      // QMD might return non-JSON for some outputs
+      results = { raw: stdout.trim() };
     }
 
     return {
@@ -4019,44 +3983,11 @@ async function qmdQuery(
         query,
         mode,
         collection: collection ?? 'all',
-        results: parseQmdOutput(stdout),
+        results,
       },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    if (mode === 'query') {
-      try {
-        const fallbackMode: 'search' = 'search';
-        const fallbackArgs = buildQmdCliArgs(fallbackMode, query, limit, collection);
-        const { stdout, stderr } = await runQmdCommand(qmdCommand, fallbackArgs, 15000);
-        if (stderr && !stdout) {
-          return { success: false, error: stderr.trim() };
-        }
-
-        return {
-          success: true,
-          data: {
-            query,
-            mode: fallbackMode,
-            requestedMode: mode,
-            degraded: true,
-            warning: isQmdDeepQueryCrash(message)
-              ? 'QMD deep query failed; fell back to keyword search.'
-              : 'QMD query failed; fell back to keyword search.',
-            originalError: message,
-            collection: collection ?? 'all',
-            results: parseQmdOutput(stdout),
-          },
-        };
-      } catch (fallbackError) {
-        const fallbackMessage =
-          fallbackError instanceof Error ? fallbackError.message : 'Unknown error';
-        return {
-          success: false,
-          error: `QMD query failed: ${message}. Fallback search failed: ${fallbackMessage}`,
-        };
-      }
-    }
     return { success: false, error: `QMD query failed: ${message}` };
   }
 }
