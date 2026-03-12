@@ -1,11 +1,24 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 
-import { buildDashboardQuery, fetchDashboardSummary } from './api';
-import type { DashboardMode, DashboardPayload, DashboardTimeframe } from './types';
+import {
+  buildDashboardQuery,
+  fetchConversationThread,
+  fetchConversations,
+  fetchDashboardSummary,
+  fetchLogs,
+} from './api';
+import type {
+  ConversationSession,
+  ConversationThreadResponse,
+  DashboardMode,
+  DashboardPayload,
+  DashboardTimeframe,
+  LogsResponse,
+} from './types';
 
 const PERIODS = ['1d', '7d', '14d', '30d', '90d'];
-const TABS = ['overview', 'positions', 'trades', 'performance', 'policy'] as const;
+const TABS = ['overview', 'positions', 'trades', 'performance', 'policy', 'conversations', 'logs'] as const;
 type DashboardTab = (typeof TABS)[number];
 
 function money(value: number | null | undefined): string {
@@ -28,6 +41,26 @@ function timeText(value: string | null | undefined): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toLocaleString();
+}
+
+function shortDateLabel(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function relativeTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const diffMs = Date.now() - parsed.getTime();
+  const diffMinutes = Math.round(diffMs / 60_000);
+  if (Math.abs(diffMinutes) < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (Math.abs(diffHours) < 48) return `${diffHours}h ago`;
+  return shortDateLabel(value);
 }
 
 function badgeClass(value: unknown): string {
@@ -108,6 +141,25 @@ function PerfTable({ rows }: { rows: Array<Record<string, unknown>> }) {
   );
 }
 
+function ConversationThread({ thread }: { thread: ConversationThreadResponse | null }) {
+  if (!thread || thread.messages.length === 0) {
+    return <div className="empty-state">No messages in this thread.</div>;
+  }
+  return (
+    <div className="thread">
+      {thread.messages.map((message) => (
+        <div key={message.id} className={`thread-bubble ${message.role === 'user' ? 'thread-user' : 'thread-assistant'}`}>
+          <div className="thread-meta">
+            <span>{message.role}</span>
+            <span>{timeText(message.createdAt)}</span>
+          </div>
+          <div className="thread-body">{message.content}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function App() {
   const [mode, setMode] = useState<DashboardMode>('paper');
   const [timeframe, setTimeframe] = useState<DashboardTimeframe>('all');
@@ -119,6 +171,16 @@ export default function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshedAt, setRefreshedAt] = useState('');
+  const [conversations, setConversations] = useState<ConversationSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [thread, setThread] = useState<ConversationThreadResponse | null>(null);
+  const [conversationError, setConversationError] = useState('');
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [logs, setLogs] = useState<LogsResponse>({ entries: [], total: 0 });
+  const [logsKind, setLogsKind] = useState<'all' | 'decision' | 'incident'>('all');
+  const [logsOffset, setLogsOffset] = useState(0);
+  const [logsError, setLogsError] = useState('');
+  const [logsLoading, setLogsLoading] = useState(false);
 
   const query = useMemo(() => ({ mode, timeframe, period, from, to }), [mode, timeframe, period, from, to]);
   const queryString = useMemo(() => buildDashboardQuery(query), [query]);
@@ -150,6 +212,95 @@ export default function App() {
       window.clearInterval(handle);
     };
   }, [query, queryString, mode]);
+
+  useEffect(() => {
+    if (tab !== 'conversations') {
+      return;
+    }
+    let cancelled = false;
+    async function loadConversations() {
+      setConversationLoading(true);
+      setConversationError('');
+      try {
+        const response = await fetchConversations();
+        if (cancelled) return;
+        setConversations(response.sessions);
+        if (!selectedSessionId && response.sessions[0]?.sessionId) {
+          setSelectedSessionId(response.sessions[0].sessionId);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setConversationError(err instanceof Error ? err.message : 'Failed to load conversations');
+        }
+      } finally {
+        if (!cancelled) {
+          setConversationLoading(false);
+        }
+      }
+    }
+    void loadConversations();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, selectedSessionId]);
+
+  useEffect(() => {
+    if (tab !== 'conversations' || !selectedSessionId) {
+      return;
+    }
+    let cancelled = false;
+    async function loadThread() {
+      setConversationLoading(true);
+      setConversationError('');
+      try {
+        const response = await fetchConversationThread(selectedSessionId);
+        if (!cancelled) {
+          setThread(response);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setConversationError(err instanceof Error ? err.message : 'Failed to load thread');
+        }
+      } finally {
+        if (!cancelled) {
+          setConversationLoading(false);
+        }
+      }
+    }
+    void loadThread();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, selectedSessionId]);
+
+  useEffect(() => {
+    if (tab !== 'logs') {
+      return;
+    }
+    let cancelled = false;
+    async function loadLogs() {
+      setLogsLoading(true);
+      setLogsError('');
+      try {
+        const response = await fetchLogs(logsKind, 50, logsOffset);
+        if (!cancelled) {
+          setLogs(response);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLogsError(err instanceof Error ? err.message : 'Failed to load logs');
+        }
+      } finally {
+        if (!cancelled) {
+          setLogsLoading(false);
+        }
+      }
+    }
+    void loadLogs();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, logsKind, logsOffset]);
 
   const summary = payload?.sections.equityCurve.summary;
   const points = payload?.sections.equityCurve.points ?? [];
@@ -235,6 +386,114 @@ export default function App() {
 
       {tab === 'policy' && (
         <section className="panel"><div className="panel-head"><h2>Policy Envelope</h2><p>Raw policy-state slice surfaced for release gates and execution control.</p></div><div className="panel-body"><pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(policy ?? {}, null, 2)}</pre></div></section>
+      )}
+
+      {tab === 'conversations' && (
+        <section className="content-grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Conversations</h2>
+              <p>Read-only session history surfaced from `chat_messages`.</p>
+            </div>
+            <div className="panel-body">
+              {conversationError ? <div className="empty-state">{conversationError}</div> : null}
+              {conversationLoading && conversations.length === 0 ? <div className="empty-state">Loading conversations…</div> : null}
+              <div className="conversation-list">
+                {conversations.length === 0 && !conversationLoading ? <div className="empty-state">No conversations yet.</div> : null}
+                {conversations.map((session) => (
+                  <button
+                    key={session.sessionId}
+                    type="button"
+                    className={`conversation-item ${selectedSessionId === session.sessionId ? 'active' : ''}`}
+                    onClick={() => setSelectedSessionId(session.sessionId)}
+                  >
+                    <div className="conversation-row">
+                      <strong>{shortDateLabel(session.lastMessageAt)}</strong>
+                      <span>{relativeTime(session.lastMessageAt)}</span>
+                    </div>
+                    <div className="conversation-preview">{session.firstMessage}</div>
+                    <div className="conversation-row">
+                      <span>{session.messageCount} messages</span>
+                      <span className="mono">{session.sessionId.slice(0, 8)}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </article>
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Thread View</h2>
+              <p>User and assistant messages only.</p>
+            </div>
+            <div className="panel-body">
+              <ConversationThread thread={thread} />
+            </div>
+          </article>
+        </section>
+      )}
+
+      {tab === 'logs' && (
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Decision Logs</h2>
+            <p>Structured decision audit and agent-incident feed.</p>
+          </div>
+          <div className="panel-body">
+            <div className="tabs">
+              {(['all', 'decision', 'incident'] as const).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  className={`tab-button ${logsKind === kind ? 'active' : ''}`}
+                  onClick={() => {
+                    setLogsKind(kind);
+                    setLogsOffset(0);
+                  }}
+                >
+                  {kind}
+                </button>
+              ))}
+            </div>
+            {logsError ? <div className="empty-state">{logsError}</div> : null}
+            {logsLoading && logs.entries.length === 0 ? <div className="empty-state">Loading logs…</div> : null}
+            <div className="log-list">
+              {logs.entries.length === 0 && !logsLoading ? <div className="empty-state">No log entries yet.</div> : null}
+              {logs.entries.map((entry, index) => (
+                <article key={`${String(entry.kind)}-${String(entry.id)}-${index}`} className="log-card">
+                  <div className="conversation-row">
+                    <span className={badgeClass(entry.kind === 'decision' ? 'good' : 'mixed')}>{String(entry.kind ?? 'entry')}</span>
+                    <span>{timeText(String(entry.createdAt ?? ''))}</span>
+                  </div>
+                  {entry.kind === 'decision' ? (
+                    <>
+                      <strong>{String(entry.marketId ?? 'global')} · {String(entry.tradeAction ?? 'observe')}</strong>
+                      <div className="log-meta">
+                        edge {numberText(Number(entry.edge ?? 0) * 100, 2)}% · confidence {numberText(Number(entry.confidence ?? 0) * 100, 0)}% · tools {numberText(Number(entry.toolCallCount ?? 0), 0)}
+                      </div>
+                      {Array.isArray(entry.toolTrace) && entry.toolTrace.length > 0 ? (
+                        <pre className="log-pre mono">{JSON.stringify(entry.toolTrace, null, 2)}</pre>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <strong>{String(entry.toolName ?? 'unknown tool')} · {String(entry.blockerKind ?? 'incident')}</strong>
+                      <div className="log-meta">{String(entry.error ?? '')}</div>
+                      {entry.details ? <pre className="log-pre mono">{JSON.stringify(entry.details, null, 2)}</pre> : null}
+                    </>
+                  )}
+                </article>
+              ))}
+            </div>
+            <div className="conversation-row" style={{ marginTop: '14px' }}>
+              <span>{logs.total} total entries</span>
+              <div className="tabs" style={{ margin: 0 }}>
+                <button type="button" className="tab-button" disabled={logsOffset === 0} onClick={() => setLogsOffset((value) => Math.max(0, value - 50))}>Prev</button>
+                <button type="button" className="tab-button" disabled={logsOffset + 50 >= logs.total} onClick={() => setLogsOffset((value) => value + 50)}>Next</button>
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
       <div className="footnote">Polling cadence: {mode === 'live' ? '5 seconds' : '30 seconds'} · query `{queryString || '(none)'}`.</div>
