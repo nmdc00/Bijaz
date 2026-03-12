@@ -144,6 +144,31 @@ describe('dashboard conversations and logs api', () => {
     expect(payload.messages.map((item) => item.content)).toEqual(expectedContents);
   });
 
+  it('preserves insertion order when multiple messages share the same timestamp', () => {
+    const db = createDb('thufir-dashboard-thread-order-');
+    storeChatMessage({
+      sessionId: 'session-same-ts',
+      role: 'user',
+      content: 'first',
+      createdAt: '2026-03-10T10:00:00.000Z',
+    });
+    storeChatMessage({
+      sessionId: 'session-same-ts',
+      role: 'assistant',
+      content: 'second',
+      createdAt: '2026-03-10T10:00:00.000Z',
+    });
+    storeChatMessage({
+      sessionId: 'session-same-ts',
+      role: 'user',
+      content: 'third',
+      createdAt: '2026-03-10T10:00:00.000Z',
+    });
+
+    const payload = buildConversationThreadResponse('session-same-ts', { db, limit: 50 });
+    expect(payload.messages.map((item) => item.content)).toEqual(['first', 'second', 'third']);
+  });
+
   it('returns merged decision and incident log entries with parsed tool traces', () => {
     const db = createDb('thufir-dashboard-logs-');
     recordDecisionAudit({
