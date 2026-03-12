@@ -1,0 +1,62 @@
+[
+  {
+    "id": "intel-1",
+    "title": "Russia bans wheat exports after crop losses",
+    "content": "Moscow moves to halt wheat exports after severe crop losses, tightening global grain supply.",
+    "source": "Fixture",
+    "sourceType": "news",
+    "category": "agri",
+    "url": "https://example.com/agri/russia-wheat-ban-1",
+    "timestamp": "2026-03-10T08:00:00Z"
+  },
+  {
+    "id": "intel-2",
+    "title": "Russia extends wheat export ban as supply fears grow",
+    "content": "Officials said the export ban would continue while wheat inventories remain under pressure.",
+    "source": "Fixture",
+    "sourceType": "news",
+    "category": "agri",
+    "url": "https://example.com/agri/russia-wheat-ban-2",
+    "timestamp": "2026-03-10T10:30:00Z"
+  },
+  {
+    "id": "intel-3",
+    "title": "Abqaiq attack disrupts Saudi oil output",
+    "content": "A strike near Abqaiq disrupted crude output and raised concern about near-term global oil supply.",
+    "source": "Fixture",
+    "sourceType": "news",
+    "category": "energy",
+    "url": "https://example.com/energy/abqaiq-1",
+    "timestamp": "2026-03-11T05:00:00Z"
+  },
+  {
+    "id": "intel-4",
+    "title": "Saudi oil facilities hit near Abqaiq, output shaken",
+    "content": "Energy markets reacted after attacks near Abqaiq damaged infrastructure and threatened crude shipments.",
+    "source": "Fixture",
+    "sourceType": "news",
+    "category": "energy",
+    "url": "https://example.com/energy/abqaiq-2",
+    "timestamp": "2026-03-11T06:10:00Z"
+  },
+  {
+    "id": "intel-5",
+    "title": "Fed signals slower cuts as inflation stays sticky",
+    "content": "Federal Reserve officials suggested rates may stay higher for longer because inflation remains sticky.",
+    "source": "Fixture",
+    "sourceType": "news",
+    "category": "macro",
+    "url": "https://example.com/macro/fed-1",
+    "timestamp": "2026-03-12T13:00:00Z"
+  },
+  {
+    "id": "intel-6",
+    "title": "Federal Reserve warns inflation still sticky, rate cuts delayed",
+    "content": "The Fed cautioned that inflation progress remains uneven, delaying the case for near-term rate cuts.",
+    "source": "Fixture",
+    "sourceType": "news",
+    "category": "macro",
+    "url": "https://example.com/macro/fed-2",
+    "timestamp": "2026-03-12T14:20:00Z"
+  }
+]
