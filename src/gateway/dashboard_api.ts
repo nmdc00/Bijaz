@@ -385,22 +385,23 @@ export function buildConversationThreadResponse(
   const limit = Math.max(1, Math.min(200, Number(params?.limit ?? 50) || 50));
   const rows = db.prepare(
     `
-      SELECT id, role, content, createdAt
+      SELECT id, role, content, createdAt, rowOrder
       FROM (
-        SELECT id, role, content, created_at AS createdAt
+        SELECT id, role, content, created_at AS createdAt, rowid AS rowOrder
         FROM chat_messages
         WHERE session_id = ?
           AND role IN ('user', 'assistant')
-        ORDER BY created_at DESC, id DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT ?
       )
-      ORDER BY createdAt ASC, id ASC
+      ORDER BY createdAt ASC, rowOrder ASC
     `
   ).all(sessionId, limit) as Array<{
     id: string;
     role: 'user' | 'assistant';
     content: string;
     createdAt: string;
+    rowOrder: number;
   }>;
 
   return {
