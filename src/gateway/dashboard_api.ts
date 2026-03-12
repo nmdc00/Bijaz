@@ -351,6 +351,7 @@ export function buildConversationsListResponse(params?: {
         ), '') AS firstMessage
       FROM chat_messages cm
       WHERE cm.role IN ('user', 'assistant')
+        AND cm.session_id NOT GLOB '__*'
       GROUP BY cm.session_id
       ORDER BY MAX(cm.created_at) DESC, cm.session_id DESC
     `
