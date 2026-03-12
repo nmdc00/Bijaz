@@ -149,6 +149,18 @@ describe('signal cache integration — deduplication across calls', () => {
       await signalPriceVolRegime(baseConfig, 'THIN/USDT');
       expect(mockGetCandles).toHaveBeenCalledTimes(2);
     });
+
+    it('returns null and caches it when candle fetch throws for an unsupported symbol', async () => {
+      mockGetCandles.mockRejectedValueOnce(new Error('BadSymbol: binance does not have market symbol HYPE/USDT'));
+
+      const first = await signalPriceVolRegime(baseConfig, 'HYPE/USDT');
+      expect(first).toBeNull();
+      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+
+      const second = await signalPriceVolRegime(baseConfig, 'HYPE/USDT');
+      expect(second).toBeNull();
+      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ─── signalCrossAssetDivergence ─────────────────────────────────────────
@@ -187,6 +199,40 @@ describe('signal cache integration — deduplication across calls', () => {
       const result = await signalCrossAssetDivergence(baseConfig, ['BTC/USDT']);
       expect(result).toEqual([]);
       expect(mockGetCandles).not.toHaveBeenCalled();
+    });
+
+    it('skips unsupported symbols when candle fetch throws and caches the reduced result', async () => {
+      mockGetCandles.mockImplementation(async (symbol: string) => {
+        if (symbol === 'HYPE/USDT') {
+          throw new Error('BadSymbol: binance does not have market symbol HYPE/USDT');
+        }
+        return Array.from({ length: 40 }, (_, i) => ({ close: 40000 + i * 10 + symbol.length }));
+      });
+
+      const first = await signalCrossAssetDivergence(baseConfig, ['BTC/USDT', 'ETH/USDT', 'HYPE/USDT']);
+      expect(Array.isArray(first)).toBe(true);
+      expect(mockGetCandles).toHaveBeenCalledTimes(3);
+
+      const second = await signalCrossAssetDivergence(baseConfig, ['ETH/USDT', 'HYPE/USDT', 'BTC/USDT']);
+      expect(second).toEqual(first);
+      expect(mockGetCandles).toHaveBeenCalledTimes(3);
+    });
+
+    it('returns [] and caches it when fewer than 2 supported symbols remain after fetch failures', async () => {
+      mockGetCandles.mockImplementation(async (symbol: string) => {
+        if (symbol !== 'BTC/USDT') {
+          throw new Error(`BadSymbol: unsupported ${symbol}`);
+        }
+        return Array.from({ length: 40 }, (_, i) => ({ close: 40000 + i }));
+      });
+
+      const first = await signalCrossAssetDivergence(baseConfig, ['BTC/USDT', 'HYPE/USDT']);
+      expect(first).toEqual([]);
+      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+
+      const second = await signalCrossAssetDivergence(baseConfig, ['HYPE/USDT', 'BTC/USDT']);
+      expect(second).toEqual([]);
+      expect(mockGetCandles).toHaveBeenCalledTimes(2);
     });
   });
 
