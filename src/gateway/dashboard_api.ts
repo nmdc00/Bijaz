@@ -8,6 +8,7 @@ import { getDailyPnLRollup } from '../core/daily_pnl.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { openDatabase } from '../memory/db.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
+import { cached, cachedAsync } from './dashboard_cache.js';
 
 export type DashboardMode = 'paper' | 'live' | 'combined';
 export type DashboardTimeframe = 'day' | 'period' | 'all' | 'custom';
@@ -18,6 +19,72 @@ export type DashboardFilters = {
   period: string | null;
   from: string | null;
   to: string | null;
+};
+
+export type ConversationSession = {
+  sessionId: string;
+  messageCount: number;
+  firstMessage: string;
+  startedAt: string;
+  lastMessageAt: string;
+};
+
+export type ConversationsListResponse = {
+  sessions: ConversationSession[];
+};
+
+export type ConversationThreadMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+};
+
+export type ConversationThreadResponse = {
+  sessionId: string;
+  messages: ConversationThreadMessage[];
+};
+
+export type DashboardLogKind = 'decision' | 'incident';
+
+export type ToolTraceEntry = {
+  toolName: string;
+  input: Record<string, unknown>;
+  success: boolean;
+};
+
+export type DecisionAuditEntry = {
+  kind: 'decision';
+  id: number;
+  createdAt: string;
+  source: string | null;
+  sessionId: string | null;
+  marketId: string | null;
+  tradeAction: string | null;
+  confidence: number | null;
+  edge: number | null;
+  criticApproved: boolean | null;
+  toolCallCount: number;
+  iterations: number;
+  toolTrace: ToolTraceEntry[];
+  planTrace: unknown;
+  notes: unknown;
+};
+
+export type IncidentEntry = {
+  kind: 'incident';
+  id: number;
+  createdAt: string;
+  goal: string | null;
+  toolName: string | null;
+  error: string;
+  blockerKind: string | null;
+  details: unknown;
+};
+
+export type LogsResponse = {
+  entries: Array<DecisionAuditEntry | IncidentEntry>;
+  total: number;
 };
 
 type TimeRange = {
@@ -60,6 +127,24 @@ type EquityCurveSection = {
     maxDrawdownPct: number | null;
   };
 };
+
+function parseJson<T>(value: unknown): T | null {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
 
 function getDashboardConfig(): ThufirConfig | null {
   try {
@@ -228,6 +313,247 @@ function safeCount(
   } catch {
     return 0;
   }
+}
+
+function parsePositiveInt(value: string | null, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function buildDashboardCacheKey(namespace: string, url: URL): string {
+  return `${namespace}:${url.pathname}?${url.searchParams.toString()}`;
+}
+
+export function buildConversationsListResponse(params?: {
+  db?: Database.Database;
+}): ConversationsListResponse {
+  const db = params?.db ?? openDatabase();
+  if (!tableExists(db, 'chat_messages')) {
+    return { sessions: [] };
+  }
+  const rows = db.prepare(
+    `
+      SELECT
+        cm.session_id AS sessionId,
+        COUNT(*) AS messageCount,
+        MIN(cm.created_at) AS startedAt,
+        MAX(cm.created_at) AS lastMessageAt,
+        COALESCE((
+          SELECT content
+          FROM chat_messages cm2
+          WHERE cm2.session_id = cm.session_id
+            AND cm2.role = 'user'
+          ORDER BY cm2.created_at ASC, cm2.id ASC
+          LIMIT 1
+        ), '') AS firstMessage
+      FROM chat_messages cm
+      WHERE cm.role IN ('user', 'assistant')
+      GROUP BY cm.session_id
+      ORDER BY MAX(cm.created_at) DESC, cm.session_id DESC
+    `
+  ).all() as Array<{
+    sessionId: string;
+    messageCount: number;
+    startedAt: string;
+    lastMessageAt: string;
+    firstMessage: string;
+  }>;
+
+  return {
+    sessions: rows.map((row) => ({
+      sessionId: String(row.sessionId),
+      messageCount: Number(row.messageCount ?? 0),
+      startedAt: String(row.startedAt),
+      lastMessageAt: String(row.lastMessageAt),
+      firstMessage: truncateText(String(row.firstMessage ?? ''), 120),
+    })),
+  };
+}
+
+export function buildConversationThreadResponse(
+  sessionId: string,
+  params?: { db?: Database.Database }
+): ConversationThreadResponse {
+  const db = params?.db ?? openDatabase();
+  if (!tableExists(db, 'chat_messages')) {
+    return { sessionId, messages: [] };
+  }
+  const rows = db.prepare(
+    `
+      SELECT id, role, content, created_at AS createdAt
+      FROM chat_messages
+      WHERE session_id = ?
+        AND role IN ('user', 'assistant')
+      ORDER BY created_at ASC, id ASC
+    `
+  ).all(sessionId) as Array<{
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    createdAt: string;
+  }>;
+
+  return {
+    sessionId,
+    messages: rows.map((row) => ({
+      id: String(row.id),
+      role: row.role === 'assistant' ? 'assistant' : 'user',
+      content: String(row.content ?? ''),
+      createdAt: String(row.createdAt),
+    })),
+  };
+}
+
+function listDecisionAuditEntries(
+  db: Database.Database,
+  limit: number,
+  offset: number
+): DecisionAuditEntry[] {
+  if (!tableExists(db, 'decision_audit')) {
+    return [];
+  }
+  const rows = db.prepare(
+    `
+      SELECT
+        id,
+        created_at AS createdAt,
+        source,
+        session_id AS sessionId,
+        market_id AS marketId,
+        trade_action AS tradeAction,
+        confidence,
+        edge,
+        critic_approved AS criticApproved,
+        tool_calls AS toolCalls,
+        iterations,
+        tool_trace AS toolTrace,
+        plan_trace AS planTrace,
+        notes
+      FROM decision_audit
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+      OFFSET ?
+    `
+  ).all(limit, offset) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => {
+    const parsedToolTrace = parseJson<Array<Record<string, unknown>>>(row.toolTrace) ?? [];
+    const toolTrace = parsedToolTrace.map((entry) => ({
+      toolName: String(entry.toolName ?? entry.name ?? ''),
+      input:
+        entry.input && typeof entry.input === 'object' && !Array.isArray(entry.input)
+          ? (entry.input as Record<string, unknown>)
+          : {},
+      success: Boolean(entry.success),
+    }));
+    const criticApprovedRaw = row.criticApproved;
+    return {
+      kind: 'decision',
+      id: Number(row.id ?? 0),
+      createdAt: String(row.createdAt ?? ''),
+      source: row.source == null ? null : String(row.source),
+      sessionId: row.sessionId == null ? null : String(row.sessionId),
+      marketId: row.marketId == null ? null : String(row.marketId),
+      tradeAction: row.tradeAction == null ? null : String(row.tradeAction),
+      confidence: row.confidence == null ? null : Number(row.confidence),
+      edge: row.edge == null ? null : Number(row.edge),
+      criticApproved:
+        criticApprovedRaw == null ? null : Number(criticApprovedRaw) === 1,
+      toolCallCount: Math.max(Number(row.toolCalls ?? toolTrace.length ?? 0) || 0, toolTrace.length),
+      iterations: Number(row.iterations ?? 0) || 0,
+      toolTrace,
+      planTrace: parseJson(row.planTrace),
+      notes: parseJson(row.notes),
+    } satisfies DecisionAuditEntry;
+  });
+}
+
+function listIncidentEntries(
+  db: Database.Database,
+  limit: number,
+  offset: number
+): IncidentEntry[] {
+  if (!tableExists(db, 'agent_incidents')) {
+    return [];
+  }
+  const rows = db.prepare(
+    `
+      SELECT
+        id,
+        created_at AS createdAt,
+        goal,
+        tool_name AS toolName,
+        error,
+        blocker_kind AS blockerKind,
+        details_json AS details
+      FROM agent_incidents
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+      OFFSET ?
+    `
+  ).all(limit, offset) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => ({
+    kind: 'incident',
+    id: Number(row.id ?? 0),
+    createdAt: String(row.createdAt ?? ''),
+    goal: row.goal == null ? null : String(row.goal),
+    toolName: row.toolName == null ? null : String(row.toolName),
+    error: String(row.error ?? ''),
+    blockerKind: row.blockerKind == null ? null : String(row.blockerKind),
+    details: parseJson(row.details),
+  }));
+}
+
+export function buildDashboardLogsResponse(params?: {
+  db?: Database.Database;
+  kind?: 'decision' | 'incident' | 'all';
+  limit?: number;
+  offset?: number;
+}): LogsResponse {
+  const db = params?.db ?? openDatabase();
+  const kind = params?.kind ?? 'all';
+  const limit = Math.max(1, Math.min(200, Number(params?.limit ?? 50) || 50));
+  const offset = Math.max(0, Number(params?.offset ?? 0) || 0);
+
+  if (kind === 'decision') {
+    const total = safeCount(db, 'SELECT COUNT(*) AS c FROM decision_audit');
+    return {
+      entries: listDecisionAuditEntries(db, limit, offset),
+      total,
+    };
+  }
+
+  if (kind === 'incident') {
+    const total = safeCount(db, 'SELECT COUNT(*) AS c FROM agent_incidents');
+    return {
+      entries: listIncidentEntries(db, limit, offset),
+      total,
+    };
+  }
+
+  const fetchWindow = limit + offset;
+  const decisions = listDecisionAuditEntries(db, fetchWindow, 0);
+  const incidents = listIncidentEntries(db, fetchWindow, 0);
+  const entries = [...decisions, ...incidents]
+    .sort((a, b) => {
+      const timeDiff = Date.parse(String(b.createdAt)) - Date.parse(String(a.createdAt));
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return Number(b.id) - Number(a.id);
+    })
+    .slice(offset, offset + limit);
+
+  return {
+    entries,
+    total:
+      safeCount(db, 'SELECT COUNT(*) AS c FROM decision_audit') +
+      safeCount(db, 'SELECT COUNT(*) AS c FROM agent_incidents'),
+  };
 }
 
 function listPaperPerpFills(db: Database.Database): PaperPerpFillRow[] {
@@ -1493,7 +1819,7 @@ function writeJson(res: ServerResponse, status: number, payload: unknown): void 
 export function handleDashboardApiRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const path = url.pathname;
-  if (!path.startsWith('/api/dashboard')) {
+  if (!path.startsWith('/api/dashboard') && !path.startsWith('/api/conversations') && !path.startsWith('/api/logs')) {
     return false;
   }
 
@@ -1509,8 +1835,10 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
 
   if (path === '/api/dashboard' || path === '/api/dashboard/summary') {
     const filters = parseDashboardFilters(url);
-    const payload = buildDashboardApiPayload({ filters });
+    const ttlMs = isLiveMode(filters) ? 5_000 : 30_000;
+    const cacheKey = buildDashboardCacheKey('dashboard', url);
     if (!isLiveMode(filters)) {
+      const payload = cached(cacheKey, ttlMs, () => buildDashboardApiPayload({ filters }));
       writeJson(res, 200, payload);
       return true;
     }
@@ -1519,27 +1847,66 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
     // If unavailable, return the DB-backed payload as-is.
     const baseConfig = (req as IncomingMessage & { thufirConfig?: ThufirConfig }).thufirConfig;
     if (!baseConfig) {
+      const payload = cached(cacheKey, ttlMs, () => buildDashboardApiPayload({ filters }));
       writeJson(res, 200, payload);
       return true;
     }
-    void tryBuildLiveWalletSnapshot(baseConfig)
-      .then((snapshot) => {
-        if (!snapshot) {
-          writeJson(res, 200, payload);
-          return;
-        }
-        writeJson(res, 200, {
-          ...payload,
-          sections: {
-            ...payload.sections,
-            equityCurve: snapshot.equityCurve,
-            openPositions: snapshot.openPositions,
-          },
-        });
+    void cachedAsync(cacheKey, ttlMs, async () => {
+      const payload = buildDashboardApiPayload({ filters });
+      const snapshot = await tryBuildLiveWalletSnapshot(baseConfig);
+      if (!snapshot) {
+        return payload;
+      }
+      return {
+        ...payload,
+        sections: {
+          ...payload.sections,
+          equityCurve: snapshot.equityCurve,
+          openPositions: snapshot.openPositions,
+        },
+      };
+    })
+      .then((payload) => {
+        writeJson(res, 200, payload);
       })
       .catch(() => {
+        const payload = buildDashboardApiPayload({ filters });
         writeJson(res, 200, payload);
       });
+    return true;
+  }
+
+  if (path === '/api/conversations') {
+    const payload = cached(buildDashboardCacheKey('conversations', url), 10_000, () =>
+      buildConversationsListResponse()
+    );
+    writeJson(res, 200, payload);
+    return true;
+  }
+
+  if (path.startsWith('/api/conversations/')) {
+    const sessionId = decodeURIComponent(path.slice('/api/conversations/'.length)).trim();
+    if (!sessionId) {
+      writeJson(res, 400, { ok: false, error: 'Missing session id' });
+      return true;
+    }
+    const payload = cached(buildDashboardCacheKey('conversation-thread', url), 10_000, () =>
+      buildConversationThreadResponse(sessionId)
+    );
+    writeJson(res, 200, payload);
+    return true;
+  }
+
+  if (path === '/api/logs') {
+    const kindRaw = String(url.searchParams.get('kind') ?? 'all').trim().toLowerCase();
+    const kind: 'decision' | 'incident' | 'all' =
+      kindRaw === 'decision' || kindRaw === 'incident' ? kindRaw : 'all';
+    const limit = parsePositiveInt(url.searchParams.get('limit'), 50, 1, 200);
+    const offset = parsePositiveInt(url.searchParams.get('offset'), 0, 0, 10_000);
+    const payload = cached(buildDashboardCacheKey('logs', url), 15_000, () =>
+      buildDashboardLogsResponse({ kind, limit, offset })
+    );
+    writeJson(res, 200, payload);
     return true;
   }
 
