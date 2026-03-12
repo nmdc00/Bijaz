@@ -194,7 +194,7 @@ paper:
   initialCashUsdc: 200
   defaultMode: paper
   requireExplicitLive: true
-  liveSymbolsAllowlist: ['BTC', 'ETH']
+  liveSymbolsAllowlist: []  # No restriction — all discovered markets eligible for live execution
   promotionGates:
     minTrades: 25
     maxDrawdownR: 6
@@ -548,4 +548,4 @@ hyperliquid:
   privateKey: ""
   maxLeverage: 5
   defaultSlippageBps: 10
-  symbols: ["BTC", "ETH"]  # Set to [] to allow full-universe discovery preselection
+  symbols: []  # Full-universe discovery: selectDiscoveryMarkets ranks all perps by OI/volume/spread
