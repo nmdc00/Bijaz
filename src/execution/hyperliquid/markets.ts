@@ -8,8 +8,11 @@ function normalizeMarketSymbol(value: string): string {
 
 function toBaseMarketSymbol(value: string): string {
   const normalized = normalizeMarketSymbol(value);
-  const [base] = normalized.split('/');
-  return base ?? normalized;
+  const withoutQuote = normalized.split('/')[0] ?? normalized;
+  const withoutDexPrefix = withoutQuote.includes(':')
+    ? (withoutQuote.split(':').at(-1) ?? withoutQuote)
+    : withoutQuote;
+  return withoutDexPrefix;
 }
 
 function matchesMarketSymbol(candidate: string, query: string): boolean {

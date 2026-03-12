@@ -4,6 +4,7 @@ import type {
   FundingHistoryResponse,
   L2BookResponse,
   MetaAndAssetCtxsResponse,
+  PerpDexsResponse,
   PortfolioResponse,
   RecentTradesResponse,
   SpotClearinghouseStateResponse,
@@ -20,8 +21,13 @@ export type HyperliquidMetaUniverse = Array<{
 export type HyperliquidMarket = {
   symbol: string;
   assetId: number;
+  dex?: string | null;
   maxLeverage?: number;
   szDecimals?: number;
+};
+
+type HyperliquidPerpAssetCtx = {
+  markPx?: string | number | null;
 };
 
 export class HyperliquidClient {
@@ -81,24 +87,55 @@ export class HyperliquidClient {
     return this.exchange;
   }
 
+  async listPerpDexs(): Promise<string[]> {
+    const response = await this.info.perpDexs();
+    return (response as PerpDexsResponse)
+      .flatMap((entry) => (entry?.name ? [entry.name] : []))
+      .filter((name) => name.trim().length > 0);
+  }
+
   async listPerpMarkets(): Promise<HyperliquidMarket[]> {
-    const meta = await this.info.meta();
-    const universe = (meta as { universe?: HyperliquidMetaUniverse }).universe ?? [];
-    return universe.map((item, idx) => ({
-      symbol: item.name,
-      assetId: idx,
-      maxLeverage: item.maxLeverage,
-      szDecimals: item.szDecimals,
-    }));
+    const dexs = await this.listPerpDexs();
+    const metas = await Promise.all([
+      this.info.meta(),
+      ...dexs.map((dex) => this.info.meta({ dex })),
+    ]);
+
+    return metas.flatMap((meta, metaIndex) => {
+      const dex = metaIndex === 0 ? null : dexs[metaIndex - 1] ?? null;
+      const universe = (meta as { universe?: HyperliquidMetaUniverse }).universe ?? [];
+      return universe.map((item, idx) => ({
+        symbol: item.name,
+        assetId: idx,
+        dex,
+        maxLeverage: item.maxLeverage,
+        szDecimals: item.szDecimals,
+      }));
+    });
   }
 
   async getAllMids(): Promise<Record<string, number>> {
-    const mids = await this.info.allMids();
+    const [mids, dexs] = await Promise.all([this.info.allMids(), this.listPerpDexs()]);
     const out: Record<string, number> = {};
     for (const [symbol, value] of Object.entries(mids ?? {})) {
       const num = Number(value);
       if (Number.isFinite(num)) {
         out[symbol] = num;
+      }
+    }
+
+    const dexContexts = await Promise.all(
+      dexs.map(async (dex) => ({ dex, response: await this.info.metaAndAssetCtxs({ dex }) }))
+    );
+    for (const { response } of dexContexts) {
+      const [meta, assetCtxs] = response as MetaAndAssetCtxsResponse;
+      const universe = (meta as { universe?: HyperliquidMetaUniverse }).universe ?? [];
+      for (const [idx, market] of universe.entries()) {
+        const ctx = assetCtxs[idx] as HyperliquidPerpAssetCtx | undefined;
+        const num = Number(ctx?.markPx ?? NaN);
+        if (Number.isFinite(num)) {
+          out[market.name] = num;
+        }
       }
     }
     return out;
