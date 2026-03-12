@@ -454,8 +454,8 @@ const ConfigSchema = z.object({
           providers: z
             .object({
               order: z
-                .array(z.enum(['brave', 'perplexity', 'serpapi', 'duckduckgo']))
-                .default(['brave', 'serpapi', 'duckduckgo']),
+                .array(z.enum(['brave', 'perplexity', 'serpapi', 'duckduckgo', 'tavily']))
+                .default(['tavily', 'brave', 'serpapi', 'duckduckgo']),
               brave: z
                 .object({
                   enabled: z.boolean().default(true),
@@ -480,6 +480,13 @@ const ConfigSchema = z.object({
               duckduckgo: z
                 .object({
                   enabled: z.boolean().default(true),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              tavily: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  apiKey: z.string().optional(),
                   baseUrl: z.string().optional(),
                 })
                 .default({}),

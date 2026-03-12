@@ -282,6 +282,52 @@ function parseWebFetchData(data: unknown): WebFetchData {
   };
 }
 
+async function runHyperliquidDataForWatchlist(
+  config: ThufirConfig,
+  symbolLimit: number
+): Promise<{ storedItems: StoredIntel[]; storedCount: number }> {
+  const watchlist = listWatchlist();
+  if (watchlist.length === 0) return { storedItems: [], storedCount: 0 };
+
+  const marketClient = createMarketClient(config);
+  const toolCtx = { config, marketClient };
+  const storedItems: StoredIntel[] = [];
+  let storedCount = 0;
+
+  for (const item of watchlist.slice(0, symbolLimit)) {
+    const symbol = item.marketId.replace(/[-/].*$/, '').toUpperCase();
+
+    for (const toolName of ['signal_hyperliquid_funding_oi_skew', 'signal_hyperliquid_orderflow_imbalance'] as const) {
+      const result = await executeToolCall(toolName, { symbol }, toolCtx);
+      if (!result.success || !result.data) continue;
+
+      const data = result.data as Record<string, unknown>;
+      const summary = Object.entries(data)
+        .filter(([, v]) => v !== null && v !== undefined)
+        .map(([k, v]) => `${k}: ${typeof v === 'number' ? v.toFixed(4) : String(v)}`)
+        .join(', ');
+      if (!summary) continue;
+
+      const label = toolName === 'signal_hyperliquid_funding_oi_skew' ? 'funding/OI skew' : 'orderflow imbalance';
+      const intel: StoredIntel = {
+        id: randomUUID(),
+        title: `${symbol} ${label}`,
+        content: summary,
+        source: `hyperliquid:${toolName}`,
+        sourceType: 'data',
+        timestamp: new Date().toISOString(),
+      };
+      const inserted = storeIntel(intel);
+      if (inserted) {
+        storedItems.push(intel);
+        storedCount += 1;
+      }
+    }
+  }
+
+  return { storedItems, storedCount };
+}
+
 async function runWebResearchForQuery(
   config: ThufirConfig,
   query: string,
@@ -436,6 +482,8 @@ export async function runProactiveSearch(
   const includeLearnedQueries = options?.includeLearnedQueries ?? true;
   const learnedQueryLimit = Math.min(Math.max(1, options?.learnedQueryLimit ?? 8), 50);
 
+  const hlResult = await runHyperliquidDataForWatchlist(config, watchlistLimit);
+
   const watchlistQueries = await buildQueriesFromWatchlist(config, watchlistLimit);
   const intelQueries = recentIntelLimit > 0 ? buildQueriesFromIntel(recentIntelLimit) : [];
   const learnedQueries = includeLearnedQueries ? listLearnedProactiveQueries(learnedQueryLimit) : [];
@@ -451,8 +499,8 @@ export async function runProactiveSearch(
   const executedQueries: string[] = [];
   let plannedQueries = [...seedQueries];
 
-  let storedItems: StoredIntel[] = [];
-  let storedCount = 0;
+  let storedItems: StoredIntel[] = [...hlResult.storedItems];
+  let storedCount = hlResult.storedCount;
 
   let rounds = 0;
   while (rounds < iterations && executedQueries.length < maxQueries) {

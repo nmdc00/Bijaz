@@ -1,6 +1,6 @@
 import type { ThufirConfig } from '../core/config.js';
 
-export type WebSearchProviderName = 'brave' | 'perplexity' | 'serpapi' | 'duckduckgo';
+export type WebSearchProviderName = 'brave' | 'perplexity' | 'serpapi' | 'duckduckgo' | 'tavily';
 
 export type WebSearchResultItem = {
   title: string;
@@ -125,7 +125,7 @@ function pruneCache(maxEntries: number): void {
 
 function loadProviderOrder(config: ThufirConfig): WebSearchProviderName[] {
   const configured = config.intel?.webSearch?.providers?.order;
-  const fallback: WebSearchProviderName[] = ['brave', 'serpapi', 'duckduckgo'];
+  const fallback: WebSearchProviderName[] = ['tavily', 'brave', 'serpapi', 'duckduckgo'];
   if (!Array.isArray(configured) || configured.length === 0) return fallback;
   const unique: WebSearchProviderName[] = [];
   for (const provider of configured) {
@@ -158,6 +158,8 @@ function providerApiKey(config: ThufirConfig, provider: WebSearchProviderName): 
       return process.env.PERPLEXITY_API_KEY?.trim() || null;
     case 'duckduckgo':
       return null;
+    case 'tavily':
+      return process.env.TAVILY_API_KEY?.trim() || null;
   }
 }
 
@@ -173,6 +175,8 @@ function providerBaseUrl(config: ThufirConfig, provider: WebSearchProviderName):
       return 'https://api.perplexity.ai/search';
     case 'duckduckgo':
       return 'https://api.duckduckgo.com/';
+    case 'tavily':
+      return 'https://api.tavily.com/search';
   }
 }
 
@@ -512,6 +516,88 @@ async function searchViaPerplexity(
   }
 }
 
+async function searchViaTavily(
+  query: string,
+  limit: number,
+  config: ThufirConfig
+): Promise<WebSearchProviderResult> {
+  const apiKey = providerApiKey(config, 'tavily');
+  if (!apiKey) {
+    return {
+      ok: false,
+      failure: {
+        provider: 'tavily',
+        message: 'Tavily API key not configured',
+        classification: 'provider_misconfigured',
+      },
+    };
+  }
+  try {
+    const url = providerBaseUrl(config, 'tavily');
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        max_results: limit,
+        search_depth: 'basic',
+      }),
+    });
+    if (!response.ok) {
+      const message = `Tavily: ${response.status}`;
+      return {
+        ok: false,
+        failure: {
+          provider: 'tavily',
+          message,
+          classification: classifyWebSearchFailure(message),
+        },
+      };
+    }
+    const data = (await response.json()) as {
+      results?: Array<{
+        title?: string;
+        url?: string;
+        content?: string;
+        score?: number;
+        published_date?: string;
+      }>;
+    };
+    const results = (data.results ?? []).slice(0, limit).map((item) => ({
+      title: item.title ?? '',
+      url: item.url ?? '',
+      snippet: item.content ?? '',
+      date: item.published_date ?? null,
+      source: 'tavily',
+    }));
+    if (results.length === 0) {
+      return {
+        ok: false,
+        failure: {
+          provider: 'tavily',
+          message: 'Tavily returned no results',
+          classification: 'unknown',
+        },
+      };
+    }
+    return { ok: true, results };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return {
+      ok: false,
+      failure: {
+        provider: 'tavily',
+        message,
+        classification: classifyWebSearchFailure(message),
+      },
+    };
+  }
+}
+
 async function callProvider(
   provider: WebSearchProviderName,
   query: string,
@@ -527,6 +613,8 @@ async function callProvider(
       return searchViaSerpApi(query, limit, config);
     case 'duckduckgo':
       return searchViaDuckDuckGo(query, limit, config);
+    case 'tavily':
+      return searchViaTavily(query, limit, config);
   }
 }
 
