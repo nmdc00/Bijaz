@@ -291,6 +291,34 @@ export function wrapWithLimiter(client: LlmClient): LlmClient {
   return new LimitedLlmClient(client, globalLimiter);
 }
 
+function resolveInfraTimeoutMs(
+  config: ThufirConfig,
+  meta: LlmClientMeta | undefined,
+  options: LlmClientOptions | undefined
+): number {
+  if (typeof options?.timeoutMs === 'number') {
+    return options.timeoutMs;
+  }
+
+  if (meta?.kind === 'trivial') {
+    const trivial = config.agent?.trivial;
+    const timeoutMs = trivial?.timeoutMs ?? 12_000;
+    if (meta.provider === 'local') {
+      const localSoftTimeoutMs =
+        typeof trivial?.localSoftTimeoutMs === 'number'
+          ? Math.max(500, trivial.localSoftTimeoutMs)
+          : 6_000;
+      return Math.min(timeoutMs, localSoftTimeoutMs);
+    }
+    if (typeof trivial?.fallbackTimeoutMs === 'number') {
+      return Math.max(500, trivial.fallbackTimeoutMs);
+    }
+    return timeoutMs;
+  }
+
+  return resolveDefaultLlmTimeoutMs();
+}
+
 class InfraLlmClient implements LlmClient {
   meta?: LlmClientMeta;
   private logger: Logger;
@@ -370,7 +398,7 @@ class InfraLlmClient implements LlmClient {
     }
 
     try {
-      const timeoutMs = options?.timeoutMs ?? resolveDefaultLlmTimeoutMs();
+      const timeoutMs = resolveInfraTimeoutMs(this.config, meta, options);
       const response = await runWithTimeout(
         () => this.inner.complete(finalized, { ...options, timeoutMs }),
         timeoutMs,

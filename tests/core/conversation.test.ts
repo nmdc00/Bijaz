@@ -158,4 +158,27 @@ describe('ConversationHandler', () => {
     const reply = await handler.chat('user', 'Hello');
     expect(reply).toContain('set up intel alerts');
   });
+
+  it('skips info digest when the info llm is a local trivial client', async () => {
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = {
+      complete: vi.fn(async () => ({ content: 'ok', model: 'test' })),
+    };
+    const infoLlm = {
+      meta: { provider: 'local', model: 'qwen2.5:1.5b-instruct', kind: 'trivial' },
+      complete: vi.fn(async () => ({ content: 'digest', model: 'qwen2.5:1.5b-instruct' })),
+    };
+    const marketClient = { searchMarkets: vi.fn(async () => []) };
+    const handler = new ConversationHandler(llm as any, marketClient as any, {} as any, infoLlm as any);
+
+    const result = await (handler as any).buildPlannerSystemMessage({
+      basePrompt: 'BASE',
+      contextBlock: 'Market note. '.repeat(80),
+      userMessage: 'What matters today?',
+    });
+
+    expect(infoLlm.complete).not.toHaveBeenCalled();
+    expect(result).toContain('Market note.');
+    expect(result).not.toContain('## Info Digest');
+  });
 });
