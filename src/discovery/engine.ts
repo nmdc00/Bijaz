@@ -11,6 +11,7 @@ import {
 import { generateHypotheses } from './hypotheses.js';
 import { enrichExpressionContextPack, mapExpressionPlan, type ContextPackProviders } from './expressions.js';
 import { selectDiscoveryMarkets } from './market_selector.js';
+import { PriceService } from '../technical/prices.js';
 
 function clusterSignals(symbol: string, signals: Array<SignalPrimitive | null>): SignalCluster {
   const flat = signals.filter((s): s is NonNullable<typeof s> => !!s);
@@ -53,9 +54,24 @@ export async function runDiscovery(
     ? selected.candidates.map((item) => item.symbol)
     : (config.hyperliquid?.symbols?.length ? config.hyperliquid.symbols : ['BTC', 'ETH']);
   const formatted = symbols.map((s) => `${s}/USDT`);
+  const technicalPriceService = new PriceService(config);
+  const technicalSupport = await Promise.all(
+    formatted.map(async (symbol) => [symbol, await technicalPriceService.supportsSymbol(symbol)] as const)
+  );
+  const supportedTechnicalSymbols = technicalSupport
+    .filter(([, supported]) => supported)
+    .map(([symbol]) => symbol);
+  const supportedTechnicalSymbolSet = new Set(supportedTechnicalSymbols);
 
-  const priceSignals = await Promise.all(formatted.map((symbol) => signalPriceVolRegime(config, symbol)));
-  const crossSignals = await signalCrossAssetDivergence(config, formatted);
+  const priceSignals = await Promise.all(
+    formatted.map((symbol) =>
+      supportedTechnicalSymbolSet.has(symbol) ? signalPriceVolRegime(config, symbol) : Promise.resolve(null)
+    )
+  );
+  const crossSignals =
+    supportedTechnicalSymbols.length >= 2
+      ? await signalCrossAssetDivergence(config, supportedTechnicalSymbols)
+      : [];
   const fundingSignals = await Promise.all(
     formatted.map((symbol) => signalHyperliquidFundingOISkew(config, symbol))
   );
