@@ -960,6 +960,9 @@ export class ConversationHandler {
     if (!infoLlm || contextBlock.length < 600) {
       return basePrompt + `\n\n---\n\n${contextBlock}`;
     }
+    if (infoLlm.meta?.provider === 'local' && infoLlm.meta?.kind === 'trivial') {
+      return basePrompt + `\n\n---\n\n${contextBlock}`;
+    }
 
     const prompt = `Summarize the context into a compact brief for the planner.
 Include: user preferences, recent decisions/positions, key intel, and relevant markets.
