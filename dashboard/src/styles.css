@@ -91,11 +91,22 @@ th { font-size: 0.68rem; }
 .conversation-item.active { border-color: rgba(109, 200, 215, 0.38); background: rgba(109, 200, 215, 0.08); }
 .conversation-row { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 0.8rem; }
 .conversation-preview { margin: 10px 0; color: var(--text); line-height: 1.5; }
-.thread-bubble { border-radius: 16px; padding: 14px; border: 1px solid var(--line); max-width: 92%; }
-.thread-user { background: rgba(109, 200, 215, 0.08); margin-left: auto; }
-.thread-assistant { background: rgba(245, 162, 77, 0.08); }
-.thread-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 0.75rem; margin-bottom: 8px; }
+.conversation-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 14px; margin-bottom: 16px; }
+.conversation-picker { flex: 1; min-width: 0; }
+.conversation-picker label { display: block; margin-bottom: 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.72rem; }
+.conversation-picker select { width: 100%; border-radius: 12px; border: 1px solid var(--line-strong); background: rgba(4, 12, 24, 0.92); color: var(--text); padding: 10px 12px; font: inherit; }
+.conversation-summary { display: flex; gap: 12px; align-items: center; color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.thread { gap: 10px; }
+.thread-bubble { border-radius: 18px; padding: 14px 16px; border: 1px solid var(--line); max-width: min(840px, 88%); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14); }
+.thread-user { background: linear-gradient(145deg, rgba(109, 200, 215, 0.12), rgba(109, 200, 215, 0.04)); margin-left: auto; border-bottom-right-radius: 8px; }
+.thread-assistant { background: linear-gradient(145deg, rgba(245, 162, 77, 0.12), rgba(245, 162, 77, 0.04)); border-bottom-left-radius: 8px; }
+.thread-meta { display: flex; justify-content: flex-end; gap: 12px; color: var(--muted); font-size: 0.72rem; margin-bottom: 8px; }
 .thread-body { white-space: pre-wrap; line-height: 1.55; }
 .log-meta { margin-top: 8px; color: var(--muted); line-height: 1.45; }
 .log-pre { margin: 10px 0 0; padding: 12px; border-radius: 14px; background: rgba(0, 0, 0, 0.18); overflow: auto; white-space: pre-wrap; }
 @media (max-width: 1120px) { .hero, .content-grid, .kpi-grid, .toolbar, .subgrid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {
+  .conversation-toolbar { flex-direction: column; align-items: stretch; }
+  .conversation-summary { justify-content: space-between; }
+  .thread-bubble { max-width: 100%; }
+}
