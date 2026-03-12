@@ -48,9 +48,17 @@ const CASE_FILES = [
   'commodities-supply-policy.json',
   'commodities-weather.json',
   'macro-central-banks.json',
+  'macro-fx-em.json',
   'macro-inflation-regime.json',
   'macro-sovereign.json',
   'macro-trade-geopolitical.json',
+  'metals-mining.json',
+  'shipping-chokepoints.json',
+  'agri-proteins-disease.json',
+  'energy-transition-metals.json',
+  'fx-em-asia.json',
+  'fx-em-latam-emea.json',
+  'shipping-freight-logistics.json',
 ] as const;
 
 function fixturesDir(): string {

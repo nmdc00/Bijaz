@@ -195,5 +195,116 @@
       {"title": "IEA World Energy Outlook 2021", "publisher": "IEA", "url": null, "source_date": "2021-10", "source_type": "secondary_context"}
     ],
     "validation_status": "provisional"
+  },
+  {
+    "case_key": "2003-sars-jet-fuel-demand-shock",
+    "event_date": "2003-04-01",
+    "event_type": "travel_demand_shock",
+    "title": "SARS Outbreak -> Jet Fuel and Travel Demand Shock",
+    "summary": "The 2003 SARS outbreak sharply reduced Asian air travel and tourism activity, temporarily cutting jet fuel demand and pressuring nearby crude demand expectations.",
+    "domain": "energy",
+    "actors": ["Asian airlines", "WHO", "travel consumers"],
+    "locations": ["China", "Hong Kong", "Singapore", "Asia"],
+    "channels": ["travel", "jet_fuel", "consumer_demand"],
+    "first_order_assets": ["jet fuel", "crude oil"],
+    "second_order_assets": ["refining margins", "airline equities"],
+    "mechanism": "A health scare can hit transport fuel demand quickly when air travel and tourism volumes fall faster than supply can adjust.",
+    "causal_chain": [
+      "SARS outbreak spreads across key Asian travel hubs",
+      "airlines cut flights and passenger traffic drops sharply",
+      "jet fuel demand weakens and nearby oil demand expectations soften"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short"],
+      "confidence": "medium",
+      "note": "Bearish transport fuels during acute outbreak phase."
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Asian aviation demand weakened materially during the SARS episode before recovering as the outbreak was contained.",
+      "chart_note": null,
+      "priced_in_note": null,
+      "reversal_note": "Fuel demand recovered once travel normalized."
+    },
+    "regime_tags": ["demand_shock", "travel", "energy_bear", "pandemic"],
+    "sources": [
+      {"title": "SARS and Global Economic Impact", "publisher": "ADB", "url": null, "source_date": "2003-07-01", "source_type": "research"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2022-europe-gas-demand-destruction-industry",
+    "event_date": "2022-09-01",
+    "event_type": "demand_destruction",
+    "title": "European Gas Crisis -> Industrial Demand Destruction",
+    "summary": "The 2022 European gas crisis forced energy-intensive industries to curtail production, destroying gas and power demand in fertilizer, metals, and chemicals.",
+    "domain": "energy",
+    "actors": ["European industrial users", "EU governments", "gas utilities"],
+    "locations": ["Europe"],
+    "channels": ["industrial_demand", "gas", "power", "fertilizer"],
+    "first_order_assets": ["TTF natural gas", "European power"],
+    "second_order_assets": ["ammonia", "aluminum", "zinc"],
+    "mechanism": "Extreme prices can destroy end-user demand by forcing shutdowns, which eventually caps the underlying commodity even while downstream supply shrinks.",
+    "causal_chain": [
+      "gas and power prices spike to crisis levels",
+      "energy-intensive plants curtail or shut production",
+      "industrial gas demand falls and price upside becomes self-limiting"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bearish gas after acute price spike through demand destruction."
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "European industrial curtailments became a major balancing mechanism in gas and power markets during late 2022.",
+      "chart_note": null,
+      "priced_in_note": "Prices remained volatile because storage, weather, and policy still dominated the tape.",
+      "reversal_note": "Demand returned only gradually as prices normalized."
+    },
+    "regime_tags": ["demand_destruction", "energy_crisis", "industrial_metals", "europe"],
+    "sources": [
+      {"title": "Europe Gas Demand Destruction 2022", "publisher": "IEA", "url": null, "source_date": "2022-12-01", "source_type": "official"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2023-europe-warm-winter-gas-demand-surprise",
+    "event_date": "2023-01-10",
+    "event_type": "weather_demand_surprise",
+    "title": "Warm European Winter -> Natural Gas Demand Undershoot",
+    "summary": "An unusually mild European winter in 2022-2023 sharply reduced heating demand, easing storage fears and pressuring gas prices lower.",
+    "domain": "energy",
+    "actors": ["European households", "utilities", "weather forecasters"],
+    "locations": ["Europe"],
+    "channels": ["weather", "heating_demand", "storage"],
+    "first_order_assets": ["TTF natural gas"],
+    "second_order_assets": ["European power", "LNG imports"],
+    "mechanism": "When heating demand undershoots during a storage-constrained winter, scarcity premia can collapse quickly.",
+    "causal_chain": [
+      "winter temperatures remain milder than expected",
+      "heating demand draws less gas from storage",
+      "scarcity premium in European gas prices compresses sharply"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bearish gas on weather-driven demand undershoot."
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "European gas prices fell sharply as storage depletion fears eased under mild winter conditions.",
+      "chart_note": null,
+      "priced_in_note": null,
+      "reversal_note": "Cold-weather or supply-disruption risks remained capable of reintroducing volatility."
+    },
+    "regime_tags": ["weather", "demand_surprise", "gas_bear", "europe"],
+    "sources": [
+      {"title": "Europe Warm Winter Gas Price Retreat", "publisher": "Reuters", "url": null, "source_date": "2023-01-10", "source_type": "event"}
+    ],
+    "validation_status": "validated"
   }
 ]
