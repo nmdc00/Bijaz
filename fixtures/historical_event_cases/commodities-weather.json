@@ -1,0 +1,472 @@
+[
+  {
+    "case_key": "2012-us-drought-corn",
+    "event_date": "2012-07-11",
+    "event_type": "weather_shock",
+    "title": "U.S. Corn Belt Drought → Corn Spike",
+    "summary": "Extreme heat and drought across the U.S. Corn Belt in summer 2012 caused the USDA to sharply cut crop forecasts, driving corn to multi-year highs.",
+    "domain": "agri",
+    "actors": ["USDA", "U.S. farmers"],
+    "locations": ["United States", "Corn Belt", "Midwest"],
+    "channels": ["supply", "crop_yields", "ending_stocks"],
+    "first_order_assets": ["corn"],
+    "second_order_assets": ["soybeans", "wheat", "livestock margins", "food inflation"],
+    "mechanism": "Drought and extreme heat cut expected corn yields materially. USDA revised ending stocks sharply lower, tightening the supply/demand balance and repricing corn higher.",
+    "causal_chain": [
+      "drought and extreme heat hit Corn Belt from June through August",
+      "USDA July WASDE cuts expected corn crop by ~12%",
+      "ending stocks projected near multi-year lows",
+      "corn futures reprice higher as supply deficit becomes priced in",
+      "livestock and food processing margins compress"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short", "medium"],
+      "confidence": "high",
+      "note": "Bullish corn while drought conditions persist and USDA continues revisions lower"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Corn rallied to near $8.31/bushel in August 2012, a multi-year high. USDA confirmed 12% crop cut and historic drought exposure.",
+      "chart_note": "MacroTrends corn chart shows 2012 annual high at approximately $8.31/bushel",
+      "priced_in_note": null,
+      "reversal_note": "Prices normalized as the 2013 crop improved"
+    },
+    "regime_tags": ["supply_shock", "weather", "drought", "agri_bull"],
+    "sources": [
+      {"title": "Agricultural Weather and Drought Update 7/12/12", "publisher": "USDA", "url": "https://www.usda.gov/about-usda/news/blog/agricultural-weather-and-drought-update-71212", "source_date": "2012-07-12", "source_type": "event"},
+      {"title": "Agricultural Weather and Drought Update 7/20/12", "publisher": "USDA", "url": "https://www.usda.gov/about-usda/news/blog/agricultural-weather-and-drought-update-72012", "source_date": "2012-07-20", "source_type": "event"},
+      {"title": "Corn Prices Historical Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2532/corn-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2021-brazil-frost-coffee",
+    "event_date": "2021-07-20",
+    "event_type": "weather_shock",
+    "title": "Brazil Frost → Arabica Coffee Spike",
+    "summary": "Severe frost hit Brazil's Minas Gerais coffee belt in July 2021, damaging supply expectations for the world's largest arabica producer and driving a sharp price spike.",
+    "domain": "agri",
+    "actors": ["Brazilian coffee farmers", "ICO"],
+    "locations": ["Brazil", "Minas Gerais"],
+    "channels": ["supply", "crop_damage"],
+    "first_order_assets": ["arabica coffee"],
+    "second_order_assets": ["retail coffee prices", "robusta coffee"],
+    "mechanism": "Frost events in Brazil's main coffee-growing regions damage the standing crop and reduce multi-season production expectations, tightening global arabica availability.",
+    "causal_chain": [
+      "severe frost hits Minas Gerais coffee belt",
+      "crop damage reduces immediate and forward arabica output",
+      "traders reprice future arabica availability sharply higher",
+      "ICO reports daily arabica prices surge ~25% in one week"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short", "medium"],
+      "confidence": "high",
+      "note": "Bullish arabica; severity of frost determines multi-season magnitude"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Arabica prices rose ~25.4% in one week from 165.64 to 207.8 US cents/lb per ICO-referenced reporting. 2021 MacroTrends high ~$2.50/lb.",
+      "chart_note": "MacroTrends coffee chart shows strong 2021 uptrend; annual high near $2.50/lb",
+      "priced_in_note": null,
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "weather", "frost", "agri_bull"],
+    "sources": [
+      {"title": "Coffee prices reach seven-year high due to concerns over frost in Brazil", "publisher": "Global Coffee Report", "url": "https://www.gcrmag.com/coffee-prices-reach-seven-year-high-due-to-concerns-over-frost-in-brazil/", "source_date": "2021-08-12", "source_type": "event"},
+      {"title": "Prices for arabica coffee in July 2021 surged to highest levels since November 2014", "publisher": "StoneX", "url": "https://www.stonex.com/en/market-intelligence/prices-for-arabica-coffee-in-july-2021-surged-to-highest-levels-since-november-2014/", "source_date": "2021-08", "source_type": "event"},
+      {"title": "Coffee Prices Historical Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2535/coffee-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "1997-el-nino-sugar-cocoa",
+    "event_date": "1997-06-01",
+    "event_type": "weather_shock",
+    "title": "1997–98 El Niño → Sugar and Cocoa Supply Disruption",
+    "summary": "The severe 1997–98 El Niño caused drought in SE Asia and Australia, damaging sugar and palm oil output, and wet conditions in West Africa affected cocoa.",
+    "domain": "agri",
+    "actors": ["WMO", "SE Asian producers"],
+    "locations": ["Southeast Asia", "Australia", "West Africa", "Brazil"],
+    "channels": ["supply", "crop_yields", "weather_patterns"],
+    "first_order_assets": ["raw sugar", "palm oil", "cocoa"],
+    "second_order_assets": ["food inflation"],
+    "mechanism": "El Niño disrupts rainfall patterns across multiple producing regions simultaneously, compressing supply from several commodity exporters at once.",
+    "causal_chain": [
+      "El Niño declared; drought signal in SE Asia and Australia",
+      "sugar and palm oil yields in affected regions fall short",
+      "West Africa cocoa crop affected by abnormal rainfall",
+      "global inventories tighten across multiple soft commodities",
+      "prices spike on coincident supply stress"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish sugar, palm oil, cocoa during confirmed El Niño; magnitude depends on geographic footprint"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Sugar and cocoa prices elevated in 1997-98. The 1997 El Niño was one of the strongest on record.",
+      "chart_note": "Provisional — price confirmation needed from commodity charts for 1997-98 period",
+      "priced_in_note": "Weather forecasters flagged El Niño early; some supply concern already priced before crop data confirmed",
+      "reversal_note": "La Niña follow-on in 1998-99 partially reversed supply concerns"
+    },
+    "regime_tags": ["supply_shock", "weather", "el_nino", "soft_commodities"],
+    "sources": [
+      {"title": "The 1997-98 El Niño Event", "publisher": "WMO", "url": null, "source_date": null, "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2006-australia-drought-wheat",
+    "event_date": "2006-09-01",
+    "event_type": "weather_shock",
+    "title": "Australian Drought → Wheat Export Shortfall",
+    "summary": "Severe drought across Australia's wheat belt in 2006 caused one of the worst wheat harvests in decades, removing a major exporter from the market and tightening global supplies.",
+    "domain": "agri",
+    "actors": ["ABARES", "Australian farmers"],
+    "locations": ["Australia", "New South Wales", "Victoria", "Western Australia"],
+    "channels": ["supply", "crop_yields", "export_flows"],
+    "first_order_assets": ["wheat"],
+    "second_order_assets": ["barley", "canola", "global food inflation"],
+    "mechanism": "Australia is one of the world's largest wheat exporters. A severe domestic drought cuts its exportable surplus, tightening global trade flows and forcing importers to compete for alternative supplies.",
+    "causal_chain": [
+      "prolonged drought reduces Australian grain-belt rainfall",
+      "ABARES cuts crop estimate to near-record low",
+      "Australian wheat export volumes fall sharply",
+      "global importers compete for supplies from other origins",
+      "wheat futures reprice higher"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish wheat when Australian production estimates fall; impact strongest on international wheat trade pricing"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Australia's 2006-07 wheat crop was approximately 9.8 million tonnes, down from ~25 million the prior year. Global wheat prices elevated into 2007-08.",
+      "chart_note": "Provisional — wheat price chart confirms 2006-07 upward trend into the 2007-08 global food crisis",
+      "priced_in_note": null,
+      "reversal_note": "2008-09 record global wheat harvests eventually eased prices"
+    },
+    "regime_tags": ["supply_shock", "weather", "drought", "agri_bull", "export_shortfall"],
+    "sources": [
+      {"title": "Australian crop reports 2006-07", "publisher": "ABARES", "url": null, "source_date": "2006", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2019-us-floods-corn",
+    "event_date": "2019-05-01",
+    "event_type": "weather_shock",
+    "title": "U.S. Midwest Flooding → Corn Planting Delays",
+    "summary": "Record spring flooding across the U.S. Midwest in 2019 caused historically late corn planting, shrinking the expected crop size and lifting futures.",
+    "domain": "agri",
+    "actors": ["USDA", "U.S. farmers"],
+    "locations": ["United States", "Midwest", "Corn Belt"],
+    "channels": ["supply", "planting_progress", "crop_yields"],
+    "first_order_assets": ["corn"],
+    "second_order_assets": ["soybeans", "wheat"],
+    "mechanism": "Flooded fields delay or prevent planting; late-planted corn has lower yield potential and faces higher risk of early frost. USDA planting progress data showing historic delays triggers futures repricing.",
+    "causal_chain": [
+      "excessive rainfall and Mississippi basin flooding saturate Corn Belt fields",
+      "USDA weekly planting progress shows record-low corn planted share by late May",
+      "prevented planting claims rise; crop insurance acreage falls out of production",
+      "corn production estimates cut; prices spike on supply concern"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish corn during peak planting delay concern; magnitude depends on final prevented-planting acreage"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Corn futures rallied ~30% from April lows to June 2019 peak. USDA confirmed record prevented-planting acres.",
+      "chart_note": "Provisional — corn chart shows sharp spring 2019 rally",
+      "priced_in_note": null,
+      "reversal_note": "Prices partially retraced as final crop came in better than feared; South American supplies provided some offset"
+    },
+    "regime_tags": ["supply_shock", "weather", "flooding", "planting_delay", "agri_bull"],
+    "sources": [
+      {"title": "USDA Weekly Crop Progress Reports, Spring 2019", "publisher": "USDA", "url": null, "source_date": "2019-05", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2010-pakistan-floods-cotton",
+    "event_date": "2010-07-28",
+    "event_type": "weather_shock",
+    "title": "Pakistan Flooding → Cotton Supply Shock",
+    "summary": "Catastrophic flooding across Pakistan in 2010 submerged major cotton-growing areas, disrupting output from the world's fourth-largest cotton producer.",
+    "domain": "agri",
+    "actors": ["Pakistani government", "UN"],
+    "locations": ["Pakistan", "Sindh", "Punjab"],
+    "channels": ["supply", "crop_damage"],
+    "first_order_assets": ["cotton"],
+    "second_order_assets": ["textile manufacturing costs", "yarn prices"],
+    "mechanism": "Pakistan is a top global cotton exporter. Flooding of its cotton belt reduced crop yield forecasts sharply, tightening global cotton supply at a time when demand from Asian mills was strong.",
+    "causal_chain": [
+      "monsoon rains produce unprecedented flooding across Pakistan",
+      "cotton fields inundated in key growing provinces",
+      "production forecast cut significantly",
+      "global cotton inventories tighten",
+      "cotton futures spike"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish cotton; coincided with already-tight global inventories and Chinese demand"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Cotton prices surged to near record highs above $2/lb in early 2011, driven by Pakistan floods plus tight global stocks.",
+      "chart_note": "Provisional — cotton chart confirms 2010-11 spike to multi-decade highs",
+      "priced_in_note": "China demand surge was a concurrent factor amplifying the supply shock",
+      "reversal_note": "Prices collapsed in 2011 as crop recovered and demand softened"
+    },
+    "regime_tags": ["supply_shock", "weather", "flooding", "agri_bull"],
+    "sources": [
+      {"title": "Pakistan floods 2010 impact assessment", "publisher": "UN FAO", "url": null, "source_date": "2010-09", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2021-brazil-drought-sugar",
+    "event_date": "2021-02-01",
+    "event_type": "weather_shock",
+    "title": "Brazil Drought → Sugar and Coffee Supply Concern",
+    "summary": "Brazil's south-central sugar belt experienced its worst drought in nearly 90 years in early 2021, reducing sugarcane yields and raising concerns for coffee and other crops.",
+    "domain": "agri",
+    "actors": ["UNICA", "Brazilian producers"],
+    "locations": ["Brazil", "São Paulo", "Minas Gerais"],
+    "channels": ["supply", "crop_yields"],
+    "first_order_assets": ["raw sugar", "arabica coffee"],
+    "second_order_assets": ["ethanol prices", "orange juice"],
+    "mechanism": "Brazil dominates global sugar and coffee exports. Drought in its south-central region reduces cane yields and juice content, compressing exportable surplus and repricing futures.",
+    "causal_chain": [
+      "driest conditions in nearly 90 years hit Brazil south-central belt",
+      "UNICA reports below-average crushing volumes and lower ATR (sugar content)",
+      "global sugar and coffee supply estimates cut",
+      "prices rally on tighter supply outlook"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish sugar and arabica; compound effect as drought preceded the July 2021 frost"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Sugar prices rose materially in 2021. Effect was amplified by the July frost on coffee. UNICA confirmed below-trend crush.",
+      "chart_note": "Provisional — sugar chart confirms 2021 uptrend",
+      "priced_in_note": null,
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "weather", "drought", "agri_bull"],
+    "sources": [
+      {"title": "UNICA crushing reports 2021", "publisher": "UNICA", "url": null, "source_date": "2021-03", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2018-european-heatwave-wheat",
+    "event_date": "2018-06-01",
+    "event_type": "weather_shock",
+    "title": "European Heatwave → French and German Wheat Crop Cuts",
+    "summary": "An intense summer heatwave across northern and central Europe in 2018 cut wheat yields in France and Germany, reducing EU export competitiveness.",
+    "domain": "agri",
+    "actors": ["FranceAgriMer", "German Bauernverband"],
+    "locations": ["France", "Germany", "Northern Europe", "Baltic states"],
+    "channels": ["supply", "crop_yields", "export_flows"],
+    "first_order_assets": ["wheat", "barley"],
+    "second_order_assets": ["feed grain prices", "EU export volumes"],
+    "mechanism": "France and Germany are major EU wheat exporters. A heatwave during the grain-filling stage reduces test weights and yield, cutting the EU's exportable surplus and lifting global wheat benchmarks.",
+    "causal_chain": [
+      "record summer heat in northern Europe stresses grain crops during filling",
+      "French soft wheat yield estimates cut to multi-year lows",
+      "German and Baltic crops also below-average",
+      "EU exportable surplus shrinks",
+      "CBOT and Paris wheat futures reprice higher"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Moderately bullish wheat; Black Sea origin (Russia) partially offset EU shortfall"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "European wheat prices rallied. Russia and Ukraine had good crops, which partially capped the rally.",
+      "chart_note": "Provisional — Euronext wheat chart confirms 2018 summer price rise",
+      "priced_in_note": "Russian harvest was strong in 2018, dampening the upside",
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "weather", "heatwave", "agri_bull"],
+    "sources": [
+      {"title": "French 2018 crop estimates", "publisher": "FranceAgriMer", "url": null, "source_date": "2018-07", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2023-el-nino-cocoa-sugar",
+    "event_date": "2023-06-01",
+    "event_type": "weather_shock",
+    "title": "2023 El Niño → Cocoa and Sugar Supply Disruption",
+    "summary": "The return of El Niño conditions in 2023 hit West African cocoa production (drought in Ghana and Côte d'Ivoire) and SE Asian sugar, driving cocoa to record highs.",
+    "domain": "agri",
+    "actors": ["ICCO", "Ghana Cocoa Board", "CIV producers"],
+    "locations": ["Ghana", "Côte d'Ivoire", "Southeast Asia"],
+    "channels": ["supply", "crop_yields", "weather_patterns"],
+    "first_order_assets": ["cocoa", "raw sugar"],
+    "second_order_assets": ["chocolate manufacturing costs"],
+    "mechanism": "El Niño brings hot, dry conditions to West Africa's cocoa belt. Ghana and Côte d'Ivoire supply ~60% of global cocoa. Reduced midcrop and main crop estimates drive sustained price rallies.",
+    "causal_chain": [
+      "El Niño onset reduces rainfall in West African cocoa belt",
+      "ICCO and grinder reports show below-trend mid-crop volumes",
+      "disease pressure (black pod) increases under stressed crop conditions",
+      "global cocoa deficit widens; stocks-to-use falls",
+      "cocoa futures rally to record highs"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium", "long"],
+      "confidence": "high",
+      "note": "Strongly bullish cocoa; disease amplification typical when drought weakens crop"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Cocoa prices hit record highs above $10,000/tonne in early 2024, driven by compounding supply deficits.",
+      "chart_note": "Provisional — ICE cocoa chart confirms multi-decade high break in 2023-24",
+      "priced_in_note": null,
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "weather", "el_nino", "soft_commodities", "agri_bull"],
+    "sources": [
+      {"title": "ICCO quarterly bulletin 2023", "publisher": "ICCO", "url": null, "source_date": "2023-09", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-india-heatwave-wheat",
+    "event_date": "2022-03-01",
+    "event_type": "weather_shock",
+    "title": "India Heatwave → Wheat Production Cut and Export Ban",
+    "summary": "An unusually early and intense heatwave in India in spring 2022 sharply cut wheat yields, prompting the government to ban exports and tightening an already-stressed global market.",
+    "domain": "agri",
+    "actors": ["Indian government", "FCI"],
+    "locations": ["India", "Punjab", "Haryana", "Uttar Pradesh"],
+    "channels": ["supply", "crop_yields", "export_flows"],
+    "first_order_assets": ["wheat"],
+    "second_order_assets": ["global food inflation", "wheat import costs for Asia/Africa"],
+    "mechanism": "India had become a significant wheat exporter. A premature heatwave during grain-filling caused a sharp yield miss. The government banned exports to protect domestic supply, compounding the global shortage from the Ukraine war.",
+    "causal_chain": [
+      "record March-April temperatures hit Indian wheat belt during grain-filling",
+      "USDA and FCI cut Indian wheat production estimate by ~5-6 million tonnes",
+      "India bans wheat exports to protect food security",
+      "global wheat importers lose an alternative supplier",
+      "wheat futures sustain elevated pricing"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Reinforced bullish wheat thesis already active from Ukraine war; removes an alternative supply source"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "India's export ban and production miss compounded the Ukraine-driven wheat rally in 2022.",
+      "chart_note": "Provisional — wheat chart shows sustained elevated pricing in H1 2022",
+      "priced_in_note": "Ukraine war supply shock was the primary driver; India heatwave was a reinforcing secondary event",
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "weather", "heatwave", "export_ban", "agri_bull"],
+    "sources": [
+      {"title": "India wheat crop estimates 2022", "publisher": "USDA FAS", "url": null, "source_date": "2022-05", "source_type": "event"},
+      {"title": "India bans wheat exports", "publisher": "Reuters", "url": null, "source_date": "2022-05-14", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2016-brazil-drought-sugar",
+    "event_date": "2016-01-01",
+    "event_type": "weather_shock",
+    "title": "Brazil La Niña / Drought → Sugar Yield Below Trend",
+    "summary": "Dry conditions in Brazil's 2016 cane-crushing season reduced sucrose content and yields, contributing to a tighter global sugar balance after years of surplus.",
+    "domain": "agri",
+    "actors": ["UNICA", "Copersucar"],
+    "locations": ["Brazil", "São Paulo state"],
+    "channels": ["supply", "crop_yields", "sucrose_content"],
+    "first_order_assets": ["raw sugar"],
+    "second_order_assets": ["ethanol", "white sugar spread"],
+    "mechanism": "Brazil controls ~40-50% of global traded sugar. Below-trend rain reduces cane yields and sucrose content (ATR), shrinking the sugar extraction per tonne of cane and tightening the supply/demand balance.",
+    "causal_chain": [
+      "below-average rainfall in São Paulo state reduces cane irrigation",
+      "UNICA mid-season data shows below-prior-year ATR",
+      "Brazilian output estimates cut",
+      "global deficit narrative strengthens",
+      "raw sugar prices rally"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Moderately bullish raw sugar; Indian and Thai supply trajectories matter for magnitude"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Raw sugar prices rallied from multi-year lows in 2015 into 2016-17, helped by Brazil crop concerns and global deficit signal.",
+      "chart_note": "Provisional — sugar chart shows 2016 recovery from multi-year lows",
+      "priced_in_note": "Market had been in surplus for years; some recovery already anticipated",
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "weather", "drought", "agri_bull"],
+    "sources": [
+      {"title": "UNICA crushing season reports 2016", "publisher": "UNICA", "url": null, "source_date": "2016-06", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2002-australia-drought-wheat",
+    "event_date": "2002-07-01",
+    "event_type": "weather_shock",
+    "title": "Australian Drought 2002 → Wheat Supply Shock",
+    "summary": "Australia's 2002-03 drought was one of the worst in a century, cutting wheat production from ~24 million tonnes to ~10 million tonnes, severely reducing global export availability.",
+    "domain": "agri",
+    "actors": ["AWB", "ABARE"],
+    "locations": ["Australia", "New South Wales", "Victoria"],
+    "channels": ["supply", "crop_yields", "export_flows"],
+    "first_order_assets": ["wheat"],
+    "second_order_assets": ["barley", "canola"],
+    "mechanism": "Australia is a top global wheat exporter. A halving of production removes a large share of globally traded wheat supply, forcing importers to seek alternative origins at higher prices.",
+    "causal_chain": [
+      "El Niño-linked drought reduces soil moisture across eastern Australia",
+      "Australian wheat crop falls to near 10Mt from ~24Mt prior year",
+      "export availability drops by ~7-8 million tonnes",
+      "global importers scramble for U.S., Canadian, EU supply",
+      "wheat prices spike materially"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Strongly bullish wheat; similar mechanism to 2006 Australian drought"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Australian production fell to ~10 million tonnes, one of the smallest crops in decades. Global wheat prices elevated in 2002-03.",
+      "chart_note": "Provisional — wheat chart confirms 2002-03 price rise",
+      "priced_in_note": null,
+      "reversal_note": "2003-04 bumper crops globally normalized prices"
+    },
+    "regime_tags": ["supply_shock", "weather", "drought", "export_shortfall", "agri_bull"],
+    "sources": [
+      {"title": "Australian crop reports 2002-03", "publisher": "ABARE", "url": null, "source_date": "2002-09", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]

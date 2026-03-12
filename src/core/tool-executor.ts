@@ -27,6 +27,14 @@ import {
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
+import {
+  getEventById,
+  getLatestThought,
+  listEvents,
+  listForecastsForEvent,
+  listOutcomesForEvent,
+} from '../memory/events.js';
+import { searchHistoricalCases } from '../events/casebase.js';
 import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains.js';
 import { getErc20Balance, transferErc20 } from '../execution/evm/erc20.js';
 import { cctpV1BridgeUsdc } from '../execution/evm/cctp_v1.js';
@@ -2176,6 +2184,53 @@ export async function executeToolCall(
         const limit = Number(toolInput.limit ?? 10);
         const items = listRecentIntel(limit);
         return { success: true, data: formatIntelForTool(items) };
+      }
+
+      case 'events_list': {
+        const domain = String(toolInput.domain ?? '').trim() || undefined;
+        const status = String(toolInput.status ?? '').trim() || undefined;
+        const limit = Math.max(1, Math.min(100, Number(toolInput.limit ?? 10) || 10));
+        const events = listEvents({ domain, status, limit });
+        return { success: true, data: { events } };
+      }
+
+      case 'event_get': {
+        const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
+        if (!eventId) return { success: false, error: 'Missing event_id' };
+        const event = getEventById(eventId);
+        if (!event) return { success: false, error: `Event not found: ${eventId}` };
+        return { success: true, data: event };
+      }
+
+      case 'event_latest_thought': {
+        const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
+        if (!eventId) return { success: false, error: 'Missing event_id' };
+        const thought = getLatestThought(eventId);
+        return { success: true, data: { thought } };
+      }
+
+      case 'event_forecasts': {
+        const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
+        if (!eventId) return { success: false, error: 'Missing event_id' };
+        const forecasts = listForecastsForEvent(eventId);
+        return { success: true, data: { forecasts } };
+      }
+
+      case 'event_outcomes': {
+        const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
+        if (!eventId) return { success: false, error: 'Missing event_id' };
+        const outcomes = listOutcomesForEvent(eventId);
+        return { success: true, data: { outcomes } };
+      }
+
+      case 'historical_case_search': {
+        const domain = String(toolInput.domain ?? '').trim() || undefined;
+        const mechanismQuery = String(toolInput.mechanism_query ?? toolInput.mechanismQuery ?? '').trim() || undefined;
+        const tagsRaw = toolInput.tags;
+        const tags = Array.isArray(tagsRaw) ? tagsRaw.map(String).filter(Boolean) : [];
+        const limit = Math.max(1, Math.min(20, Number(toolInput.limit ?? 5) || 5));
+        const results = searchHistoricalCases({ domain, mechanismQuery, tags, limit });
+        return { success: true, data: { results } };
       }
 
       case 'proactive_search_run': {

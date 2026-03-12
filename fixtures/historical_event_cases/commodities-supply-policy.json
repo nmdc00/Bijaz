@@ -1,0 +1,511 @@
+[
+  {
+    "case_key": "2010-russia-grain-export-ban-wheat",
+    "event_date": "2010-08-05",
+    "event_type": "export_ban",
+    "title": "Russia Grain Export Ban → Wheat Spike",
+    "summary": "Russia banned grain exports following a severe drought and wildfires that damaged its 2010 harvest, reducing expected global exportable wheat supply sharply.",
+    "domain": "agri",
+    "actors": ["Russian government", "USDA FAS"],
+    "locations": ["Russia", "Black Sea"],
+    "channels": ["supply", "export_flows"],
+    "first_order_assets": ["wheat"],
+    "second_order_assets": ["global food inflation", "barley"],
+    "mechanism": "Russian drought and wildfire damage triggered an export ban, removing a major Black Sea exporter from the market and forcing importers to seek alternative supply at higher prices.",
+    "causal_chain": [
+      "drought and fires damage Russian grain output",
+      "Russia bans grain exports",
+      "global wheat importers must source elsewhere",
+      "wheat prices reprice higher on tighter export supply"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short", "medium"],
+      "confidence": "high",
+      "note": "Bullish wheat; magnitude depends on duration of ban and ability of other exporters to fill gap"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Sharp late-summer wheat spike in August 2010. MacroTrends wheat chart shows 2010 annual high at $6.9425.",
+      "chart_note": "MacroTrends wheat historical chart shows sharp late-summer 2010 rise",
+      "priced_in_note": null,
+      "reversal_note": "Prices moderated as other suppliers (U.S., Australia, EU) stepped up"
+    },
+    "regime_tags": ["supply_shock", "export_ban", "geopolitical", "agri_bull"],
+    "sources": [
+      {"title": "Wheat prices soar as Russia bans grain exports", "publisher": "DW", "url": "https://www.dw.com/en/wheat-prices-soar-as-russia-bans-grain-exports/a-5870888", "source_date": "2010-08-06", "source_type": "event"},
+      {"title": "Russia bans exports of grain", "publisher": "Al Jazeera", "url": "https://www.aljazeera.com/news/2010/8/5/russia-bans-exports-of-grain", "source_date": "2010-08-05", "source_type": "event"},
+      {"title": "Wheat Prices Historical Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2534/wheat-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2022-ukraine-invasion-wheat",
+    "event_date": "2022-02-24",
+    "event_type": "war_supply_shock",
+    "title": "Ukraine Invasion → Wheat and Food Shock",
+    "summary": "Russia's invasion of Ukraine disrupted Black Sea grain exports from a major producing region and raised global food security concerns, driving food prices to record highs.",
+    "domain": "agri",
+    "actors": ["Russia", "Ukraine", "FAO"],
+    "locations": ["Ukraine", "Black Sea"],
+    "channels": ["supply", "export_flows", "shipping", "war_risk"],
+    "first_order_assets": ["wheat", "maize"],
+    "second_order_assets": ["vegetable oils", "global food inflation", "sunflower oil"],
+    "mechanism": "Russia's invasion disrupted Ukrainian exports and shipping, removed a key exporter from global markets, and triggered food security concerns in import-dependent nations.",
+    "causal_chain": [
+      "invasion disrupts Ukrainian agricultural production and exports",
+      "Black Sea shipping becomes hazardous",
+      "importers (Egypt, Turkey, MENA) face supply uncertainty",
+      "cereal prices reprice sharply higher",
+      "global food price index hits record in March 2022"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish wheat and grains; Ukraine + Russia together represent ~30% of global wheat exports"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "FAO World Food Price Index hit record high in March 2022. MacroTrends wheat chart shows 2022 high at $12.94/bushel.",
+      "chart_note": "MacroTrends wheat chart shows 2022 high at $12.94; FAO confirmed March 2022 peak shock",
+      "priced_in_note": null,
+      "reversal_note": "Black Sea Grain Initiative in July 2022 partially normalized shipping and prices eased"
+    },
+    "regime_tags": ["supply_shock", "war", "export_shock", "agri_bull", "food_security"],
+    "sources": [
+      {"title": "War largely drives food prices to record levels", "publisher": "FAO", "url": "https://www.fao.org/new-york/news/news-detail/War-largely-drives-food-prices-to-record-levels-threatens-global-food-security/en", "source_date": "2022-04-08", "source_type": "event"},
+      {"title": "Wheat Prices Historical Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/2534/wheat-prices-historical-chart-data", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2022-indonesia-palm-oil-export-ban",
+    "event_date": "2022-04-22",
+    "event_type": "export_ban",
+    "title": "Indonesia Palm Oil Export Ban → Global Vegetable Oil Spike",
+    "summary": "Indonesia, the world's largest palm oil producer, banned exports in April 2022 to address domestic cooking oil shortages, sending global vegetable oil prices sharply higher.",
+    "domain": "agri",
+    "actors": ["Indonesian government"],
+    "locations": ["Indonesia", "Kalimantan", "Sumatra"],
+    "channels": ["supply", "export_flows"],
+    "first_order_assets": ["palm oil"],
+    "second_order_assets": ["soybean oil", "rapeseed oil", "canola", "food inflation"],
+    "mechanism": "Indonesia controls ~60% of global palm oil exports. An export ban immediately removes the majority of globally traded palm oil supply, forcing buyers to substitute with soy and rapeseed oil at a premium.",
+    "causal_chain": [
+      "domestic cooking oil shortages create political pressure",
+      "Indonesia announces export ban effective April 28, 2022",
+      "global palm oil export availability falls sharply",
+      "substitute vegetable oils (soy, rapeseed) rally as buyers substitute",
+      "food inflation concerns deepen"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Sharply bullish palm oil and substitute vegetable oils; Indonesia cannot sustain a prolonged ban without economic damage"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Palm oil prices spiked. Indonesia reversed the ban in late May 2022 after ~3 weeks due to domestic producer pressure.",
+      "chart_note": "Provisional — palm oil futures chart confirms spike around April-May 2022",
+      "priced_in_note": "Coincided with already-elevated vegetable oil prices from Ukraine sunflower disruption",
+      "reversal_note": "Price reversal was sharp when Indonesia announced the ban would be lifted"
+    },
+    "regime_tags": ["supply_shock", "export_ban", "policy", "agri_bull"],
+    "sources": [
+      {"title": "Indonesia palm oil export ban coverage", "publisher": "Reuters", "url": null, "source_date": "2022-04-22", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2023-india-rice-export-ban",
+    "event_date": "2023-07-20",
+    "event_type": "export_ban",
+    "title": "India Rice Export Ban → Global Rice Price Spike",
+    "summary": "India banned exports of non-basmati white rice in July 2023 amid domestic supply concerns, removing roughly 10 million tonnes of annual export capacity from global markets.",
+    "domain": "agri",
+    "actors": ["Indian government", "Ministry of Consumer Affairs"],
+    "locations": ["India"],
+    "channels": ["supply", "export_flows"],
+    "first_order_assets": ["rice"],
+    "second_order_assets": ["food security in Asia, Africa, Caribbean"],
+    "mechanism": "India supplies ~40% of globally traded rice. An export ban removes a dominant supplier, forcing importers to compete for Thai, Vietnamese, Pakistani supply at a significant premium.",
+    "causal_chain": [
+      "below-normal kharif sowing and El Niño uncertainty reduce domestic supply confidence",
+      "India bans non-basmati white rice exports",
+      "global rice buyers scramble for alternative origins",
+      "Thai and Vietnamese prices spike on demand surge",
+      "food security concerns emerge in import-dependent nations"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish global rice prices; India's 40% export share means alternatives are price-inelastic in the short term"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Global rice prices hit decade highs. Thai and Vietnamese benchmark prices rose ~15-20% in the weeks following the ban.",
+      "chart_note": "Provisional — Thai benchmark rice prices confirm spike in H2 2023",
+      "priced_in_note": null,
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "export_ban", "policy", "food_security", "agri_bull"],
+    "sources": [
+      {"title": "India bans non-basmati white rice exports", "publisher": "Reuters", "url": null, "source_date": "2023-07-20", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-india-wheat-export-ban",
+    "event_date": "2022-05-14",
+    "event_type": "export_ban",
+    "title": "India Wheat Export Ban → Tighter Global Supply",
+    "summary": "India banned wheat exports in May 2022 after a heatwave cut its crop, compounding the Ukraine-driven global wheat shortage.",
+    "domain": "agri",
+    "actors": ["Indian government", "Ministry of Commerce"],
+    "locations": ["India"],
+    "channels": ["supply", "export_flows"],
+    "first_order_assets": ["wheat"],
+    "second_order_assets": ["food inflation in MENA/Africa"],
+    "mechanism": "India had stepped up as an alternative wheat supplier to replace Ukrainian volumes. The export ban reversed this, removing a key swing supplier from global trade at the worst time.",
+    "causal_chain": [
+      "March 2022 heatwave cuts India wheat crop forecast",
+      "domestic supply concern prompts government intervention",
+      "India bans wheat exports effective May 14, 2022",
+      "importers reliant on Indian wheat must find alternatives",
+      "global wheat prices extend their 2022 rally"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short"],
+      "confidence": "medium",
+      "note": "Incrementally bullish wheat given Ukraine war already dominant factor; India ban removes a swing supplier"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Wheat prices remained elevated. India ban was incremental to the Ukraine war shock already underway.",
+      "chart_note": "Provisional — wheat chart shows sustained 2022 elevated pricing",
+      "priced_in_note": "Significant portion of Ukraine supply shock already priced in",
+      "reversal_note": null
+    },
+    "regime_tags": ["supply_shock", "export_ban", "policy", "agri_bull"],
+    "sources": [
+      {"title": "India bans wheat exports", "publisher": "Reuters", "url": null, "source_date": "2022-05-14", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2018-us-china-tariffs-soybeans",
+    "event_date": "2018-07-06",
+    "event_type": "trade_policy",
+    "title": "U.S.–China Trade War Tariffs → Soybean Price Dislocation",
+    "summary": "China retaliated against U.S. steel/aluminum tariffs by imposing 25% tariffs on U.S. soybeans, rerouting global soybean trade and crushing U.S. prices while boosting Brazilian premiums.",
+    "domain": "agri",
+    "actors": ["U.S. government", "Chinese MOFCOM", "USDA"],
+    "locations": ["United States", "China", "Brazil"],
+    "channels": ["trade_flows", "tariffs", "export_demand"],
+    "first_order_assets": ["U.S. soybeans", "Brazilian soybeans"],
+    "second_order_assets": ["soybean meal", "soybean oil", "hog margins", "Corn Belt farmland values"],
+    "mechanism": "China buys ~60% of globally traded soybeans. Targeting U.S. soybeans with tariffs diverts Chinese demand to Brazil, depressing U.S. basis and elevating Brazilian premiums. U.S. farmers face lower realized prices with no short-term alternative buyer.",
+    "causal_chain": [
+      "U.S. imposes tariffs on Chinese goods",
+      "China retaliates with 25% tariff on U.S. soybeans effective July 6, 2018",
+      "Chinese crushers switch to Brazilian supply",
+      "U.S. soybean prices fall; Brazilian Paranaguá premiums spike",
+      "U.S. farmer income squeezed; storage and basis deteriorate"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish U.S. soybeans specifically; bullish Brazilian soybean basis; neutral to slightly bullish global meal prices"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "U.S. soybean futures fell ~20% from pre-tariff levels. Brazilian premium surged. Trade disruption persisted until Phase 1 deal in 2020.",
+      "chart_note": "Provisional — CBOT soybean chart shows sharp 2018 selloff on tariff escalation",
+      "priced_in_note": "Some tariff risk was priced before official announcement",
+      "reversal_note": "Phase 1 trade deal January 2020 included Chinese soybean purchase commitments; prices partially recovered"
+    },
+    "regime_tags": ["trade_war", "tariffs", "agri_bear", "supply_rerouting"],
+    "sources": [
+      {"title": "China's retaliatory tariffs on U.S. soybeans", "publisher": "USDA FAS", "url": null, "source_date": "2018-07-06", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2016-opec-vienna-agreement",
+    "event_date": "2016-11-30",
+    "event_type": "production_decision",
+    "title": "OPEC Vienna Agreement → Oil Rally",
+    "summary": "OPEC's first production cut deal in eight years, agreed at the Vienna meeting in November 2016, reversed a multi-year oversupply and lifted crude prices materially.",
+    "domain": "energy",
+    "actors": ["Saudi Arabia", "OPEC", "Russia"],
+    "locations": ["Vienna", "Global"],
+    "channels": ["supply", "production", "inventory"],
+    "first_order_assets": ["Brent", "WTI"],
+    "second_order_assets": ["energy equities", "shale economics", "USD"],
+    "mechanism": "After two years of deliberate overproduction strategy, OPEC agreed to cut ~1.2 million b/d. Non-OPEC (Russia) agreed to a separate ~0.6 million b/d cut. The coordinated supply withdrawal rebalanced the market faster than expected.",
+    "causal_chain": [
+      "OPEC members agree to cut production by ~1.2 million b/d",
+      "Russia and non-OPEC agree to additional ~0.6 million b/d cut",
+      "market prices forward supply withdrawal",
+      "crude inventories begin drawing",
+      "Brent and WTI rally from ~$45 toward $55-60"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short", "medium"],
+      "confidence": "high",
+      "note": "Bullish crude; size and compliance of cut determines magnitude"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "WTI rallied from ~$45 to ~$54 in the month following the deal. Compliance was better than historical OPEC averages.",
+      "chart_note": "Provisional — WTI/Brent chart confirms sharp November 2016 rally",
+      "priced_in_note": "Some expectation priced in ahead of meeting on deal rumors",
+      "reversal_note": "U.S. shale production response capped the rally over the following year"
+    },
+    "regime_tags": ["opec", "production_cut", "energy_bull"],
+    "sources": [
+      {"title": "OPEC 171st Meeting press release", "publisher": "OPEC", "url": null, "source_date": "2016-11-30", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2014-saudi-no-cut-oil-crash",
+    "event_date": "2014-11-27",
+    "event_type": "production_decision",
+    "title": "Saudi Arabia Refuses OPEC Output Cut → Oil Price Crash",
+    "summary": "At the OPEC meeting in Vienna in November 2014, Saudi Arabia blocked a production cut despite prices already falling from $100+, triggering a crash from ~$80 to ~$45 over the following months.",
+    "domain": "energy",
+    "actors": ["Saudi Arabia", "OPEC"],
+    "locations": ["Vienna", "Global"],
+    "channels": ["supply", "production", "market_share"],
+    "first_order_assets": ["Brent", "WTI"],
+    "second_order_assets": ["energy equities", "high-yield energy credit", "shale economics", "EM petrostates"],
+    "mechanism": "Saudi Arabia chose to defend market share over price, calculating that lower prices would squeeze U.S. shale and non-OPEC producers. The refusal to cut signaled a fundamental shift in OPEC strategy, removing the market's price floor.",
+    "causal_chain": [
+      "oil prices already falling from $100 on rising U.S. shale output",
+      "OPEC November 2014 meeting: Saudi Arabia refuses to cut production",
+      "market interprets signal as removal of OPEC price floor",
+      "Brent falls from ~$80 to ~$45 over following months",
+      "U.S. shale producers begin hedging losses and cutting capex"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium", "long"],
+      "confidence": "high",
+      "note": "Sharply bearish crude; removal of OPEC floor is a regime-change signal, not a temporary move"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent fell from ~$80 at meeting to below $50 by January 2015 and briefly below $30 in early 2016.",
+      "chart_note": "Provisional — Brent chart confirms multi-month crash into 2015-16",
+      "priced_in_note": "Some decline already underway; Saudi decision accelerated and extended it",
+      "reversal_note": "Prices recovered from early 2016 lows as shale capex cuts took effect and demand recovered"
+    },
+    "regime_tags": ["opec", "no_cut", "market_share_strategy", "energy_bear", "regime_change"],
+    "sources": [
+      {"title": "OPEC 166th Meeting outcome", "publisher": "OPEC", "url": null, "source_date": "2014-11-27", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2020-opec-plus-historic-cut",
+    "event_date": "2020-04-12",
+    "event_type": "production_decision",
+    "title": "OPEC+ Historic 9.7 mb/d Cut → Oil Price Floor",
+    "summary": "OPEC+ agreed to a record 9.7 million barrels per day production cut in April 2020 to stabilize markets after COVID demand collapse, though WTI still briefly went negative before cuts took effect.",
+    "domain": "energy",
+    "actors": ["Saudi Arabia", "Russia", "OPEC+", "G20"],
+    "locations": ["Vienna", "Global"],
+    "channels": ["supply", "production", "inventory"],
+    "first_order_assets": ["WTI", "Brent"],
+    "second_order_assets": ["energy equities", "shale sector credit"],
+    "mechanism": "The largest production cut in OPEC history was designed to arrest the price collapse from COVID demand destruction. Though cuts took weeks to materialize, they provided a medium-term floor and enabled price recovery from sub-$20 levels.",
+    "causal_chain": [
+      "COVID lockdowns collapse global oil demand by ~20-25 million b/d",
+      "WTI goes negative April 20, 2020 on storage crisis",
+      "OPEC+ agrees historic 9.7 mb/d cut April 12, effective May 1",
+      "market prices forward supply reduction",
+      "crude prices recover toward $40 by end of May 2020"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish but cautiously; demand recovery pace is the key uncertainty"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "WTI recovered from negative territory to ~$40 by end of May and ~$45 by end of 2020. The OPEC+ framework held.",
+      "chart_note": "Provisional — WTI chart confirms recovery from April 2020 lows through year-end",
+      "priced_in_note": "Demand recovery and vaccine timeline were significant concurrent factors",
+      "reversal_note": null
+    },
+    "regime_tags": ["opec", "production_cut", "covid", "energy_bull"],
+    "sources": [
+      {"title": "OPEC+ meeting April 2020 outcome", "publisher": "OPEC", "url": null, "source_date": "2020-04-12", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-opec-plus-surprise-cut",
+    "event_date": "2022-10-05",
+    "event_type": "production_decision",
+    "title": "OPEC+ Surprise 2 mb/d Cut → Oil Rally",
+    "summary": "OPEC+ announced a surprise 2 million barrel per day output cut in October 2022, defying Western pressure and reversing a brief price decline.",
+    "domain": "energy",
+    "actors": ["Saudi Arabia", "Russia", "OPEC+"],
+    "locations": ["Vienna"],
+    "channels": ["supply", "production"],
+    "first_order_assets": ["Brent", "WTI"],
+    "second_order_assets": ["energy inflation", "USD", "geopolitical tension with U.S."],
+    "mechanism": "With oil prices having declined from mid-2022 highs on global recession fears and demand destruction, Saudi Arabia led a larger-than-expected cut to defend prices above $90, creating geopolitical friction with the U.S. over energy security.",
+    "causal_chain": [
+      "Brent declines from ~$120 toward ~$85-90 on demand fears",
+      "Saudi Arabia leads OPEC+ to agree 2 mb/d cut",
+      "market prices forward supply tightening",
+      "Brent rallies ~$5-10 in the days following announcement",
+      "geopolitical tensions rise between Riyadh and Washington"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish crude in the near term; medium-term dependent on demand trajectory"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent rallied ~$5-8 on the announcement. The price impact was partially offset by ongoing demand fears.",
+      "chart_note": "Provisional — Brent chart shows October 2022 bounce from ~$85",
+      "priced_in_note": null,
+      "reversal_note": "Prices drifted lower in late 2022 on China COVID restrictions and recession fears"
+    },
+    "regime_tags": ["opec", "production_cut", "energy_bull", "geopolitical"],
+    "sources": [
+      {"title": "OPEC+ October 2022 meeting outcome", "publisher": "OPEC", "url": null, "source_date": "2022-10-05", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2023-saudi-voluntary-cut",
+    "event_date": "2023-07-03",
+    "event_type": "production_decision",
+    "title": "Saudi Arabia Voluntary 1 mb/d Cut Extension → Oil Spike",
+    "summary": "Saudi Arabia announced a voluntary 1 million b/d cut extension into August and beyond in July 2023, surprising markets and producing a sharp immediate oil rally.",
+    "domain": "energy",
+    "actors": ["Saudi Arabia", "OPEC+"],
+    "locations": ["Vienna"],
+    "channels": ["supply", "production"],
+    "first_order_assets": ["Brent", "WTI"],
+    "second_order_assets": ["energy inflation", "USD"],
+    "mechanism": "Saudi Arabia acted unilaterally beyond the OPEC+ baseline deal to tighten the physical market, signaling its willingness to defend a price target and extending the inventory draw.",
+    "causal_chain": [
+      "Saudi Energy Minister announces voluntary 1 mb/d cut extension",
+      "market revises Q3 supply balance tighter",
+      "Brent spikes on announcement",
+      "inventory draws expected to accelerate",
+      "prices supported above $80"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bullish crude near-term; additional unilateral Saudi action is a strong commitment signal"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent rallied from ~$74 to ~$85-87 in the weeks following the announcement.",
+      "chart_note": "Provisional — Brent chart confirms July-September 2023 rally to ~$97",
+      "priced_in_note": null,
+      "reversal_note": null
+    },
+    "regime_tags": ["opec", "production_cut", "energy_bull"],
+    "sources": [
+      {"title": "Saudi voluntary cut announcement July 2023", "publisher": "Saudi Press Agency", "url": null, "source_date": "2023-07-03", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "1973-opec-embargo-oil",
+    "event_date": "1973-10-17",
+    "event_type": "embargo",
+    "title": "OPEC Oil Embargo → Quadrupling of Oil Prices",
+    "summary": "Arab OPEC members embargoed oil exports to the U.S. and allies in retaliation for supporting Israel in the Yom Kippur War, causing the first global oil price shock.",
+    "domain": "energy",
+    "actors": ["Arab OPEC members", "OAPEC", "United States", "Western Europe"],
+    "locations": ["Middle East", "United States", "Europe"],
+    "channels": ["supply", "export_flows", "geopolitical_risk"],
+    "first_order_assets": ["crude oil"],
+    "second_order_assets": ["gasoline", "energy inflation", "global GDP"],
+    "mechanism": "Arab OPEC members used oil as a geopolitical weapon. An embargo on target nations combined with production cuts quadrupled the global oil price in months, causing stagflationary recession.",
+    "causal_chain": [
+      "Yom Kippur War begins October 6, 1973",
+      "Arab OPEC members announce embargo on U.S. and allies October 17",
+      "production cuts of ~5% per month imposed",
+      "oil price quadruples from ~$3 to ~$12/barrel by early 1974",
+      "global recession and inflation follow"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate", "short", "medium"],
+      "confidence": "high",
+      "note": "Historically defining supply shock; no near-term substitutes available"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Crude oil price quadrupled from ~$3 to ~$12/barrel by early 1974. Caused global recession.",
+      "chart_note": "Provisional — historical oil price data confirms quadrupling in 1973-74",
+      "priced_in_note": null,
+      "reversal_note": "Embargo ended March 1974 but oil prices did not fully retrace"
+    },
+    "regime_tags": ["opec", "embargo", "geopolitical", "energy_bull", "regime_change", "stagflation"],
+    "sources": [
+      {"title": "1973 oil crisis", "publisher": "U.S. Department of Energy history", "url": null, "source_date": "1973-10", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2012-iran-oil-sanctions",
+    "event_date": "2012-01-23",
+    "event_type": "sanctions",
+    "title": "EU/U.S. Iran Oil Sanctions → Brent Premium",
+    "summary": "The EU embargo on Iranian crude oil imports and tightened U.S. sanctions on Iran's central bank in early 2012 removed ~1 million b/d from the global market and lifted Brent.",
+    "domain": "energy",
+    "actors": ["EU", "U.S. Treasury", "Iran"],
+    "locations": ["Iran", "Persian Gulf"],
+    "channels": ["supply", "export_flows", "geopolitical_risk"],
+    "first_order_assets": ["Brent"],
+    "second_order_assets": ["WTI", "gasoline", "Strait of Hormuz risk premium"],
+    "mechanism": "Iran was producing ~3.5 mb/d and exporting ~2.5 mb/d. Sanctions reducing exports by ~1 mb/d tightened the global balance and elevated the Brent geopolitical risk premium, amplified by Iranian threats to close the Strait of Hormuz.",
+    "causal_chain": [
+      "EU announces ban on Iranian crude imports effective July 2012",
+      "U.S. sanctions target Iran's central bank, making financial transactions difficult",
+      "Iranian crude exports fall by ~1 mb/d over H1 2012",
+      "Brent trades above WTI with expanded premium",
+      "Hormuz closure threats add risk premium"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish Brent; Hormuz risk premium and reduced supply support price"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent traded above $120/barrel in the spring of 2012. Iranian exports fell materially.",
+      "chart_note": "Provisional — Brent chart confirms elevated Q1-Q2 2012 pricing",
+      "priced_in_note": "Saudi Arabia signaled willingness to offset Iranian volumes, which capped the upside",
+      "reversal_note": null
+    },
+    "regime_tags": ["sanctions", "geopolitical", "energy_bull", "supply_disruption"],
+    "sources": [
+      {"title": "EU sanctions on Iran oil imports", "publisher": "European Council", "url": null, "source_date": "2012-01-23", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]

@@ -113,4 +113,21 @@ describe('ConversationHandler tool-first snapshot', () => {
     expect(toolCalls).toContainEqual({ name: 'perp_market_list', input: { limit: 200 } });
     expect(toolCalls).toContainEqual({ name: 'perp_market_get', input: { symbol: 'CL/USDC' } });
   });
+
+  it('routes oil geopolitics prompts through domain-specific retrieval and avoids perp defaults', async () => {
+    toolCalls.length = 0;
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = {
+      complete: vi.fn(async () => ({ content: 'ok', model: 'test' })),
+    };
+    const marketClient = { searchMarkets: vi.fn(async () => []) };
+    const config = { execution: { mode: 'paper', provider: 'hyperliquid' } } as any;
+
+    const handler = new ConversationHandler(llm as any, marketClient as any, config);
+    await handler.chat('user', 'Could Iran escalation push oil higher through Hormuz?');
+
+    expect(toolCalls.some((call) => call.name === 'intel_search')).toBe(true);
+    expect(toolCalls.some((call) => call.name === 'web_search')).toBe(true);
+    expect(toolCalls.some((call) => call.name === 'perp_market_list')).toBe(false);
+  });
 });

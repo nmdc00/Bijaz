@@ -1,0 +1,199 @@
+[
+  {
+    "case_key": "2020-covid-demand-collapse-negative-wti",
+    "event_date": "2020-04-20",
+    "event_type": "demand_shock",
+    "title": "COVID Demand Collapse → Negative WTI",
+    "summary": "Pandemic lockdowns crushed global oil demand. On April 20, 2020, the May WTI futures contract settled at -$37.63/barrel as expiring longs with no storage capacity were forced to pay counterparties to take delivery.",
+    "domain": "energy",
+    "actors": ["CFTC", "CME Group", "U.S. storage operators"],
+    "locations": ["Global", "United States", "Cushing Oklahoma"],
+    "channels": ["demand", "storage", "futures_expiry"],
+    "first_order_assets": ["WTI crude oil"],
+    "second_order_assets": ["energy equities", "credit stress", "Brent-WTI spread"],
+    "mechanism": "Pandemic lockdowns collapsed transportation fuel demand. Cushing storage filled toward capacity. Long futures holders facing contract expiry with no ability to take physical delivery had to pay others to take crude, driving the settlement price negative.",
+    "causal_chain": [
+      "COVID lockdowns collapse global transport demand",
+      "crude inventories surge toward Cushing storage limits",
+      "May WTI contract expiry approaches with weak physical demand",
+      "long holders with no storage scramble to close or transfer positions",
+      "May WTI contract settles at -$37.63 on April 20, 2020"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["immediate"],
+      "confidence": "high",
+      "note": "Bearish prompt WTI / front-month dislocation under extreme storage stress; Brent less affected"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "May WTI contract settled at -$37.63 on April 20, 2020. CFTC documented collapse from ~$18 to -$37.",
+      "chart_note": "CFTC interim report confirms one-day collapse; MacroTrends WTI shows 2020 low at $11.26 on series",
+      "priced_in_note": null,
+      "reversal_note": "June contract and beyond remained positive; negative print was a storage/expiry technical event"
+    },
+    "regime_tags": ["demand_shock", "pandemic", "storage_crisis", "futures_mechanics", "energy_bear"],
+    "sources": [
+      {"title": "CFTC Commissioner statement on negative WTI", "publisher": "CFTC", "url": "https://www.cftc.gov/PressRoom/SpeechesTestimony/berkovitzstatement050720", "source_date": "2020-05-07", "source_type": "event"},
+      {"title": "CFTC interim report on negative WTI", "publisher": "CFTC", "url": "https://www.cftc.gov/PressRoom/PressReleases/8315-20", "source_date": "2020-11-23", "source_type": "event"},
+      {"title": "Crude Oil Price History Chart", "publisher": "MacroTrends", "url": "https://app.macrotrends.net/1369/crude-oil-price-history-chart", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2008-financial-crisis-commodity-crash",
+    "event_date": "2008-09-15",
+    "event_type": "demand_shock",
+    "title": "Global Financial Crisis → Commodity Price Crash",
+    "summary": "The collapse of Lehman Brothers and the ensuing global financial crisis caused a rapid and severe compression of commodity prices across oil, metals, and grains as global demand expectations collapsed.",
+    "domain": "energy",
+    "actors": ["Lehman Brothers", "Federal Reserve", "global banks"],
+    "locations": ["Global", "United States"],
+    "channels": ["demand", "credit", "global_growth"],
+    "first_order_assets": ["crude oil", "copper", "iron ore"],
+    "second_order_assets": ["industrial metals", "grains", "energy equities"],
+    "mechanism": "A systemic financial crisis compressed credit and trade finance, slashed global growth expectations, and caused a liquidation of commodity positions by leveraged funds. Demand forecasts were cut sharply across all commodity sectors.",
+    "causal_chain": [
+      "Lehman Brothers files for bankruptcy September 15, 2008",
+      "credit markets seize; trade finance shrinks",
+      "global growth forecasts revised sharply lower",
+      "commodity funds liquidate leveraged long positions",
+      "oil falls from $147 (July 2008) to $35 (December 2008); copper falls ~60%"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish all demand-driven commodities during acute phase; magnitude tied to depth of global recession"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Oil fell from $147/barrel in July 2008 to ~$35 by December 2008. Copper fell from ~$4 to ~$1.25/lb. Iron ore fell ~50%.",
+      "chart_note": "Provisional — oil, copper, iron ore charts all confirm H2 2008 crash",
+      "priced_in_note": "Oil had been in speculative bubble; correction was larger than demand fundamentals alone warranted",
+      "reversal_note": "Prices recovered sharply through 2009 on stimulus and demand stabilization"
+    },
+    "regime_tags": ["demand_shock", "financial_crisis", "deleveraging", "energy_bear", "metals_bear"],
+    "sources": [
+      {"title": "Lehman Brothers bankruptcy and commodity market impact", "publisher": "IMF WEO", "url": null, "source_date": "2009-04", "source_type": "secondary_context"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-china-reopening-copper",
+    "event_date": "2022-11-11",
+    "event_type": "demand_regime_shift",
+    "title": "China COVID Reopening → Copper and Iron Ore Rally",
+    "summary": "China's abrupt abandonment of zero-COVID policy in November 2022 reignited demand expectations for industrial metals, particularly copper and iron ore, given China's dominant share of global consumption.",
+    "domain": "metals",
+    "actors": ["Chinese government", "PBOC"],
+    "locations": ["China"],
+    "channels": ["demand", "industrial_activity", "construction"],
+    "first_order_assets": ["copper", "iron ore"],
+    "second_order_assets": ["aluminum", "steel", "AUD", "BRL"],
+    "mechanism": "China accounts for ~55% of global copper demand and ~70% of global seaborne iron ore demand. An expected reopening of its economy after prolonged COVID restrictions repriced the demand side of these markets sharply higher.",
+    "causal_chain": [
+      "China announces relaxation of zero-COVID policies",
+      "mobility data and industrial activity expected to recover",
+      "market prices forward demand recovery in metals",
+      "copper and iron ore futures rally significantly",
+      "commodity-linked currencies (AUD, BRL) strengthen"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish industrial metals; copper most directly affected; magnitude depends on pace of reopening and property sector recovery"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Copper rallied from ~$3.40 to ~$4.20/lb in Q4 2022 through early 2023. Iron ore rallied ~50% from October 2022 lows.",
+      "chart_note": "Provisional — copper and iron ore charts confirm Q4 2022 rally",
+      "priced_in_note": null,
+      "reversal_note": "Rally partially retraced in H2 2023 as Chinese property sector remained weak"
+    },
+    "regime_tags": ["demand_regime_shift", "china", "metals_bull", "reopening"],
+    "sources": [
+      {"title": "China COVID reopening announcement November 2022", "publisher": "Reuters", "url": null, "source_date": "2022-11-11", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2015-china-slowdown-iron-ore-copper",
+    "event_date": "2015-08-11",
+    "event_type": "demand_regime_shift",
+    "title": "China Slowdown / CNY Devaluation → Iron Ore and Copper Crash",
+    "summary": "A sharper-than-expected Chinese economic slowdown, amplified by a surprise yuan devaluation in August 2015, collapsed demand expectations for industrial metals and sent iron ore and copper to multi-year lows.",
+    "domain": "metals",
+    "actors": ["PBOC", "Chinese government", "China's steel mills"],
+    "locations": ["China"],
+    "channels": ["demand", "industrial_activity", "construction", "FX"],
+    "first_order_assets": ["iron ore", "copper"],
+    "second_order_assets": ["steel", "aluminum", "AUD", "commodity equities"],
+    "mechanism": "China's construction and manufacturing slowdown compressed steel demand, cutting iron ore consumption. CNY devaluation added a capital flight/risk-off signal, amplifying the selloff in metals and commodity-linked assets.",
+    "causal_chain": [
+      "Chinese growth data disappoints sequentially through H1 2015",
+      "PBOC surprises with CNY devaluation August 11, 2015",
+      "global growth concern deepens",
+      "iron ore falls below $50/tonne; copper below $2.40/lb",
+      "commodity-linked currencies (AUD, BRL) weaken sharply"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish industrial metals during acute China slowdown; oversupply compounding demand weakness in both iron ore and copper"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Iron ore fell from ~$70 to ~$38/tonne by end of 2015. Copper fell to ~$2.10/lb. AUD hit multi-year lows.",
+      "chart_note": "Provisional — iron ore and copper charts confirm 2015 bear markets",
+      "priced_in_note": "Some China slowdown already priced; devaluation was the catalyst that accelerated existing trend",
+      "reversal_note": "Prices recovered sharply in early 2016 on Chinese fiscal stimulus"
+    },
+    "regime_tags": ["demand_shock", "china", "metals_bear", "fx_contagion"],
+    "sources": [
+      {"title": "China's yuan devaluation and commodity market impact", "publisher": "IMF", "url": null, "source_date": "2015-10", "source_type": "secondary_context"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2021-post-covid-demand-surge-energy",
+    "event_date": "2021-03-01",
+    "event_type": "demand_regime_shift",
+    "title": "Post-COVID Demand Surge → Energy and Metals Bull Market",
+    "summary": "The combination of COVID reopening, fiscal stimulus, and supply chains struggling to adapt to demand recovery created a multi-commodity bull market in 2021 across energy, metals, and freight.",
+    "domain": "energy",
+    "actors": ["U.S. Treasury", "Fed", "OPEC+", "global consumers"],
+    "locations": ["Global", "United States", "Europe", "China"],
+    "channels": ["demand", "fiscal_stimulus", "supply_constraint"],
+    "first_order_assets": ["crude oil", "natural gas", "copper", "aluminum"],
+    "second_order_assets": ["freight rates", "LNG", "electricity prices"],
+    "mechanism": "Fiscal stimulus drove consumption demand well above trend. OPEC+ supply response was measured. Supply chains built for pre-COVID volumes could not adapt quickly enough. Result: simultaneous bull markets across multiple commodity sectors.",
+    "causal_chain": [
+      "vaccine rollouts allow economic reopening in H1 2021",
+      "fiscal stimulus boosts household spending and goods demand",
+      "OPEC+ tapers cuts gradually rather than responding to demand surge",
+      "supply chains unable to meet rapid demand recovery",
+      "broad commodity bull market: oil to $80+, copper to $10K, gas to multi-year highs"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Broadly bullish commodities; reopening + stimulus = demand surge; supply constrained by OPEC discipline and logistics bottlenecks"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent rallied from $50 at end of 2020 to $85 by October 2021. Copper hit $10K/tonne. Henry Hub reached multi-year highs. Container freight rates 5-10x pre-COVID levels.",
+      "chart_note": "Provisional — multi-commodity charts confirm 2021 broad bull market",
+      "priced_in_note": null,
+      "reversal_note": "Bull market extended into 2022 with Ukraine war amplification; eventually reversed in H2 2022 on recession fears"
+    },
+    "regime_tags": ["demand_regime_shift", "reopening", "fiscal_stimulus", "energy_bull", "metals_bull"],
+    "sources": [
+      {"title": "IEA World Energy Outlook 2021", "publisher": "IEA", "url": null, "source_date": "2021-10", "source_type": "secondary_context"}
+    ],
+    "validation_status": "provisional"
+  }
+]
