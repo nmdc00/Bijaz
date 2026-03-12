@@ -55,6 +55,7 @@ import {
   type ProactiveRefreshSettings,
   type ProactiveRefreshSnapshot,
 } from './proactive_refresh.js';
+import { classifyMarketContextDomain, gatherMarketContext } from '../markets/context.js';
 
 export interface ConversationContext {
   userId: string;
@@ -831,8 +832,14 @@ export class ConversationHandler {
     const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding|position|positions)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
     const wantsCommodityDiscovery = /\b(commodit(?:y|ies)|oil|gold|silver|xau|xag|wti|brent|natgas|copper)\b/.test(text);
+    const inferredDomain = classifyMarketContextDomain(message);
+    const wantsDomainContext =
+      inferredDomain !== 'crypto' &&
+      /\b(oil|gold|silver|wti|brent|natgas|commodit(?:y|ies)|iran|hormuz|opec|sanction|macro|rates|yield|fed)\b/i.test(message) &&
+      !wantsTrade &&
+      !/\b(hyperliquid|usdc|usdt|ticker|tickers)\b/.test(text);
 
-    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime && !wantsCommodityDiscovery) {
+    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime && !wantsCommodityDiscovery && !wantsDomainContext) {
       return '';
     }
 
@@ -845,7 +852,22 @@ export class ConversationHandler {
       }
     }
 
-    if (wantsNews) {
+    if (wantsDomainContext) {
+      const snapshot = await gatherMarketContext(
+        { message, marketLimit: 200 },
+        (toolName, input) => executeToolCall(toolName, input, this.toolContext)
+      );
+      sections.push(
+        `### market_context_domain\n${JSON.stringify(
+          { domain: snapshot.domain, primarySource: snapshot.primarySource, sources: snapshot.sources },
+          null,
+          2
+        )}`
+      );
+      for (const result of snapshot.results.filter((item) => item.success)) {
+        sections.push(`### ${result.label}\n${JSON.stringify(result.data, null, 2)}`);
+      }
+    } else if (wantsNews) {
       const intelResult = await executeToolCall('intel_search', { query: message, limit: 5 }, this.toolContext);
       if (intelResult.success) {
         sections.push(`### intel_search\n${JSON.stringify(intelResult.data, null, 2)}`);
@@ -856,7 +878,7 @@ export class ConversationHandler {
       }
     }
 
-    if (wantsMarket || wantsTrade) {
+    if ((wantsMarket || wantsTrade) && !wantsDomainContext) {
       const symbols = new Set<string>();
       const positionsResult = await executeToolCall('get_positions', {}, this.toolContext);
       if (positionsResult.success) {

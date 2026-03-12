@@ -1,0 +1,202 @@
+[
+  {
+    "case_key": "2021-us-cpi-acceleration-transitory",
+    "event_date": "2021-04-13",
+    "event_type": "inflation_regime_shift",
+    "title": "US CPI Acceleration 2021 → Inflation Debate / TIPS Rally",
+    "summary": "US CPI accelerated sharply through mid-2021 — the April 2021 print hit 4.2% YoY, the highest since 2008. The Fed maintained its 'transitory' narrative but inflation expectations surged, driving a TIPS rally and a steep steepening of the yield curve. The transitory thesis ultimately proved wrong.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "US Treasury", "Jerome Powell"],
+    "locations": ["United States"],
+    "channels": ["inflation_expectations", "rates", "commodity_costs", "supply_chain"],
+    "first_order_assets": ["TIPS (inflation-linked bonds)", "10-year breakeven", "CPI swaps"],
+    "second_order_assets": ["commodity equities", "real estate equities", "gold", "nominal Treasury bonds"],
+    "mechanism": "COVID fiscal stimulus, supply chain disruptions, and the reopening demand surge combined to create the highest US inflation in decades. The Fed's 'transitory' framing suppressed rate hike expectations, but the bond market increasingly priced higher inflation via rising breakevens and a steeper curve. TIPS and inflation-linked assets outperformed as real yields remained suppressed.",
+    "causal_chain": [
+      "US fiscal stimulus (ARP ~$1.9T) deployed in early 2021",
+      "Supply chains constrained as demand surges on reopening",
+      "April 2021 CPI prints 4.2% YoY — first 4%+ print since 2008",
+      "Fed holds firm on transitory narrative; keeps rates at zero",
+      "10-year breakeven inflation expectations rise toward 2.5%+",
+      "TIPS and inflation-linked equities (energy, materials) outperform"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish TIPS and inflation breakevens; bullish commodities and commodity equities; bullish inflation-sensitive real assets; bearish nominal long-duration Treasuries"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "10-year TIPS breakeven reached 2.7% by end of 2021 (highest in over a decade). Energy and commodity stocks (XLE) rose 50%+ in 2021. Gold lagged despite inflation (real yield anchor). CPI eventually reached 9.1% by June 2022.",
+      "chart_note": "Provisional — TIPS breakeven charts and commodity equity charts confirm the trend",
+      "priced_in_note": "Some reflation trade already in motion from late 2020; April 2021 print accelerated positioning",
+      "reversal_note": "TIPS breakevens peaked in early 2022 as Fed pivoted hawkishly; nominal yields ultimately rose faster"
+    },
+    "regime_tags": ["inflation_regime", "reflation_trade", "tips_rally", "supply_chain_shock"],
+    "sources": [
+      {"title": "US CPI April 2021 BLS release", "publisher": "Bureau of Labor Statistics", "url": null, "source_date": "2021-05-12", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-us-cpi-june-shock",
+    "event_date": "2022-06-10",
+    "event_type": "inflation_shock",
+    "title": "US June 2022 CPI Shock (9.1%) → Emergency Rate Hike Pricing",
+    "summary": "The June 2022 US CPI print of 9.1% YoY — released June 10, 2022 — was the highest reading since 1981 and came in above all economist forecasts. Markets immediately priced a 100bp hike for the July FOMC meeting. The print marked the peak of the US inflation cycle.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "BLS", "US Treasury"],
+    "locations": ["United States"],
+    "channels": ["inflation_expectations", "rates", "risk_sentiment"],
+    "first_order_assets": ["2-year Treasury", "fed funds futures", "SPX"],
+    "second_order_assets": ["USD", "gold", "TIPS breakeven", "EUR/USD"],
+    "mechanism": "The 9.1% print shocked markets that had expected ~8.8%. The miss forced rapid repricing of the terminal rate and accelerated the timeline for aggressive hikes. Equity markets fell sharply; 2-year yields spiked; USD strengthened. The irony: the June print was actually the cycle peak, but the market didn't know that until months later.",
+    "causal_chain": [
+      "May 2022 CPI already elevated at 8.6%; expectations for June at ~8.8%",
+      "June 10, 2022: BLS releases June CPI at 9.1% YoY — highest since 1981",
+      "Fed funds futures immediately price 100bp hike for July FOMC",
+      "2-year Treasury yield surges; SPX falls ~3% on the day",
+      "Fed ultimately hikes 75bp at July meeting (not 100bp); 9.1% is confirmed as cycle peak"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bearish equities (growth most); bearish long-duration bonds; bullish 2-year yields; bullish USD; bearish gold (real yields rising)"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "SPX fell ~3.3% on June 10. 2-year yield rose ~20bp. USD (DXY) strengthened further. Fed hiked 75bp in July 2022. CPI peaked at 9.1% and began declining from August 2022.",
+      "chart_note": "Provisional — SPX, 2yr yield, and CPI charts confirm the pattern",
+      "priced_in_note": "Some upside inflation risk priced; 9.1% vs 8.8% expected — miss was the catalyst",
+      "reversal_note": "CPI decline from August 2022 onwards eventually drove the 'disinflation trade' rally"
+    },
+    "regime_tags": ["inflation_shock", "rate_hike_pricing", "risk_off", "cpi_peak"],
+    "sources": [
+      {"title": "BLS CPI release June 2022", "publisher": "Bureau of Labor Statistics", "url": "https://www.bls.gov/news.release/cpi.nr0.htm", "source_date": "2022-07-13", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2023-us-disinflation-pivot-trade",
+    "event_date": "2023-07-12",
+    "event_type": "inflation_regime_shift",
+    "title": "US Disinflation Confirmation → Soft Landing / Rate Cut Pricing",
+    "summary": "The July 2023 US CPI print of 3.0% YoY — well below the 9.1% peak — confirmed the disinflation trajectory and ignited a 'soft landing' narrative. Markets began pricing multiple Fed rate cuts in 2024, driving a broad risk-on rally in equities, a USD decline, and a bond rally.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "BLS", "Jerome Powell"],
+    "locations": ["United States", "Global"],
+    "channels": ["inflation_expectations", "rates", "risk_sentiment", "equity"],
+    "first_order_assets": ["US equities (SPX, NDX)", "10-year Treasury", "2-year Treasury"],
+    "second_order_assets": ["USD", "gold", "EM equities", "credit spreads"],
+    "mechanism": "As CPI fell from 9.1% to 3.0%, the Fed's hiking cycle was seen as nearly complete. Markets began debating whether the Fed could achieve a 'soft landing' — reducing inflation without a recession. The disinflation print drove an equity re-rating (especially duration-sensitive growth stocks) and the start of aggressive rate cut pricing.",
+    "causal_chain": [
+      "CPI trajectory declines from 9.1% June 2022 through 2022-2023",
+      "July 12, 2023: US CPI prints 3.0% YoY — below 3.1% expected",
+      "Soft landing narrative accelerates; recession fears fade",
+      "Markets price ~6 Fed rate cuts for 2024",
+      "SPX and NDX rally sharply; USD weakens; gold strengthens; 10-year yields hold steady"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish equities (growth leads); bullish gold on rate cut expectations; bearish USD; modestly bullish bonds on terminal rate pricing; EM equities benefit from weaker USD"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "SPX rallied ~17% in H2 2023. NDX outperformed. Gold rose from ~$1,920 to ~$2,070 by end of 2023. USD weakened through H2 2023. 10-year Treasury yield volatile but rate cut pricing supported.",
+      "chart_note": "Provisional — SPX, gold, and USD charts confirm the disinflation trade pattern",
+      "priced_in_note": "Disinflation trend was underway; 3.0% print was a confirmation that accelerated conviction",
+      "reversal_note": "Rate cut bets were pushed out as inflation stalled above 2% in early 2024; first cut only came September 2024"
+    },
+    "regime_tags": ["disinflation", "soft_landing", "rate_cut_pricing", "equity_rally"],
+    "sources": [
+      {"title": "BLS CPI release July 2023", "publisher": "Bureau of Labor Statistics", "url": null, "source_date": "2023-07-12", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "1979-volcker-shock-rates",
+    "event_date": "1979-10-06",
+    "event_type": "central_bank_regime_shift",
+    "title": "Volcker Shock → Bond Crash / Dollar Rally / Commodity Bear",
+    "summary": "On October 6, 1979, Fed Chair Paul Volcker announced a shift in Fed operating procedure to target monetary aggregates rather than interest rates. This allowed the federal funds rate to rise toward 20% by mid-1981. The shock ended the 1970s inflation cycle but caused two recessions and a severe commodity bear market.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "Paul Volcker"],
+    "locations": ["United States", "Global"],
+    "channels": ["rates", "inflation_expectations", "global_growth", "commodity_demand"],
+    "first_order_assets": ["US Treasuries", "fed funds rate", "USD"],
+    "second_order_assets": ["gold", "oil", "commodity prices broadly", "EM sovereign debt", "equity valuations"],
+    "mechanism": "By abandoning interest rate targeting in favor of money supply targeting, the Fed implicitly allowed rates to rise to whatever level was necessary to break inflation. This was a credibility-driven regime shift: the Fed committed to accepting recession as the price of restoring price stability. The resulting rate spike caused a massive dollar appreciation and commodity demand destruction.",
+    "causal_chain": [
+      "US inflation running at 10%+ through 1979",
+      "Volcker announces new operating procedure targeting M1 money supply October 6, 1979",
+      "Federal funds rate rises from ~11% toward 20% by June 1981",
+      "USD strengthens massively against all currencies",
+      "Gold, oil, and commodities sold off sharply from 1980 peaks",
+      "Two recessions (1980, 1981-82); unemployment hits 10.8%",
+      "Inflation falls from 14% to 3% by 1983"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium", "long"],
+      "confidence": "high",
+      "note": "Bearish bonds (rising rates); bearish commodities (demand destruction); bullish USD; ultimately bullish bonds and equities once inflation is broken (1982 onwards)"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Fed funds rate hit 20% by June 1981. Gold fell from $850/oz (January 1980) to $300/oz by 1982. Oil fell from $35 to below $20 by mid-1980s. USD DXY rose ~60% from 1980 to 1985. Bond yields peaked in 1981; subsequent secular bull began.",
+      "chart_note": "Validated — historical rate, USD, gold, and commodity charts all confirm the pattern; extensively documented",
+      "priced_in_note": "Volcker's appointment had some impact; the October 6 announcement was the operational regime change",
+      "reversal_note": "Bonds began a 40-year bull market from the 1981 yield peak; equities bottomed in August 1982"
+    },
+    "regime_tags": ["volcker_shock", "inflation_regime_shift", "bond_bear", "commodity_bear", "usd_bull"],
+    "sources": [
+      {"title": "Federal Reserve history: Volcker's October 1979 monetary policy change", "publisher": "Federal Reserve History", "url": null, "source_date": "1979-10-06", "source_type": "event"},
+      {"title": "FRED: Federal Funds Effective Rate 1979-1984", "publisher": "St. Louis Fed", "url": null, "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2022-uk-cpi-peak-boe-hikes",
+    "event_date": "2022-10-19",
+    "event_type": "inflation_shock",
+    "title": "UK CPI Peak (11.1%) → BoE Aggressive Hike Cycle",
+    "summary": "UK CPI reached 11.1% in October 2022 — a 41-year high — driven by energy price surges from the Russia-Ukraine war. The Bank of England was forced into its most aggressive tightening cycle in decades, hiking from 0.1% to 5.25% by 2023, compressing UK growth and hammering the housing market.",
+    "domain": "rates",
+    "actors": ["Bank of England", "UK government", "ONS"],
+    "locations": ["United Kingdom"],
+    "channels": ["inflation_expectations", "rates", "mortgage_market", "consumer_spending"],
+    "first_order_assets": ["UK gilts", "GBP/USD", "UK mortgage rates"],
+    "second_order_assets": ["UK equities (FTSE 250)", "UK retail sector equities", "UK real estate"],
+    "mechanism": "UK inflation was especially elevated due to energy import dependency and the pass-through of wholesale gas prices to retail bills. The BoE faced a policy dilemma: aggressive hikes would compress an already fragile economy and hammer variable-rate mortgage holders (~25% of UK mortgage market), but insufficient hikes risked embedding wage-price spiral.",
+    "causal_chain": [
+      "Russia-Ukraine war drives UK energy prices to record highs",
+      "UK government caps retail energy at £2,500/year — limits inflation but adds fiscal cost",
+      "October 2022 CPI prints 11.1% — highest since 1981",
+      "BoE accelerates hike pace; UK variable-rate mortgage holders face payment shock",
+      "UK housing market weakens sharply; FTSE 250 underperforms global indices",
+      "BoE hikes from 0.1% to 5.25% by August 2023"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish UK growth equities (FTSE 250 more domestic than FTSE 100); bearish UK real estate; bearish UK consumer discretionary; UK gilt yields rise; GBP mixed"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "BoE hiked to 5.25% by August 2023. UK house prices fell ~5% peak-to-trough. FTSE 250 underperformed FTSE 100 significantly. UK fell into recession in H2 2023.",
+      "chart_note": "Provisional — UK rate charts and housing price indices confirm the trend",
+      "priced_in_note": "BoE hike path partially priced; 11.1% peak was above consensus expectations",
+      "reversal_note": "UK CPI fell toward 2% by mid-2024; BoE began cutting August 2024"
+    },
+    "regime_tags": ["inflation_shock", "boe_tightening", "uk_recession", "mortgage_stress"],
+    "sources": [
+      {"title": "ONS UK CPI October 2022", "publisher": "Office for National Statistics", "url": null, "source_date": "2022-11-16", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]
