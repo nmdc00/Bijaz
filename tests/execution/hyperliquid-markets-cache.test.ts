@@ -55,4 +55,22 @@ describe('HyperliquidMarketClient cache', () => {
     expect(listPerpMarketsMock).toHaveBeenCalledTimes(2);
     expect(getAllMidsMock).toHaveBeenCalledTimes(2);
   });
+
+  it('matches base symbols against quoted market symbols', async () => {
+    listPerpMarketsMock.mockResolvedValue([
+      { symbol: 'xyz:CL', assetId: 12, maxLeverage: 5, szDecimals: 2 },
+    ]);
+    getAllMidsMock.mockResolvedValue({ 'xyz:CL': 72.15 });
+    const { HyperliquidMarketClient } = await import('../../src/execution/hyperliquid/markets.js');
+    const client = new HyperliquidMarketClient({ hyperliquid: { enabled: true } } as any);
+
+    await expect(client.getMarket('CL')).resolves.toMatchObject({
+      symbol: 'xyz:CL',
+      markPrice: 72.15,
+    });
+    await expect(client.getMarket('xyz:CL')).resolves.toMatchObject({
+      symbol: 'xyz:CL',
+      markPrice: 72.15,
+    });
+  });
 });
