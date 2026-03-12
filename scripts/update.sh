@@ -22,6 +22,11 @@ fi
 echo "- Building"
 pnpm build
 
+if [ -x "$ROOT_DIR/scripts/patch_qmd_safe_query.sh" ]; then
+  echo "- Patching QMD safe query mode"
+  "$ROOT_DIR/scripts/patch_qmd_safe_query.sh" || true
+fi
+
 echo "- Restarting service"
 if command -v systemctl >/dev/null 2>&1; then
   sudo systemctl restart thufir

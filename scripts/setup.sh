@@ -46,6 +46,10 @@ if ! command -v qmd &> /dev/null; then
 fi
 if command -v qmd &> /dev/null; then
     echo "✓ QMD installed"
+    if [ -x scripts/patch_qmd_safe_query.sh ]; then
+        echo "Patching QMD safe query mode..."
+        ./scripts/patch_qmd_safe_query.sh
+    fi
 fi
 
 # Install dependencies
