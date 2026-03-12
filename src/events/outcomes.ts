@@ -5,6 +5,7 @@ import {
   insertOutcome,
   listExpiredOpenForecasts,
 } from '../memory/events.js';
+import type { MarketClient } from '../execution/market-client.js';
 
 export interface ForecastGenerationOptions {
   horizonHours?: number[];
@@ -95,6 +96,13 @@ export function createForecastsFromThought(
   return forecasts;
 }
 
+export function ensureForecastsForThought(
+  _event: { id: string },
+  thought: EventThought
+): EventForecast[] {
+  return createForecastsFromThought(thought, { horizonHours: [24] });
+}
+
 function inferDomainForAsset(thought: EventThought, symbol: string): string {
   const upper = symbol.toUpperCase();
   if (['CL', 'BRENTOIL', 'WTI', 'NATGAS'].includes(upper)) return 'energy';
@@ -181,4 +189,35 @@ export async function resolveExpiredForecasts(
     resolved: outcomes.length,
     outcomes,
   };
+}
+
+export async function collectForecastMarketSnapshot(
+  marketClient: MarketClient,
+  symbols: string[]
+): Promise<Array<{ symbol: string; markPrice: number | null }>> {
+  const unique = Array.from(new Set(symbols.map((symbol) => symbol.trim()).filter(Boolean)));
+  const snapshots: Array<{ symbol: string; markPrice: number | null }> = [];
+
+  for (const symbol of unique) {
+    try {
+      const market = await marketClient.getMarket(symbol);
+      snapshots.push({
+        symbol,
+        markPrice: typeof market.markPrice === 'number' ? market.markPrice : null,
+      });
+    } catch {
+      snapshots.push({ symbol, markPrice: null });
+    }
+  }
+
+  return snapshots;
+}
+
+export function sweepExpiredForecasts(): { expired: EventForecast[]; unresolved: EventForecast[] } {
+  try {
+    const expired = listExpiredOpenForecasts();
+    return { expired, unresolved: expired };
+  } catch {
+    return { expired: [], unresolved: [] };
+  }
 }

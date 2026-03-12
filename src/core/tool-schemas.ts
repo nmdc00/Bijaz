@@ -40,10 +40,12 @@ const TOOL_SUBSETS: Record<Exclude<ToolSubset, 'full'>, Set<string>> = {
     'intel_search',
     'intel_recent',
     'events_list',
+    'event_recent',
     'event_get',
     'event_latest_thought',
     'event_forecasts',
     'event_outcomes',
+    'event_forecasts_open',
     'historical_case_search',
     'web_search',
     'web_fetch',
@@ -152,22 +154,56 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        domain: { type: 'string', description: 'Optional domain filter such as energy, agri, crypto, macro.' },
-        status: { type: 'string', description: 'Optional status filter such as active or superseded.' },
-        limit: { type: 'number', description: 'Maximum results (default: 10)' },
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter such as energy, agri, crypto, or macro.',
+        },
+        status: {
+          type: 'string',
+          description: 'Optional status filter such as active or superseded.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum results (default: 10)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'event_recent',
+    description: 'List recently extracted normalized market events.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter such as energy, macro, metals, agri, crypto',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum results (default: 10)',
+        },
       },
       required: [],
     },
   },
   {
     name: 'event_get',
-    description: 'Get a normalized event by id.',
+    description: 'Get an event with its thoughts, forecasts, and outcomes.',
     input_schema: {
       type: 'object',
       properties: {
-        event_id: { type: 'string', description: 'Event id' },
+        id: {
+          type: 'string',
+          description: 'Event id',
+        },
+        event_id: {
+          type: 'string',
+          description: 'Legacy event id alias',
+        },
       },
-      required: ['event_id'],
+      required: [],
     },
   },
   {
@@ -176,7 +212,10 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        event_id: { type: 'string', description: 'Event id' },
+        event_id: {
+          type: 'string',
+          description: 'Event id',
+        },
       },
       required: ['event_id'],
     },
@@ -187,7 +226,10 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        event_id: { type: 'string', description: 'Event id' },
+        event_id: {
+          type: 'string',
+          description: 'Event id',
+        },
       },
       required: ['event_id'],
     },
@@ -198,9 +240,30 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        event_id: { type: 'string', description: 'Event id' },
+        event_id: {
+          type: 'string',
+          description: 'Event id',
+        },
       },
       required: ['event_id'],
+    },
+  },
+  {
+    name: 'event_forecasts_open',
+    description: 'List open event forecasts, optionally filtered by asset or domain.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        asset: {
+          type: 'string',
+          description: 'Optional asset filter such as CL or GOLD',
+        },
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -209,10 +272,23 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        domain: { type: 'string', description: 'Optional domain filter such as energy or macro.' },
-        mechanism_query: { type: 'string', description: 'Optional mechanism text query.' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Optional regime or mechanism tags.' },
-        limit: { type: 'number', description: 'Maximum results (default: 5)' },
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter such as energy or macro.',
+        },
+        mechanism_query: {
+          type: 'string',
+          description: 'Optional mechanism text query.',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional regime or mechanism tags.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum results (default: 5)',
+        },
       },
       required: [],
     },

@@ -2,7 +2,7 @@ import { createLlmClient, type ChatMessage, type LlmClient } from '../core/llm.j
 import type { ThufirConfig } from '../core/config.js';
 import { withExecutionContextIfMissing } from '../core/llm_infra.js';
 import { listIntelByIds, type StoredIntel } from '../intel/store.js';
-import { getEventById, insertThought } from '../memory/events.js';
+import { getEventById, getLatestThought, insertThought } from '../memory/events.js';
 import type { EventThought, EventThoughtInput, ImpactedAsset, NormalizedEvent } from './types.js';
 import { validateThoughtInput } from './types.js';
 
@@ -345,6 +345,23 @@ export async function generateThoughtForEventId(
   return generateThoughtForEvent(config, {
     ...options,
     event,
+  });
+}
+
+export function ensureThoughtForEvent(event: NormalizedEvent, intel: StoredIntel[]): EventThought {
+  const existing = getLatestThought(event.id);
+  if (existing) {
+    return existing;
+  }
+
+  const mechanism = intel[0]?.title ?? event.title;
+  return insertThought({
+    eventId: event.id,
+    mechanism,
+    causalChain: [mechanism],
+    impactedAssets: [],
+    invalidationConditions: [],
+    modelVersion: 'compat.ensureThoughtForEvent',
   });
 }
 

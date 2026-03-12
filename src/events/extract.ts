@@ -59,6 +59,21 @@ export interface ExtractedEventCandidate {
   intel: StoredIntel[];
 }
 
+export interface EventExtractionGap {
+  kind: 'no_material_signals';
+  message: string;
+}
+
+export interface ExtractedEventArtifact {
+  event: NormalizedEvent;
+  sourceIntel: StoredIntel[];
+}
+
+export interface EventExtractionResult {
+  events: ExtractedEventArtifact[];
+  gaps: EventExtractionGap[];
+}
+
 type IntelFeatures = {
   item: StoredIntel;
   domain: string;
@@ -277,4 +292,42 @@ export function extractAndStoreEvents(items: StoredIntel[]): NormalizedEvent[] {
 
 export function extractRecentIntelEvents(limit = 25): NormalizedEvent[] {
   return extractAndStoreEvents(listRecentIntel(limit));
+}
+
+export function extractEventsFromIntel(items: StoredIntel[]): EventExtractionResult {
+  const candidates = extractEventCandidates(items);
+  if (candidates.length === 0) {
+    return {
+      events: [],
+      gaps: [
+        {
+          kind: 'no_material_signals',
+          message: 'No material event candidates extracted from current intel set.',
+        },
+      ],
+    };
+  }
+
+  return {
+    events: candidates.flatMap((candidate) => {
+      try {
+        return [
+          {
+            event: upsertEvent({
+              title: candidate.canonicalTitle,
+              domain: candidate.domain,
+              occurredAt: candidate.occurredAt,
+              sourceIntelIds: candidate.sourceIntelIds,
+              tags: candidate.tags,
+              status: 'active',
+            }),
+            sourceIntel: candidate.intel,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    }),
+    gaps: [],
+  };
 }

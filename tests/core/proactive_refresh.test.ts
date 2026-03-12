@@ -7,6 +7,32 @@ import {
   type ProactiveRefreshSettings,
 } from '../../src/core/proactive_refresh.js';
 
+vi.mock('../../src/intel/store.js', () => ({
+  listIntelByIds: (ids: string[]) =>
+    ids.map((id) => ({
+      id,
+      title: `Intel ${id}`,
+      content: 'Iran threatens to disrupt shipping through Hormuz and tighten crude supply.',
+      source: 'intel',
+      sourceType: 'news',
+      timestamp: '2026-03-12T00:00:00Z',
+    })),
+}));
+
+vi.mock('../../src/events/extract.js', () => ({
+  extractEventsFromIntel: vi.fn(() => ({ events: [], gaps: [] })),
+}));
+
+vi.mock('../../src/events/thoughts.js', () => ({
+  ensureThoughtForEvent: vi.fn(),
+  ensureForecastsForThought: vi.fn(() => []),
+}));
+
+vi.mock('../../src/events/outcomes.js', () => ({
+  collectForecastMarketSnapshot: vi.fn(async () => []),
+  sweepExpiredForecasts: vi.fn(() => ({ expired: [], unresolved: [] })),
+}));
+
 const baseSettings: ProactiveRefreshSettings = {
   enabled: true,
   intentMode: 'time_sensitive',
@@ -32,7 +58,6 @@ describe('proactive refresh', () => {
       snapshot: {
         asOf: new Date().toISOString(),
         query: 'cached',
-        domain: 'crypto' as const,
         sources: ['perp_market_list'],
         data: { markets: [{ symbol: 'BTC' }] },
       },
@@ -67,8 +92,7 @@ describe('proactive refresh', () => {
   it('builds snapshot and attribution when refresh succeeds', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
       if (toolName === 'perp_market_list') return { success: true, data: [{ symbol: 'BTC' }] };
-      if (toolName === 'web_search') return { success: true, data: [{ title: 'Market update' }] };
-      if (toolName === 'intel_search') return { success: true, data: [{ title: 'Macro note' }] };
+      if (toolName === 'web_search') return { success: true, data: { results: [{ title: 'Market update' }] } };
       if (toolName === 'current_time') return { success: true, data: { iso: '2026-01-01T00:00:00Z' } };
       return { success: false, error: 'not configured' };
     });
@@ -80,33 +104,46 @@ describe('proactive refresh', () => {
     });
 
     expect(outcome.failClosed).toBe(false);
-    expect(outcome.snapshot?.domain).toBe('macro');
-    expect(outcome.snapshot?.sources).toContain('web_search:market_context:macro');
-    expect(outcome.snapshot?.sources).toContain('web_search');
+    expect(outcome.snapshot?.sources).toContain('perp_market_list');
+    expect(outcome.snapshot?.sources.some((source) => source.startsWith('web_search:'))).toBe(true);
     expect(outcome.contextText).toContain('as_of:');
-    expect(outcome.contextText).toContain('domain: macro');
 
     const reply = appendProactiveAttribution('Current view: mildly bullish.', outcome.snapshot ?? null);
     expect(reply).toContain('as_of:');
     expect(reply).toContain('sources:');
   });
 
-  it('does not require perp market tools for energy-domain refreshes', async () => {
+  it('routes oil prompts through domain-specific retrieval instead of funding signals', async () => {
     const executeTool = vi.fn(async (toolName: string, input: Record<string, unknown>) => {
-      if (toolName === 'web_search') return { success: true as const, data: [{ query: input.query }] };
-      if (toolName === 'intel_search') return { success: true as const, data: [{ title: 'Oil disruption update' }] };
-      if (toolName === 'current_time') return { success: true as const, data: { iso: '2026-01-01T00:00:00Z' } };
-      return { success: false as const, error: 'not configured' };
+      if (toolName === 'perp_market_list') return { success: true, data: [{ symbol: 'xyz:CL' }] };
+      if (toolName === 'current_time') return { success: true, data: { iso: '2026-03-12T00:00:00Z' } };
+      if (toolName === 'intel_search') {
+        return {
+          success: true,
+          data: [{ id: `intel-${String(input.query)}`, title: 'Hormuz disruption risk', summary: 'Oil supply risk rises.' }],
+        };
+      }
+      if (toolName === 'web_search') {
+        return {
+          success: true,
+          data: { results: [{ title: 'Hormuz disruption risk', snippet: 'Oil supply risk rises.' }] },
+        };
+      }
+      return { success: false, error: 'unexpected tool' };
     });
 
     const outcome = await runProactiveRefresh({
-      message: 'Could Iran escalation push oil higher through Hormuz?',
+      message: 'Could war with Iran push oil higher from here?',
       settings: baseSettings,
       executeTool,
     });
 
     expect(outcome.failClosed).toBe(false);
     expect(outcome.snapshot?.domain).toBe('energy');
-    expect(outcome.snapshot?.sources).toContain('web_search:market_context:energy');
+    expect(executeTool).not.toHaveBeenCalledWith(
+      'signal_hyperliquid_funding_oi_skew',
+      expect.anything()
+    );
+    expect(outcome.snapshot?.sources.some((source) => source.includes('Iran'))).toBe(true);
   });
 });

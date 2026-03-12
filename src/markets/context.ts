@@ -8,7 +8,17 @@ export type MarketContextDomain =
   | 'rates'
   | 'fx'
   | 'equity'
-  | 'macro';
+  | 'macro'
+  | 'other';
+
+export interface MarketContextPlan {
+  domain: MarketContextDomain;
+  searchQueries: string[];
+  symbolHints: string[];
+  requiresDomainSpecificRetrieval: boolean;
+  includeFundingSignals: boolean;
+  retrievalGapMessage: string;
+}
 
 export interface MarketContextQuery {
   message: string;
@@ -69,6 +79,10 @@ export function classifyMarketContextDomain(message: string): MarketContextDomai
   return bestDomain;
 }
 
+export function inferMarketContextDomain(message: string): MarketContextDomain {
+  return classifyMarketContextDomain(message);
+}
+
 function defaultSignalSymbols(domain: MarketContextDomain): string[] {
   switch (domain) {
     case 'crypto':
@@ -88,6 +102,49 @@ function defaultSignalSymbols(domain: MarketContextDomain): string[] {
     default:
       return ['DXY', 'GOLD'];
   }
+}
+
+function defaultSearchQueries(domain: MarketContextDomain, message: string): string[] {
+  switch (domain) {
+    case 'energy':
+      return [
+        message,
+        'Iran Hormuz oil disruption',
+        'OPEC crude supply disruption',
+      ];
+    case 'metals':
+      return [message, 'gold macro risk-off flows', 'copper supply disruption'];
+    case 'agri':
+      return [message, 'crop weather supply shock', 'grain export disruption'];
+    case 'rates':
+      return [message, 'Treasury yield macro reaction', 'central bank rate path'];
+    case 'fx':
+      return [message, 'FX macro reaction dollar rates', 'currency intervention risk'];
+    case 'equity':
+      return [message, 'equity index macro risk sentiment', 'sector earnings surprise'];
+    case 'crypto':
+      return [message, 'crypto perp funding OI regime'];
+    default:
+      return [message, 'macro cross-asset market impact'];
+  }
+}
+
+export function buildMarketContextPlan(message: string): MarketContextPlan {
+  const domain = inferMarketContextDomain(message);
+  const symbolHints = defaultSignalSymbols(domain);
+  const requiresDomainSpecificRetrieval = domain !== 'crypto';
+  const includeFundingSignals = domain === 'crypto';
+  return {
+    domain,
+    searchQueries: defaultSearchQueries(domain, message),
+    symbolHints,
+    requiresDomainSpecificRetrieval,
+    includeFundingSignals,
+    retrievalGapMessage:
+      requiresDomainSpecificRetrieval
+        ? `domain retrieval unavailable for ${domain}`
+        : 'fresh market/news retrieval unavailable',
+  };
 }
 
 export function buildMarketContextRequests(query: MarketContextQuery): MarketContextToolRequest[] {

@@ -27,12 +27,15 @@ import {
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
+import type { EventForecast, EventOutcome, EventThought, NormalizedEvent } from '../events/types.js';
 import {
   getEventById,
   getLatestThought,
   listEvents,
   listForecastsForEvent,
+  listOpenForecasts,
   listOutcomesForEvent,
+  listThoughtsForEvent,
 } from '../memory/events.js';
 import { searchHistoricalCases } from '../events/casebase.js';
 import { getRpcUrl, getUsdcConfig, type EvmChain } from '../execution/evm/chains.js';
@@ -476,53 +479,58 @@ async function resolvePerpLifecycleTradeId(params: {
   before: ReduceOnlyPositionSnapshot | null;
   after: ReduceOnlyPositionSnapshot | null;
 }): Promise<number | null> {
-  const symbol = params.symbol.trim().toUpperCase();
-  if (!symbol) return null;
+  try {
+    const symbol = params.symbol.trim().toUpperCase();
+    if (!symbol) return null;
 
-  const openSide = (side: 'long' | 'short'): 'buy' | 'sell' => (side === 'long' ? 'buy' : 'sell');
-  const ensureActiveTradeId = (side: 'long' | 'short'): number => {
-    const existing = getActivePerpPositionTradeId(symbol);
-    if (existing && existing > 0) {
-      return existing;
-    }
-    const tradeId = recordPerpTrade({
-      hypothesisId: params.hypothesisId,
-      symbol,
-      side: openSide(side),
-      size: params.after?.size ?? params.before?.size ?? 0,
-      executionMode: params.mode,
-      price: params.markPrice,
-      leverage: params.leverage,
-      orderType: params.orderType,
-      status: 'position_open',
-    });
-    setActivePerpPositionLifecycle({ symbol, tradeId, side });
-    return tradeId;
-  };
+    const openSide = (side: 'long' | 'short'): 'buy' | 'sell' => (side === 'long' ? 'buy' : 'sell');
+    const ensureActiveTradeId = (side: 'long' | 'short'): number => {
+      const existing = getActivePerpPositionTradeId(symbol);
+      if (existing && existing > 0) {
+        return existing;
+      }
+      const tradeId = recordPerpTrade({
+        hypothesisId: params.hypothesisId,
+        symbol,
+        side: openSide(side),
+        size: params.after?.size ?? params.before?.size ?? 0,
+        executionMode: params.mode,
+        price: params.markPrice,
+        leverage: params.leverage,
+        orderType: params.orderType,
+        status: 'position_open',
+      });
+      setActivePerpPositionLifecycle({ symbol, tradeId, side });
+      return tradeId;
+    };
 
-  const before = params.before;
-  const after = params.after;
+    const before = params.before;
+    const after = params.after;
 
-  if (before && after && before.side !== after.side) {
-    clearActivePerpPositionLifecycle(symbol);
-    return ensureActiveTradeId(after.side);
-  }
-
-  if (after) {
-    return ensureActiveTradeId(after.side);
-  }
-
-  if (before) {
-    const existing = getActivePerpPositionTradeId(symbol);
-    if (existing && existing > 0) {
+    if (before && after && before.side !== after.side) {
       clearActivePerpPositionLifecycle(symbol);
-      return existing;
+      return ensureActiveTradeId(after.side);
     }
+
+    if (after) {
+      return ensureActiveTradeId(after.side);
+    }
+
+    if (before) {
+      const existing = getActivePerpPositionTradeId(symbol);
+      if (existing && existing > 0) {
+        clearActivePerpPositionLifecycle(symbol);
+        return existing;
+      }
+      return null;
+    }
+
+    clearActivePerpPositionLifecycle(symbol);
+    return null;
+  } catch {
+    // Lifecycle persistence is best-effort; never fail a trade because the local journal DB is unavailable.
     return null;
   }
-
-  clearActivePerpPositionLifecycle(symbol);
-  return null;
 }
 
 function resolveClosedTradeReference(params: {
@@ -2187,50 +2195,114 @@ export async function executeToolCall(
       }
 
       case 'events_list': {
-        const domain = String(toolInput.domain ?? '').trim() || undefined;
-        const status = String(toolInput.status ?? '').trim() || undefined;
-        const limit = Math.max(1, Math.min(100, Number(toolInput.limit ?? 10) || 10));
-        const events = listEvents({ domain, status, limit });
-        return { success: true, data: { events } };
+        const domain = typeof toolInput.domain === 'string' ? toolInput.domain.trim() : undefined;
+        const status = typeof toolInput.status === 'string' ? toolInput.status.trim() : undefined;
+        const limit = Math.min(Math.max(Number(toolInput.limit ?? 10), 1), 100);
+        const events = listEvents({
+          limit,
+          domain: domain || undefined,
+          status: status || undefined,
+        });
+        return { success: true, data: { events: formatEventsForTool(events) } };
+      }
+
+      case 'event_recent': {
+        const limit = Math.min(Math.max(Number(toolInput.limit ?? 10), 1), 50);
+        const domain = typeof toolInput.domain === 'string' ? toolInput.domain.trim() : undefined;
+        const events = listEvents({ limit, domain });
+        return { success: true, data: formatEventsForTool(events) };
       }
 
       case 'event_get': {
-        const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
-        if (!eventId) return { success: false, error: 'Missing event_id' };
-        const event = getEventById(eventId);
-        if (!event) return { success: false, error: `Event not found: ${eventId}` };
-        return { success: true, data: event };
+        const id = String(toolInput.id ?? toolInput.event_id ?? toolInput.eventId ?? '').trim();
+        if (!id) {
+          return { success: false, error: 'Missing id' };
+        }
+        const event = getEventById(id);
+        if (!event) {
+          return { success: false, error: `Event not found: ${id}` };
+        }
+        return {
+          success: true,
+          data: {
+            event: formatEventForTool(event),
+            thoughts: listThoughtsForEvent(id).map(formatThoughtForTool),
+            forecasts: listForecastsForEvent(id).map(formatForecastForTool),
+            outcomes: listOutcomesForEvent(id).map(formatOutcomeForTool),
+          },
+        };
       }
 
       case 'event_latest_thought': {
         const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
-        if (!eventId) return { success: false, error: 'Missing event_id' };
+        if (!eventId) {
+          return { success: false, error: 'Missing event_id' };
+        }
         const thought = getLatestThought(eventId);
-        return { success: true, data: { thought } };
+        return {
+          success: true,
+          data: {
+            thought: thought ? formatThoughtForTool(thought) : null,
+          },
+        };
       }
 
       case 'event_forecasts': {
         const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
-        if (!eventId) return { success: false, error: 'Missing event_id' };
-        const forecasts = listForecastsForEvent(eventId);
-        return { success: true, data: { forecasts } };
+        if (!eventId) {
+          return { success: false, error: 'Missing event_id' };
+        }
+        return {
+          success: true,
+          data: {
+            forecasts: listForecastsForEvent(eventId).map(formatForecastForTool),
+          },
+        };
       }
 
       case 'event_outcomes': {
         const eventId = String(toolInput.event_id ?? toolInput.eventId ?? '').trim();
-        if (!eventId) return { success: false, error: 'Missing event_id' };
-        const outcomes = listOutcomesForEvent(eventId);
-        return { success: true, data: { outcomes } };
+        if (!eventId) {
+          return { success: false, error: 'Missing event_id' };
+        }
+        return {
+          success: true,
+          data: {
+            outcomes: listOutcomesForEvent(eventId).map(formatOutcomeForTool),
+          },
+        };
+      }
+
+      case 'event_forecasts_open': {
+        const asset = typeof toolInput.asset === 'string' ? toolInput.asset.trim() : undefined;
+        const domain = typeof toolInput.domain === 'string' ? toolInput.domain.trim() : undefined;
+        const forecasts = listOpenForecasts({ asset, domain });
+        return { success: true, data: forecasts.map(formatForecastForTool) };
       }
 
       case 'historical_case_search': {
-        const domain = String(toolInput.domain ?? '').trim() || undefined;
-        const mechanismQuery = String(toolInput.mechanism_query ?? toolInput.mechanismQuery ?? '').trim() || undefined;
-        const tagsRaw = toolInput.tags;
-        const tags = Array.isArray(tagsRaw) ? tagsRaw.map(String).filter(Boolean) : [];
-        const limit = Math.max(1, Math.min(20, Number(toolInput.limit ?? 5) || 5));
-        const results = searchHistoricalCases({ domain, mechanismQuery, tags, limit });
-        return { success: true, data: { results } };
+        const domain = typeof toolInput.domain === 'string' ? toolInput.domain.trim() : undefined;
+        const mechanismQuery =
+          typeof toolInput.mechanism_query === 'string'
+            ? toolInput.mechanism_query.trim()
+            : typeof toolInput.mechanismQuery === 'string'
+              ? toolInput.mechanismQuery.trim()
+              : undefined;
+        const tags = Array.isArray(toolInput.tags)
+          ? toolInput.tags.map((entry) => String(entry).trim()).filter(Boolean)
+          : [];
+        const limit = Math.min(Math.max(Number(toolInput.limit ?? 5), 1), 20);
+        return {
+          success: true,
+          data: {
+            results: searchHistoricalCases({
+              domain: domain || undefined,
+              mechanismQuery: mechanismQuery || undefined,
+              tags,
+              limit,
+            }),
+          },
+        };
       }
 
       case 'proactive_search_run': {
@@ -2760,6 +2832,71 @@ function formatIntelForTool(items: StoredIntel[]): object[] {
     url: item.url,
     summary: item.content?.slice(0, 500) ?? null,
   }));
+}
+
+function formatEventsForTool(events: NormalizedEvent[]): object[] {
+  return events.map(formatEventForTool);
+}
+
+function formatEventForTool(event: NormalizedEvent): object {
+  return {
+    id: event.id,
+    event_key: event.eventKey,
+    title: event.title,
+    domain: event.domain,
+    occurred_at: event.occurredAt,
+    source_intel_ids: event.sourceIntelIds,
+    tags: event.tags,
+    status: event.status,
+    created_at: event.createdAt,
+    updated_at: event.updatedAt,
+  };
+}
+
+function formatThoughtForTool(thought: EventThought): object {
+  return {
+    id: thought.id,
+    event_id: thought.eventId,
+    version: thought.version,
+    mechanism: thought.mechanism,
+    causal_chain: thought.causalChain,
+    impacted_assets: thought.impactedAssets,
+    invalidation_conditions: thought.invalidationConditions,
+    model_version: thought.modelVersion ?? null,
+    created_at: thought.createdAt,
+  };
+}
+
+function formatForecastForTool(forecast: EventForecast): object {
+  return {
+    id: forecast.id,
+    event_id: forecast.eventId,
+    thought_id: forecast.thoughtId,
+    asset: forecast.asset,
+    domain: forecast.domain,
+    direction: forecast.direction,
+    horizon_hours: forecast.horizonHours,
+    confidence: forecast.confidence,
+    invalidation_conditions: forecast.invalidationConditions,
+    status: forecast.status,
+    expires_at: forecast.expiresAt,
+    resolved_at: forecast.resolvedAt ?? null,
+    created_at: forecast.createdAt,
+  };
+}
+
+function formatOutcomeForTool(outcome: EventOutcome): object {
+  return {
+    id: outcome.id,
+    forecast_id: outcome.forecastId,
+    event_id: outcome.eventId,
+    resolution_status: outcome.resolutionStatus,
+    resolution_note: outcome.resolutionNote ?? null,
+    actual_direction: outcome.actualDirection,
+    resolution_price: outcome.resolutionPrice ?? null,
+    resolved_at: outcome.resolvedAt,
+    created_at: outcome.createdAt,
+  };
 }
 
 function getWalletInfo(ctx: ToolExecutorContext): ToolResult {

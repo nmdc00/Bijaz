@@ -55,7 +55,7 @@ import {
   type ProactiveRefreshSettings,
   type ProactiveRefreshSnapshot,
 } from './proactive_refresh.js';
-import { classifyMarketContextDomain, gatherMarketContext } from '../markets/context.js';
+import { buildMarketContextPlan } from '../markets/context.js';
 
 export interface ConversationContext {
   userId: string;
@@ -710,6 +710,7 @@ export class ConversationHandler {
       message,
       settings,
       cached,
+      config: this.config,
       executeTool: (toolName, input) => executeToolCall(toolName, input, this.toolContext),
     });
 
@@ -827,18 +828,16 @@ export class ConversationHandler {
 
   private async runToolFirstGuard(message: string): Promise<string> {
     const text = message.toLowerCase();
-    const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
-    const wantsMarket = /\b(price|odds|market|probability|volume|liquidity|bid|ask)\b/.test(text);
+    const contextPlan = buildMarketContextPlan(message);
+    const wantsNews =
+      /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates|war|iran|hormuz|opec)\b/.test(text) ||
+      contextPlan.requiresDomainSpecificRetrieval;
+    const wantsMarket = /\b(price|odds|market|markets|ticker|tickers|probability|volume|liquidity|bid|ask)\b/.test(text);
     const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding|position|positions)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
-    const inferredDomain = classifyMarketContextDomain(message);
-    const wantsDomainContext =
-      inferredDomain !== 'crypto' &&
-      /\b(oil|gold|silver|wti|brent|natgas|commodit(?:y|ies)|iran|hormuz|opec|sanction|macro|rates|yield|fed)\b/i.test(message) &&
-      !wantsTrade &&
-      !/\b(hyperliquid|usdc|usdt|ticker|tickers)\b/.test(text);
+    const wantsCommodityDiscovery = /\b(commodit(?:y|ies)|oil|gold|silver|xau|xag|wti|brent|natgas|copper)\b/.test(text);
 
-    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime && !wantsDomainContext) {
+    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime && !wantsCommodityDiscovery) {
       return '';
     }
 
@@ -851,33 +850,20 @@ export class ConversationHandler {
       }
     }
 
-    if (wantsDomainContext) {
-      const snapshot = await gatherMarketContext(
-        { message, marketLimit: 200 },
-        (toolName, input) => executeToolCall(toolName, input, this.toolContext)
-      );
-      sections.push(
-        `### market_context_domain\n${JSON.stringify(
-          { domain: snapshot.domain, primarySource: snapshot.primarySource, sources: snapshot.sources },
-          null,
-          2
-        )}`
-      );
-      for (const result of snapshot.results.filter((item) => item.success)) {
-        sections.push(`### ${result.label}\n${JSON.stringify(result.data, null, 2)}`);
-      }
-    } else if (wantsNews) {
-      const intelResult = await executeToolCall('intel_search', { query: message, limit: 5 }, this.toolContext);
-      if (intelResult.success) {
-        sections.push(`### intel_search\n${JSON.stringify(intelResult.data, null, 2)}`);
-      }
-      const webResult = await executeToolCall('web_search', { query: message, limit: 5 }, this.toolContext);
-      if (webResult.success) {
-        sections.push(`### web_search\n${JSON.stringify(webResult.data, null, 2)}`);
+    if (wantsNews) {
+      for (const query of contextPlan.searchQueries.slice(0, 2)) {
+        const intelResult = await executeToolCall('intel_search', { query, limit: 5 }, this.toolContext);
+        if (intelResult.success) {
+          sections.push(`### intel_search:${query}\n${JSON.stringify(intelResult.data, null, 2)}`);
+        }
+        const webResult = await executeToolCall('web_search', { query, limit: 5 }, this.toolContext);
+        if (webResult.success) {
+          sections.push(`### web_search:${query}\n${JSON.stringify(webResult.data, null, 2)}`);
+        }
       }
     }
 
-    if ((wantsMarket || wantsTrade) && !wantsDomainContext) {
+    if (wantsMarket || wantsTrade) {
       const symbols = new Set<string>();
       const positionsResult = await executeToolCall('get_positions', {}, this.toolContext);
       if (positionsResult.success) {
@@ -889,7 +875,8 @@ export class ConversationHandler {
         }
       }
 
-      const marketResult = await executeToolCall('perp_market_list', { limit: 20 }, this.toolContext);
+      const marketListLimit = wantsCommodityDiscovery ? 200 : 20;
+      const marketResult = await executeToolCall('perp_market_list', { limit: marketListLimit }, this.toolContext);
       if (marketResult.success) {
         sections.push(`### perp_market_list\n${JSON.stringify(marketResult.data, null, 2)}`);
       }
@@ -923,6 +910,14 @@ export class ConversationHandler {
       const symbolMatch = symbolRegex ? message.match(symbolRegex) : null;
       if (symbolMatch?.[1]) {
         symbols.add(symbolMatch[1].toUpperCase());
+      }
+      const explicitTickerMatches = message.match(/\b[A-Z]{2,12}\/(?:USDC|USDT|USD)\b/g) ?? [];
+      for (const symbol of explicitTickerMatches) {
+        symbols.add(symbol.toUpperCase());
+      }
+      const uppercaseTickerMatches = message.match(/\b[A-Z]{2,10}\b/g) ?? [];
+      for (const symbol of uppercaseTickerMatches) {
+        symbols.add(symbol.toUpperCase());
       }
       for (const symbol of Array.from(symbols).slice(0, 3)) {
         const marketGet = await executeToolCall('perp_market_get', { symbol }, this.toolContext);

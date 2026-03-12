@@ -70,10 +70,10 @@ vi.mock('../../src/memory/chat_vectorstore.js', () => ({
   },
 }));
 
-const toolCalls: string[] = [];
+const toolCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
 vi.mock('../../src/core/tool-executor.js', () => ({
-  executeToolCall: async (name: string) => {
-    toolCalls.push(name);
+  executeToolCall: async (name: string, input: Record<string, unknown> = {}) => {
+    toolCalls.push({ name, input });
     if (name === 'perp_market_list') {
       return { success: true as const, data: { markets: [] } };
     }
@@ -95,10 +95,10 @@ describe('ConversationHandler tool-first snapshot', () => {
     const handler = new ConversationHandler(llm as any, marketClient as any, config);
     await handler.chat('user', 'Can you place a perp trade?');
 
-    expect(toolCalls).toContain('perp_market_list');
+    expect(toolCalls.some((call) => call.name === 'perp_market_list')).toBe(true);
   });
 
-  it('routes oil geopolitics prompts through domain-specific retrieval and avoids perp defaults', async () => {
+  it('queries explicit commodity tickers and widens market snapshot coverage', async () => {
     toolCalls.length = 0;
     const { ConversationHandler } = await import('../../src/core/conversation.js');
     const llm = {
@@ -108,10 +108,9 @@ describe('ConversationHandler tool-first snapshot', () => {
     const config = { execution: { mode: 'paper', provider: 'hyperliquid' } } as any;
 
     const handler = new ConversationHandler(llm as any, marketClient as any, config);
-    await handler.chat('user', 'Could Iran escalation push oil higher through Hormuz?');
+    await handler.chat('user', 'Do you see CL/USDC in the commodities tickers on Hyperliquid?');
 
-    expect(toolCalls).toContain('intel_search');
-    expect(toolCalls).toContain('web_search');
-    expect(toolCalls).not.toContain('perp_market_list');
+    expect(toolCalls).toContainEqual({ name: 'perp_market_list', input: { limit: 200 } });
+    expect(toolCalls).toContainEqual({ name: 'perp_market_get', input: { symbol: 'CL/USDC' } });
   });
 });

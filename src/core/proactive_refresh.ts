@@ -1,5 +1,15 @@
 import type { ToolResult } from './tool-executor.js';
-import { gatherMarketContext, type MarketContextDomain } from '../markets/context.js';
+import { listIntelByIds, type StoredIntel } from '../intel/store.js';
+import { extractEventsFromIntel } from '../events/extract.js';
+import { ensureThoughtForEvent } from '../events/thoughts.js';
+import { buildMarketContextPlan } from '../markets/context.js';
+import {
+  collectForecastMarketSnapshot,
+  ensureForecastsForThought,
+  sweepExpiredForecasts,
+} from '../events/outcomes.js';
+import { createMarketClient } from '../execution/market-client.js';
+import type { ThufirConfig } from './config.js';
 
 export type ProactiveIntentMode = 'off' | 'time_sensitive' | 'always';
 
@@ -18,15 +28,18 @@ export interface ProactiveRefreshSettings {
 export interface ProactiveRefreshSnapshot {
   asOf: string;
   query: string;
-  domain: MarketContextDomain;
+  domain: string;
   sources: string[];
   data: {
     currentTime?: unknown;
     markets?: unknown;
+    marketContext?: unknown;
+    marketSnapshots?: unknown;
     intel?: unknown;
     web?: unknown;
     fundingOISkew?: Array<{ symbol: string; signal: unknown }>;
-    marketContextPrimary?: unknown;
+    events?: unknown;
+    extractionGaps?: unknown;
   };
 }
 
@@ -54,7 +67,7 @@ type ToolCallOutcome = {
 };
 
 const TIME_SENSITIVE_PATTERN =
-  /\b(latest|today|yesterday|this\s+(week|month|year)|right now|currently|bull|bear|risk[- ]?on|risk[- ]?off|macro|regime|outlook|headline|news|oil|gold|commodit(?:y|ies)|iran|hormuz|opec|sanctions|crude)\b/i;
+  /\b(latest|today|yesterday|this\s+(week|month|year)|right now|currently|bull|bear|risk[- ]?on|risk[- ]?off|macro|regime|outlook|headline|news|war|iran|hormuz|opec|oil|gold|commodity)\b/i;
 
 function toSafeJson(value: unknown, maxChars = 1500): string {
   const raw = JSON.stringify(value, null, 2);
@@ -120,6 +133,12 @@ function buildContextFromSnapshot(snapshot: ProactiveRefreshSnapshot): string {
   if (snapshot.data.markets !== undefined) {
     lines.push(`### perp_market_list\n${toSafeJson(snapshot.data.markets)}`);
   }
+  if (snapshot.data.marketContext !== undefined) {
+    lines.push(`### market_context\n${toSafeJson(snapshot.data.marketContext)}`);
+  }
+  if (snapshot.data.marketSnapshots !== undefined) {
+    lines.push(`### market_snapshots\n${toSafeJson(snapshot.data.marketSnapshots)}`);
+  }
   if (snapshot.data.fundingOISkew && snapshot.data.fundingOISkew.length > 0) {
     lines.push(`### signal_hyperliquid_funding_oi_skew\n${toSafeJson(snapshot.data.fundingOISkew)}`);
   }
@@ -129,8 +148,11 @@ function buildContextFromSnapshot(snapshot: ProactiveRefreshSnapshot): string {
   if (snapshot.data.web !== undefined) {
     lines.push(`### web_search\n${toSafeJson(snapshot.data.web)}`);
   }
-  if (snapshot.data.marketContextPrimary !== undefined) {
-    lines.push(`### market_context_primary\n${toSafeJson(snapshot.data.marketContextPrimary)}`);
+  if (snapshot.data.events !== undefined) {
+    lines.push(`### events\n${toSafeJson(snapshot.data.events)}`);
+  }
+  if (snapshot.data.extractionGaps !== undefined) {
+    lines.push(`### extraction_gaps\n${toSafeJson(snapshot.data.extractionGaps)}`);
   }
 
   return `${lines.join('\n\n')}\n`;
@@ -174,8 +196,9 @@ export async function runProactiveRefresh(params: {
   settings: ProactiveRefreshSettings;
   cached?: CachedProactiveSnapshot | null;
   executeTool: ExecuteToolFn;
+  config?: ThufirConfig;
 }): Promise<ProactiveRefreshOutcome> {
-  const { message, settings, cached, executeTool } = params;
+  const { message, settings, cached, executeTool, config } = params;
   const shouldRun = shouldTriggerProactiveRefresh(message, settings);
   if (!shouldRun) {
     return { triggered: false, fromCache: false, failClosed: false, contextText: '' };
@@ -193,46 +216,73 @@ export async function runProactiveRefresh(params: {
     };
   }
 
-  const marketContext = await gatherMarketContext(
-    {
-      message,
-      marketLimit: settings.marketLimit,
-      signalSymbols: settings.fundingSymbols,
-    },
-    (toolName, input) => runTool(executeTool, toolName, input, settings.maxLatencyMs).then((result) => {
-      if (result.success) {
-        return { success: true, data: result.data };
-      }
-      return { success: false, error: result.error ?? `${toolName} failed` };
-    })
+  const contextPlan = buildMarketContextPlan(message);
+  const fundingSymbols = contextPlan.includeFundingSignals ? settings.fundingSymbols.slice(0, 3) : [];
+  const marketPromise = runTool(
+    executeTool,
+    'perp_market_list',
+    { limit: Math.max(1, contextPlan.requiresDomainSpecificRetrieval ? 200 : settings.marketLimit) },
+    settings.maxLatencyMs
+  );
+  const timePromise = runTool(executeTool, 'current_time', {}, settings.maxLatencyMs);
+  const intelPromises = contextPlan.searchQueries.slice(0, 3).map((query) =>
+    runTool(
+      executeTool,
+      'intel_search',
+      { query, limit: Math.max(1, settings.intelLimit) },
+      settings.maxLatencyMs,
+      `intel_search:${query}`
+    )
+  );
+  const webPromises = contextPlan.searchQueries.slice(0, 3).map((query) =>
+    runTool(
+      executeTool,
+      'web_search',
+      { query, limit: Math.max(1, settings.webLimit) },
+      settings.maxLatencyMs,
+      `web_search:${query}`
+    )
+  );
+  const fundingPromises = fundingSymbols.map((symbol) =>
+    runTool(
+      executeTool,
+      'signal_hyperliquid_funding_oi_skew',
+      { symbol },
+      settings.maxLatencyMs,
+      `signal_hyperliquid_funding_oi_skew:${symbol}`
+    )
   );
 
-  const byLabel = new Map(marketContext.results.map((result) => [result.label, result]));
-  const time = byLabel.get('current_time');
-  const intel = byLabel.get('intel_search');
-  const web = byLabel.get('web_search');
-  const market = marketContext.results.find((result) => result.label === marketContext.primarySource);
-  const fundingResults = marketContext.results.filter((result) =>
-    result.label.startsWith('signal_hyperliquid_funding_oi_skew:')
-  );
+  const [market, time, ...rest] = await Promise.all([
+    marketPromise,
+    timePromise,
+    ...intelPromises,
+    ...webPromises,
+    ...fundingPromises,
+  ]);
+  const intelResults = rest.slice(0, intelPromises.length);
+  const webResults = rest.slice(intelPromises.length, intelPromises.length + webPromises.length);
+  const fundingResults = rest.slice(intelPromises.length + webPromises.length);
 
-  const hasMarket = market?.success ?? false;
-  const hasNews = Boolean(intel?.success || web?.success);
-  const hasTiming = Boolean(time?.success);
+  const hasMarket = market.success;
+  const hasNews = intelResults.some((result) => result.success) || webResults.some((result) => result.success);
+  const hasTiming = time.success;
   const hasSignal = fundingResults.some((result) => result.success);
-  const sufficientEvidence = hasMarket && (hasNews || hasSignal || hasTiming);
+  const sufficientEvidence = contextPlan.requiresDomainSpecificRetrieval
+    ? hasNews && hasMarket
+    : hasMarket && (hasNews || hasSignal || hasTiming);
 
   if (!sufficientEvidence && settings.strictFailClosed) {
-    const reasons = marketContext.results
+    const reasons = [market, time, ...intelResults, ...webResults, ...fundingResults]
       .filter((item) => !item.success)
-      .map((item) => `${item.label}: ${item.error ?? 'failed'}`)
+      .map((item) => `${item.source}: ${item.error ?? 'failed'}`)
       .slice(0, 4)
       .join(' | ');
     return {
       triggered: true,
       fromCache: false,
       failClosed: true,
-      failReason: reasons || 'fresh data unavailable',
+      failReason: reasons || contextPlan.retrievalGapMessage,
       contextText: '',
     };
   }
@@ -240,23 +290,85 @@ export async function runProactiveRefresh(params: {
   const fundingSignals = fundingResults
     .filter((result) => result.success)
     .map((result) => {
-      const symbol = result.label.split(':')[1] ?? 'unknown';
+      const symbol = result.source.split(':')[1] ?? 'unknown';
       return { symbol, signal: result.data };
     });
-  const sources = marketContext.sources;
+
+  const intelItems: StoredIntel[] = [];
+  for (const result of intelResults.filter((entry) => entry.success)) {
+    const rows = Array.isArray(result.data) ? result.data as Array<Record<string, unknown>> : [];
+    const ids = rows.map((row) => String(row.id ?? '')).filter(Boolean);
+    intelItems.push(...listIntelByIds(ids));
+  }
+  for (const result of webResults.filter((entry) => entry.success)) {
+    const data = result.data as { results?: Array<Record<string, unknown>> } | undefined;
+    for (const row of data?.results ?? []) {
+      const title = typeof row.title === 'string' ? row.title : '';
+      const snippet = typeof row.snippet === 'string' ? row.snippet : '';
+      if (!title && !snippet) continue;
+      intelItems.push({
+        id: `web:${title}:${row.url ?? ''}`,
+        title: title || String(row.url ?? 'web result'),
+        content: snippet || undefined,
+        source: `web_search:${row.source ?? 'unknown'}`,
+        sourceType: 'news',
+        url: typeof row.url === 'string' ? row.url : undefined,
+        timestamp: typeof row.date === 'string' ? row.date : new Date().toISOString(),
+      });
+    }
+  }
+  const extraction = extractEventsFromIntel(intelItems);
+  const eventRows = extraction.events.map(({ event, sourceIntel }) => {
+    const thought = ensureThoughtForEvent(event, sourceIntel);
+    const forecasts = ensureForecastsForThought(event, thought);
+    return {
+      event,
+      thought,
+      forecasts,
+    };
+  });
+
+  let marketSnapshots: Array<{ symbol: string; markPrice: number | null }> = [];
+  if (config) {
+    const marketClient = createMarketClient(config);
+    marketSnapshots = await collectForecastMarketSnapshot(marketClient, [
+      ...contextPlan.symbolHints,
+      ...eventRows.flatMap((row) => row.forecasts.map((forecast) => forecast.asset)),
+    ]);
+    sweepExpiredForecasts();
+  }
+
+  const sources = [market, time, ...intelResults, ...webResults, ...fundingResults]
+    .filter((result) => result.success)
+    .map((result) => result.source);
 
   const snapshot: ProactiveRefreshSnapshot = {
     asOf: new Date().toISOString(),
     query: message,
-    domain: marketContext.domain,
+    domain: contextPlan.domain,
     sources,
     data: {
-      currentTime: time?.success ? time.data : undefined,
-      markets: market?.success ? market.data : undefined,
-      intel: intel?.success ? intel.data : undefined,
-      web: web?.success ? web.data : undefined,
+      currentTime: time.success ? time.data : undefined,
+      markets: market.success ? market.data : undefined,
+      marketContext: contextPlan,
+      marketSnapshots: marketSnapshots.length > 0 ? marketSnapshots : undefined,
+      intel:
+        intelResults.some((result) => result.success)
+          ? intelResults.filter((result) => result.success).map((result) => ({
+              query: result.source.replace(/^intel_search:/, ''),
+              data: result.data,
+            }))
+          : undefined,
+      web:
+        webResults.some((result) => result.success)
+          ? webResults.filter((result) => result.success).map((result) => ({
+              query: result.source.replace(/^web_search:/, ''),
+              data: result.data,
+            }))
+          : undefined,
       fundingOISkew: fundingSignals.length > 0 ? fundingSignals : undefined,
-      marketContextPrimary: market?.success ? market.data : undefined,
+      events: eventRows.length > 0 ? eventRows : undefined,
+      extractionGaps: extraction.gaps.length > 0 ? extraction.gaps : undefined,
     },
   };
 

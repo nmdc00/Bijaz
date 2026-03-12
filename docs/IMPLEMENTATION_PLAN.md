@@ -43,3 +43,5 @@
 - Forecast -> outcome -> learning loop with scheduled resolution
 - Domain-aware market context abstraction so proactive/news loops are not perp-only
 - Commodity readiness scaffolding ahead of historical-event training
+- Domain-specific retrieval routing so oil, macro, FX, and commodity questions do not fall back to crypto-only context
+- Explicit failure reporting for retrieval or event-extraction gaps instead of silent "no catalyst" answers

@@ -16,11 +16,16 @@ import {
   runIntelPipelineDetailedWithOverrides,
   type IntelPipelineResult,
 } from '../intel/pipeline.js';
+import { extractEventsFromIntel } from '../events/extract.js';
+import { ensureThoughtForEvent } from '../events/thoughts.js';
+import { ensureForecastsForThought } from '../events/outcomes.js';
 
 export interface ProactiveSearchResult extends IntelPipelineResult {
   queries: string[];
   rounds: number;
   learnedSeedQueries: string[];
+  eventCount?: number;
+  extractionGapCount?: number;
 }
 
 export function formatProactiveSummary(result: ProactiveSearchResult): string {
@@ -35,6 +40,8 @@ export function formatProactiveSummary(result: ProactiveSearchResult): string {
       ? `Learned seeds: ${result.learnedSeedQueries.slice(0, 5).join('; ')}`
       : '',
     result.queries.length > 0 ? `Queries: ${result.queries.join('; ')}` : '',
+    typeof result.eventCount === 'number' ? `Events: ${result.eventCount}` : '',
+    typeof result.extractionGapCount === 'number' ? `Extraction gaps: ${result.extractionGapCount}` : '',
     titles.length > 0 ? `Top items: ${titles.join(' | ')}` : '',
   ]
     .filter(Boolean)
@@ -561,11 +568,19 @@ export async function runProactiveSearch(
     }
   }
 
+  const extraction = extractEventsFromIntel(storedItems);
+  for (const { event, sourceIntel } of extraction.events) {
+    const thought = ensureThoughtForEvent(event, sourceIntel);
+    ensureForecastsForThought(event, thought);
+  }
+
   return {
     storedCount,
     storedItems,
     queries: executedQueries,
     rounds,
     learnedSeedQueries: learnedQueries,
+    eventCount: extraction.events.length,
+    extractionGapCount: extraction.gaps.length,
   };
 }
