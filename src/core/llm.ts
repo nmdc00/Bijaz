@@ -1284,9 +1284,11 @@ export class AgenticOpenAiClient implements LlmClient {
                     }),
                   tools: scopedTools.map((tool) => ({
                     type: 'function',
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: tool.input_schema as Record<string, unknown>,
+                    function: {
+                      name: tool.name,
+                      description: tool.description,
+                      parameters: tool.input_schema as Record<string, unknown>,
+                    },
                   })),
                 }
               : {
