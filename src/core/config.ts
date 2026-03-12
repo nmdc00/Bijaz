@@ -295,7 +295,7 @@ const ConfigSchema = z.object({
       maxLeverage: z.number().default(5),
       defaultSlippageBps: z.number().default(10),
       maxQuoteAgeMs: z.number().default(2000),
-      symbols: z.array(z.string()).default(['BTC', 'ETH']),
+      symbols: z.array(z.string()).default([]),
       bridge: z
         .object({
           enabled: z.boolean().default(true),
@@ -786,7 +786,7 @@ const ConfigSchema = z.object({
       adaptiveEdge: z
         .object({
           enabled: z.boolean().default(true),
-          priorEdge: z.number().min(0).max(1).default(0.015),
+          priorEdge: z.number().min(0).max(1).default(0.06),
           minSamples: z.number().int().min(1).default(10),
           signalScaleFactor: z.number().min(0).max(1).default(0.5),
           decayHalfLifeDays: z.number().positive().nullable().default(null),
