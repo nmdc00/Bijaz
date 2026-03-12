@@ -4,10 +4,40 @@ import http from 'node:http';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { access } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 
 import { loadConfig } from '../core/config.js';
 
 const execAsync = promisify(exec);
+
+async function resolveQmdCommand(): Promise<string | null> {
+  const candidates = [
+    process.env.QMD_BIN,
+    'qmd',
+    join(homedir(), '.local', 'bin', 'qmd'),
+    join(homedir(), '.bun', 'bin', 'qmd'),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      if (candidate.includes('/')) {
+        await access(candidate, fsConstants.X_OK);
+      } else {
+        await execAsync(`${candidate} --version`);
+      }
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
 import { Logger } from '../core/logger.js';
 import { TelegramAdapter } from '../interface/telegram.js';
 import { WhatsAppAdapter } from '../interface/whatsapp.js';
@@ -1036,10 +1066,12 @@ if (config.qmd?.enabled && qmdEmbedConfig?.enabled) {
 
   const runQmdEmbed = async () => {
     try {
-      // Check if qmd is available
-      await execAsync('qmd --version');
+      const qmdCommand = await resolveQmdCommand();
+      if (!qmdCommand) {
+        return;
+      }
       // Run embedding update for all collections
-      const { stderr } = await execAsync('qmd embed', { timeout: 300_000 });
+      const { stderr } = await execAsync(`${JSON.stringify(qmdCommand)} embed`, { timeout: 300_000 });
       if (stderr && !stderr.includes('warning')) {
         logger.warn(`QMD embed warning: ${stderr}`);
       }
