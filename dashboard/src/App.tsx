@@ -52,6 +52,26 @@ function shortDateLabel(value: string): string {
   });
 }
 
+function conversationDayKey(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function conversationDayLabel(value: string): string {
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 function relativeTime(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
@@ -171,6 +191,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshedAt, setRefreshedAt] = useState('');
   const [conversations, setConversations] = useState<ConversationSession[]>([]);
+  const [selectedConversationDay, setSelectedConversationDay] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [thread, setThread] = useState<ConversationThreadResponse | null>(null);
   const [conversationError, setConversationError] = useState('');
@@ -224,8 +245,9 @@ export default function App() {
         const response = await fetchConversations();
         if (cancelled) return;
         setConversations(response.sessions);
-        if (!selectedSessionId && response.sessions[0]?.sessionId) {
-          setSelectedSessionId(response.sessions[0].sessionId);
+        const nextDay = selectedConversationDay ?? (response.sessions[0] ? conversationDayKey(response.sessions[0].lastMessageAt) : null);
+        if (nextDay) {
+          setSelectedConversationDay(nextDay);
         }
       } catch (err) {
         if (!cancelled) {
@@ -241,7 +263,36 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [tab, selectedSessionId]);
+  }, [tab, selectedConversationDay]);
+
+  const conversationDays = useMemo(() => {
+    const ordered = conversations.map((session) => conversationDayKey(session.lastMessageAt));
+    return ordered.filter((day, index) => day && ordered.indexOf(day) === index);
+  }, [conversations]);
+
+  const filteredConversations = useMemo(() => {
+    if (!selectedConversationDay) {
+      return conversations;
+    }
+    return conversations.filter((session) => conversationDayKey(session.lastMessageAt) === selectedConversationDay);
+  }, [conversations, selectedConversationDay]);
+
+  useEffect(() => {
+    if (tab !== 'conversations') {
+      return;
+    }
+    if (!selectedConversationDay) {
+      if (conversationDays[0]) {
+        setSelectedConversationDay(conversationDays[0]);
+      }
+      return;
+    }
+    const selectedStillVisible = filteredConversations.some((session) => session.sessionId === selectedSessionId);
+    if (!selectedStillVisible) {
+      setSelectedSessionId(filteredConversations[0]?.sessionId ?? null);
+      setThread(null);
+    }
+  }, [tab, conversationDays, filteredConversations, selectedConversationDay, selectedSessionId]);
 
   useEffect(() => {
     if (tab !== 'conversations' || !selectedSessionId) {
@@ -270,6 +321,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [tab, selectedSessionId]);
+
+  useEffect(() => {
+    if (tab !== 'conversations' || selectedSessionId) {
+      return;
+    }
+    setThread(null);
   }, [tab, selectedSessionId]);
 
   useEffect(() => {
@@ -395,30 +453,46 @@ export default function App() {
           </div>
           <div className="panel-body">
             <div className="conversation-toolbar">
-              <div className="conversation-picker">
-                <label htmlFor="conversation-session">Session</label>
-                <select
-                  id="conversation-session"
-                  value={selectedSessionId ?? ''}
-                  onChange={(event) => setSelectedSessionId(event.target.value || null)}
-                >
-                  {conversations.map((session) => (
-                    <option key={session.sessionId} value={session.sessionId}>
-                      {shortDateLabel(session.lastMessageAt)} · {relativeTime(session.lastMessageAt)} · {session.firstMessage}
-                    </option>
-                  ))}
-                </select>
+              <div className="conversation-filters">
+                <div className="conversation-picker conversation-day-picker">
+                  <label htmlFor="conversation-day">Day</label>
+                  <select
+                    id="conversation-day"
+                    value={selectedConversationDay ?? ''}
+                    onChange={(event) => setSelectedConversationDay(event.target.value || null)}
+                  >
+                    {conversationDays.map((day) => (
+                      <option key={day} value={day}>
+                        {conversationDayLabel(day)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="conversation-picker">
+                  <label htmlFor="conversation-session">Session</label>
+                  <select
+                    id="conversation-session"
+                    value={selectedSessionId ?? ''}
+                    onChange={(event) => setSelectedSessionId(event.target.value || null)}
+                  >
+                    {filteredConversations.map((session) => (
+                      <option key={session.sessionId} value={session.sessionId}>
+                        {shortDateLabel(session.lastMessageAt)} · {relativeTime(session.lastMessageAt)} · {session.firstMessage}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
               {selectedSessionId ? (
                 <div className="conversation-summary">
-                  <span>latest 50 of {conversations.find((session) => session.sessionId === selectedSessionId)?.messageCount ?? 0} messages</span>
+                  <span>latest 50 of {filteredConversations.find((session) => session.sessionId === selectedSessionId)?.messageCount ?? 0} messages</span>
                   <span className="mono">{selectedSessionId.slice(0, 8)}</span>
                 </div>
               ) : null}
             </div>
             {conversationError ? <div className="empty-state">{conversationError}</div> : null}
             {conversationLoading && !thread ? <div className="empty-state">Loading conversation…</div> : null}
-            {!conversationLoading && conversations.length === 0 ? <div className="empty-state">No conversations yet.</div> : null}
+            {!conversationLoading && filteredConversations.length === 0 ? <div className="empty-state">No conversations for this day.</div> : null}
             <ConversationThread thread={thread} />
           </div>
         </section>

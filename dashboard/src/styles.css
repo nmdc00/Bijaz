@@ -92,7 +92,9 @@ th { font-size: 0.68rem; }
 .conversation-row { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 0.8rem; }
 .conversation-preview { margin: 10px 0; color: var(--text); line-height: 1.5; }
 .conversation-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 14px; margin-bottom: 16px; }
+.conversation-filters { display: flex; gap: 12px; flex: 1; min-width: 0; }
 .conversation-picker { flex: 1; min-width: 0; }
+.conversation-day-picker { flex: 0 0 220px; }
 .conversation-picker label { display: block; margin-bottom: 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.72rem; }
 .conversation-picker select { width: 100%; border-radius: 12px; border: 1px solid var(--line-strong); background: rgba(4, 12, 24, 0.92); color: var(--text); padding: 10px 12px; font: inherit; }
 .conversation-summary { display: flex; gap: 12px; align-items: center; color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
@@ -107,6 +109,8 @@ th { font-size: 0.68rem; }
 @media (max-width: 1120px) { .hero, .content-grid, .kpi-grid, .toolbar, .subgrid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) {
   .conversation-toolbar { flex-direction: column; align-items: stretch; }
+  .conversation-filters { flex-direction: column; }
+  .conversation-day-picker { flex-basis: auto; }
   .conversation-summary { justify-content: space-between; }
   .thread-bubble { max-width: 100%; }
 }
