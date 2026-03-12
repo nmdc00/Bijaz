@@ -376,21 +376,27 @@ export function buildConversationsListResponse(params?: {
 
 export function buildConversationThreadResponse(
   sessionId: string,
-  params?: { db?: Database.Database }
+  params?: { db?: Database.Database; limit?: number }
 ): ConversationThreadResponse {
   const db = params?.db ?? openDatabase();
   if (!tableExists(db, 'chat_messages')) {
     return { sessionId, messages: [] };
   }
+  const limit = Math.max(1, Math.min(200, Number(params?.limit ?? 50) || 50));
   const rows = db.prepare(
     `
-      SELECT id, role, content, created_at AS createdAt
-      FROM chat_messages
-      WHERE session_id = ?
-        AND role IN ('user', 'assistant')
-      ORDER BY created_at ASC, id ASC
+      SELECT id, role, content, createdAt
+      FROM (
+        SELECT id, role, content, created_at AS createdAt
+        FROM chat_messages
+        WHERE session_id = ?
+          AND role IN ('user', 'assistant')
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      )
+      ORDER BY createdAt ASC, id ASC
     `
-  ).all(sessionId) as Array<{
+  ).all(sessionId, limit) as Array<{
     id: string;
     role: 'user' | 'assistant';
     content: string;
@@ -1891,8 +1897,9 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
       writeJson(res, 400, { ok: false, error: 'Missing session id' });
       return true;
     }
+    const limit = parsePositiveInt(url.searchParams.get('limit'), 50, 1, 200);
     const payload = cached(buildDashboardCacheKey('conversation-thread', url), 10_000, () =>
-      buildConversationThreadResponse(sessionId)
+      buildConversationThreadResponse(sessionId, { limit })
     );
     writeJson(res, 200, payload);
     return true;

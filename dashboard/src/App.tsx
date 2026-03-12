@@ -252,7 +252,7 @@ export default function App() {
       setConversationLoading(true);
       setConversationError('');
       try {
-        const response = await fetchConversationThread(selectedSessionId);
+        const response = await fetchConversationThread(selectedSessionId, 50);
         if (!cancelled) {
           setThread(response);
         }
@@ -411,7 +411,7 @@ export default function App() {
               </div>
               {selectedSessionId ? (
                 <div className="conversation-summary">
-                  <span>{conversations.find((session) => session.sessionId === selectedSessionId)?.messageCount ?? 0} messages</span>
+                  <span>latest 50 of {conversations.find((session) => session.sessionId === selectedSessionId)?.messageCount ?? 0} messages</span>
                   <span className="mono">{selectedSessionId.slice(0, 8)}</span>
                 </div>
               ) : null}

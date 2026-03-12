@@ -49,8 +49,13 @@ export function fetchConversations(): Promise<ConversationsListResponse> {
   return getJson<ConversationsListResponse>('/api/conversations');
 }
 
-export function fetchConversationThread(sessionId: string): Promise<ConversationThreadResponse> {
-  return getJson<ConversationThreadResponse>(`/api/conversations/${encodeURIComponent(sessionId)}`);
+export function fetchConversationThread(
+  sessionId: string,
+  limit = 50
+): Promise<ConversationThreadResponse> {
+  return getJson<ConversationThreadResponse>(
+    `/api/conversations/${encodeURIComponent(sessionId)}?limit=${Math.max(1, limit)}`
+  );
 }
 
 export function fetchLogs(
