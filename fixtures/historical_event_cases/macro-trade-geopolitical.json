@@ -1,0 +1,162 @@
+[
+  {
+    "case_key": "2018-us-china-tariff-escalation",
+    "event_date": "2018-03-22",
+    "event_type": "trade_war_escalation",
+    "title": "US-China Trade War Tariff Escalation → Soybean / EM Selloff",
+    "summary": "The Trump administration announced tariffs on $50B of Chinese goods on March 22, 2018, sparking a tit-for-tat escalation. China targeted US agricultural exports (soybeans, pork), causing sharp price dislocations. EM equities and currencies fell on global growth concerns.",
+    "domain": "macro",
+    "actors": ["US government", "Donald Trump", "Chinese government", "USTR"],
+    "locations": ["United States", "China", "Global"],
+    "channels": ["trade_flows", "tariffs", "global_growth", "agricultural_demand"],
+    "first_order_assets": ["US soybeans", "US pork", "USD/CNY"],
+    "second_order_assets": ["EM equities", "EM currencies", "global trade-sensitive equities", "BRL (Brazil as alternative soy supplier)"],
+    "mechanism": "China's retaliatory tariffs targeted US agricultural exports — soybeans in particular — as a politically sensitive response designed to hurt Trump-voting farm states. US soybean prices collapsed while Brazilian soy (alternative supplier) benefited. Broader market impact was risk-off as investors priced slower global trade and growth.",
+    "causal_chain": [
+      "Trump announces tariffs on $50B of Chinese goods March 22, 2018",
+      "China retaliates with 25% tariffs on US soybeans, pork, and other agricultural goods",
+      "US soybean futures fall sharply; Brazilian soybean exports surge",
+      "CNY weakens as PBOC allows gradual depreciation to offset tariff impact",
+      "EM equities and currencies sell off on global growth concerns",
+      "Escalation continues through 2018; full trade war with 25% tariffs on $250B+ of goods"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish US soybeans and trade-exposed US ag; bearish EM growth equities; bearish CNY; bullish BRL (ag supply shift); bearish global cyclicals"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "US soybean prices fell from ~$10.50 to ~$8.40/bushel through mid-2018. MSCI EM fell ~20% in 2018. CNY depreciated from 6.3 to 6.9 vs USD. Brazilian soybean exports hit record levels.",
+      "chart_note": "Provisional — soybean futures charts and MSCI EM charts confirm the selloff",
+      "priced_in_note": "Some trade war risk priced after initial tariff announcements; escalation pace surprised",
+      "reversal_note": "Phase 1 deal reached January 2020 caused partial rebound; full resolution never achieved"
+    },
+    "regime_tags": ["trade_war", "tariffs", "em_selloff", "agricultural_dislocation"],
+    "sources": [
+      {"title": "USTR Section 301 tariff announcement March 2018", "publisher": "USTR", "url": null, "source_date": "2018-03-22", "source_type": "event"},
+      {"title": "China retaliatory tariff list 2018", "publisher": "MOFCOM China", "url": null, "source_date": "2018-04-04", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2020-us-china-phase-one-deal",
+    "event_date": "2020-01-15",
+    "event_type": "trade_war_de_escalation",
+    "title": "US-China Phase 1 Trade Deal → Risk-On / EM Rally",
+    "summary": "The US and China signed the Phase 1 trade deal on January 15, 2020, with China committing to purchase $200B more in US goods over two years and the US rolling back some tariffs. The deal triggered a risk-on rally in EM equities and commodity-linked currencies.",
+    "domain": "macro",
+    "actors": ["US government", "Donald Trump", "Chinese government", "USTR"],
+    "locations": ["United States", "China"],
+    "channels": ["trade_flows", "tariffs", "risk_sentiment", "global_growth"],
+    "first_order_assets": ["EM equities", "US equities (SPX)", "USD/CNY"],
+    "second_order_assets": ["US soybeans", "BRL", "AUD", "industrial metals"],
+    "mechanism": "Phase 1 removed the most recent escalation threat (tariffs on consumer goods that were delayed or rolled back) and established a purchase commitment framework. While incomplete (most tariffs remained), it removed the tail risk of continued escalation, repricing EM and trade-sensitive assets higher.",
+    "causal_chain": [
+      "US and China agree Phase 1 framework in December 2019",
+      "Phase 1 deal signed January 15, 2020",
+      "US rolls back 15% tariffs on some consumer goods; China commits to $200B in purchases",
+      "EM equities rally; CNY strengthens; AUD, BRL strengthen on commodity/China demand",
+      "US soybean futures recover partially on Chinese purchase commitments"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish EM equities and EM currencies; bullish CNY; bullish US agricultural exports; cautiously bullish global growth-sensitive assets"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "MSCI EM rallied ~4% in January 2020 before COVID intervened. CNY strengthened from 7.0 to 6.9 vs USD. US soybean prices recovered partially. COVID derailed the implementation.",
+      "chart_note": "Provisional — EM equity and CNY charts confirm the initial relief rally before COVID disruption",
+      "priced_in_note": "Deal largely priced in advance of signing; announcement was confirmation rather than surprise",
+      "reversal_note": "COVID disrupted Phase 1 purchase commitments; China only met ~60% of purchase targets"
+    },
+    "regime_tags": ["trade_war_resolution", "risk_on", "em_rally", "china_demand"],
+    "sources": [
+      {"title": "US-China Phase 1 trade agreement January 2020", "publisher": "USTR", "url": null, "source_date": "2020-01-15", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-russia-swift-exclusion-sanctions",
+    "event_date": "2022-02-26",
+    "event_type": "geopolitical_sanctions",
+    "title": "Russia SWIFT Exclusion → Commodity Surge / Rouble Collapse",
+    "summary": "The G7 announced exclusion of key Russian banks from SWIFT on February 26, 2022, following the invasion of Ukraine. Combined with asset freezes on Russian central bank reserves (~$300B frozen), the sanctions caused the rouble to collapse and triggered a surge in commodity prices as markets priced Russian supply disruption.",
+    "domain": "macro",
+    "actors": ["G7 governments", "US Treasury", "EU", "Russia", "Central Bank of Russia"],
+    "locations": ["Russia", "Ukraine", "Europe", "Global"],
+    "channels": ["sanctions", "commodity_supply", "FX", "credit"],
+    "first_order_assets": ["RUB (Russian rouble)", "Brent crude", "natural gas", "wheat"],
+    "second_order_assets": ["European equities", "palladium", "nickel", "fertilizers", "European gas prices"],
+    "mechanism": "Russia is a major global supplier of oil (10% of world supply), gas (30%+ of European gas), wheat, palladium, nickel, and fertilizer precursors. Sanctions and the central bank reserve freeze removed Russia's FX defense capacity and priced in significant supply disruption risk across multiple commodity markets simultaneously.",
+    "causal_chain": [
+      "Russia invades Ukraine February 24, 2022",
+      "G7 announces SWIFT exclusion for key Russian banks February 26, 2022",
+      "~$300B of Russian central bank reserves frozen by G7 countries",
+      "RUB collapses from ~82/USD to ~140/USD by early March 2022",
+      "Brent crude surges toward $130/barrel; European gas prices spike to records",
+      "Wheat, nickel, palladium, fertilizers all spike on supply disruption fears"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Strongly bullish energy (Brent, natgas), wheat, nickel, palladium; bearish RUB; bearish European equities and growth; bearish USD/RUB (RUB collapses)"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Brent crude hit $130/barrel in March 2022. European TTF gas prices reached record highs (~€300/MWh). RUB fell to 140/USD before recovering on capital controls. Wheat hit $13+ per bushel. Nickel briefly hit $100K/tonne on LME.",
+      "chart_note": "Validated — energy, wheat, nickel, and RUB charts all confirm extreme moves; extensively documented",
+      "priced_in_note": "Some premium priced on February 24 invasion news; SWIFT exclusion exceeded many scenarios",
+      "reversal_note": "Commodity prices moderated through H2 2022 as Russian supply was partially redirected to Asia; RUB recovered on capital controls and energy revenues"
+    },
+    "regime_tags": ["sanctions", "geopolitical_shock", "commodity_surge", "fx_crash"],
+    "sources": [
+      {"title": "G7 SWIFT exclusion announcement", "publisher": "US Treasury", "url": null, "source_date": "2022-02-26", "source_type": "event"},
+      {"title": "Russia central bank reserve freeze", "publisher": "US Treasury / EU", "url": null, "source_date": "2022-02-28", "source_type": "event"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2018-us-steel-aluminum-tariffs",
+    "event_date": "2018-03-01",
+    "event_type": "trade_war_escalation",
+    "title": "US Section 232 Steel and Aluminum Tariffs → Metal Repricing",
+    "summary": "President Trump announced 25% tariffs on steel and 10% tariffs on aluminum imports on March 1, 2018 under Section 232 (national security). US domestic steel and aluminum prices surged while downstream manufacturers faced higher input costs. Canada, EU, and China retaliated.",
+    "domain": "metals",
+    "actors": ["US government", "Donald Trump", "domestic US steel industry"],
+    "locations": ["United States", "Canada", "European Union", "China"],
+    "channels": ["tariffs", "trade_flows", "supply_constraint", "input_costs"],
+    "first_order_assets": ["US HRC steel futures", "US aluminum", "US Steel (X)", "Nucor (NUE)"],
+    "second_order_assets": ["US auto manufacturers", "US can manufacturers", "Canadian and European steel equities", "global aluminum prices"],
+    "mechanism": "By restricting imports, Section 232 tariffs created a price wedge between US domestic steel/aluminum prices and global benchmarks. US downstream industries (auto, construction, packaging) faced higher input costs. Countries subject to tariffs (initially all, then with carveouts for Canada/Mexico/EU) retaliated against US agricultural and other exports.",
+    "causal_chain": [
+      "Trump announces Section 232 tariffs March 1, 2018",
+      "US hot-rolled coil steel prices surge ~40% through mid-2018",
+      "US primary aluminum prices also rise; domestic producers benefit",
+      "Downstream manufacturers (auto, appliance) face margin pressure",
+      "Canada, EU, China retaliate with tariffs on US agricultural and consumer goods"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish US domestic steel and aluminum producers; bearish US downstream steel consumers (auto, construction); mixed for global benchmarks; bearish global trade sentiment"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "US HRC steel prices surged from ~$650/tonne to ~$900/tonne by mid-2018. US Steel (X) stock rose ~50% in the months following. US auto OEMs cited tariff headwinds in earnings.",
+      "chart_note": "Provisional — US HRC futures and US Steel equity charts confirm the move",
+      "priced_in_note": "Some metals strength anticipated; tariff rate and breadth exceeded initial expectations",
+      "reversal_note": "US steel prices moderated into 2019 as temporary exemptions were made permanent and demand moderated"
+    },
+    "regime_tags": ["tariffs", "trade_protectionism", "metals_bull", "input_cost_shock"],
+    "sources": [
+      {"title": "Presidential Proclamation on Steel Section 232 tariffs", "publisher": "White House", "url": null, "source_date": "2018-03-08", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]

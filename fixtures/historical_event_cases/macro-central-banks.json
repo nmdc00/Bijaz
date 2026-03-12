@@ -1,0 +1,317 @@
+[
+  {
+    "case_key": "2013-taper-tantrum-treasuries",
+    "event_date": "2013-05-22",
+    "event_type": "central_bank_signal",
+    "title": "Fed Taper Tantrum → Treasury Selloff",
+    "summary": "Fed Chair Bernanke's May 22, 2013 congressional testimony hinted at slowing bond purchases, triggering a sharp global bond selloff. 10-year Treasury yields rose from ~1.6% to ~3.0% by September 2013, and EM currencies were severely hit.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "Ben Bernanke"],
+    "locations": ["United States", "Global", "Emerging Markets"],
+    "channels": ["rates", "duration_risk", "EM_capital_flows"],
+    "first_order_assets": ["US Treasuries", "10-year Treasury yield"],
+    "second_order_assets": ["EM bonds", "EM currencies", "gold", "MBS"],
+    "mechanism": "Markets had priced in indefinite QE. A signal that tapering was possible caused a rapid repricing of duration risk globally. EM countries that had attracted carry inflows saw sudden capital outflows, pressuring bonds and currencies simultaneously.",
+    "causal_chain": [
+      "Bernanke testifies: Fed 'could' slow bond purchases in coming meetings",
+      "bond markets sell off sharply on tapering fears",
+      "10-year Treasury yield spikes from 1.6% toward 2.5%+",
+      "EM capital outflows accelerate as carry trade unwinds",
+      "EM currencies (INR, BRL, IDR, ZAR, TRY) weaken sharply"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish long-duration bonds; bearish EM currencies; gold also pressured by rising real rates"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "10-year Treasury yield rose from ~1.6% to ~3.0% by September 2013. INR hit all-time lows; BRL, IDR, ZAR all fell 15–20% vs USD.",
+      "chart_note": "Provisional — Treasury yield charts confirm the spike; EM currency charts confirm the selloff",
+      "priced_in_note": "Markets had been aggressively priced for indefinite QE; reversal was sharp",
+      "reversal_note": "Yields stabilized after actual taper began December 2013 (buy the event)"
+    },
+    "regime_tags": ["taper_tantrum", "rates_shock", "EM_contagion", "duration_risk"],
+    "sources": [
+      {"title": "Bernanke congressional testimony May 22, 2013", "publisher": "Federal Reserve", "url": null, "source_date": "2013-05-22", "source_type": "event"},
+      {"title": "BIS Quarterly Review: Taper Tantrum", "publisher": "BIS", "url": null, "source_date": "2014-03", "source_type": "secondary_context"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2015-snb-peg-removal-eur-chf",
+    "event_date": "2015-01-15",
+    "event_type": "central_bank_surprise",
+    "title": "SNB Removes EUR/CHF Floor → CHF Flash Spike",
+    "summary": "The Swiss National Bank shocked markets on January 15, 2015 by abruptly removing the 1.20 EUR/CHF floor it had maintained since 2011. EUR/CHF collapsed from ~1.20 to below 0.85 intraday, representing a 30%+ move in minutes. Multiple FX brokers were bankrupted.",
+    "domain": "fx",
+    "actors": ["Swiss National Bank", "Thomas Jordan"],
+    "locations": ["Switzerland", "Europe"],
+    "channels": ["FX", "central_bank_credibility", "carry_trade"],
+    "first_order_assets": ["EUR/CHF", "CHF"],
+    "second_order_assets": ["Swiss equities (SMI)", "CHF crosses", "Eastern European mortgages in CHF"],
+    "mechanism": "The SNB had defended the 1.20 floor by buying foreign currency at scale. With ECB QE imminent, maintaining the floor would have required unlimited EUR purchases. The SNB chose to remove the cap without warning rather than accumulate unlimited EUR risk. The shock was maximized by the complete lack of forward guidance.",
+    "causal_chain": [
+      "ECB expected to announce QE in January 2015, putting upward pressure on CHF",
+      "SNB facing accelerating EUR accumulation to maintain peg",
+      "SNB abruptly removes 1.20 EUR/CHF floor without warning January 15, 2015",
+      "EUR/CHF collapses from 1.20 to ~0.85 intraday (30%+ move)",
+      "SMI falls ~10% in a day; CHF carry trades obliterated; brokers bankrupted"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate"],
+      "confidence": "high",
+      "note": "Strongly bullish CHF immediately after announcement; bearish EUR/CHF, USD/CHF, GBP/CHF; bearish Swiss equities (exporters hit by sudden currency appreciation)"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "EUR/CHF hit ~0.85 intraday on January 15, 2015 before recovering to ~1.00–1.02 range. SMI fell ~10% on the day. FXCM and several brokers required emergency capital.",
+      "chart_note": "Validated — EUR/CHF intraday chart confirms the spike; widely documented",
+      "priced_in_note": "Zero pre-announcement; SNB had repeatedly pledged to defend the floor",
+      "reversal_note": "EUR/CHF recovered partially to ~1.00–1.05 range over subsequent weeks"
+    },
+    "regime_tags": ["central_bank_surprise", "flash_crash", "fx_shock", "peg_removal"],
+    "sources": [
+      {"title": "SNB discontinues minimum exchange rate", "publisher": "SNB", "url": "https://www.snb.ch/en/mmr/reference/pre_20150115/source/pre_20150115.en.pdf", "source_date": "2015-01-15", "source_type": "event"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2012-ecb-whatever-it-takes",
+    "event_date": "2012-07-26",
+    "event_type": "central_bank_signal",
+    "title": "Draghi 'Whatever It Takes' → Euro Sovereign Crisis Floor",
+    "summary": "ECB President Mario Draghi's July 26, 2012 declaration that the ECB would do 'whatever it takes' to preserve the euro — followed by the OMT announcement in September — decisively ended the acute phase of the European sovereign debt crisis and caused sharp rallies in peripheral sovereign bonds.",
+    "domain": "rates",
+    "actors": ["ECB", "Mario Draghi"],
+    "locations": ["Europe", "Italy", "Spain"],
+    "channels": ["sovereign_spreads", "credit_risk", "central_bank_credibility"],
+    "first_order_assets": ["Italian BTPs", "Spanish Bonos", "EUR/USD"],
+    "second_order_assets": ["European equities", "European banks", "CDS on peripheral sovereigns"],
+    "mechanism": "Peripheral sovereign yields had spiraled toward crisis levels on fears of Euro break-up. Draghi's speech and subsequent OMT program announcement established the ECB as a backstop buyer of unlimited sovereign bonds for countries in ESM programs, effectively capping yields at politically tolerable levels.",
+    "causal_chain": [
+      "Italian and Spanish 10-year yields approach 7% — perceived as unsustainable",
+      "Draghi delivers 'whatever it takes' speech July 26, 2012",
+      "ECB announces OMT (Outright Monetary Transactions) September 6, 2012",
+      "peripheral yields collapse: Spanish 10yr falls from 7.5% to below 5% within months",
+      "EUR strengthens; European banks stabilize"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish European peripheral bonds, EUR, European equities; bearish CDS on peripheral sovereigns"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Spanish 10-year yields fell from ~7.5% to below 5% by end of 2012. Italian yields similarly compressed. EUR/USD rallied from ~1.21 to ~1.33 by end of 2012.",
+      "chart_note": "Provisional — widely documented; peripheral yield charts confirm compression",
+      "priced_in_note": "Market was pricing break-up risk; speech directly addressed that tail",
+      "reversal_note": "Peripheral yields continued lower into 2014-2015; no reversal of initial move"
+    },
+    "regime_tags": ["ecb_intervention", "sovereign_crisis", "policy_credibility", "rates_bull"],
+    "sources": [
+      {"title": "Draghi 'whatever it takes' speech", "publisher": "ECB", "url": null, "source_date": "2012-07-26", "source_type": "event"},
+      {"title": "ECB OMT announcement", "publisher": "ECB", "url": null, "source_date": "2012-09-06", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-fed-first-hike-march",
+    "event_date": "2022-03-16",
+    "event_type": "central_bank_decision",
+    "title": "Fed March 2022 First Rate Hike → Rates Repricing",
+    "summary": "The Federal Reserve raised rates 25bp on March 16, 2022 — the first hike since 2018 — and signaled an aggressive tightening path with 7 hikes projected for 2022. This marked the start of the fastest Fed tightening cycle since the 1980s, driving a historic bond bear market.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "Jerome Powell"],
+    "locations": ["United States", "Global"],
+    "channels": ["rates", "credit", "risk_off"],
+    "first_order_assets": ["2-year Treasury", "10-year Treasury", "fed funds rate"],
+    "second_order_assets": ["equities (growth)", "credit spreads", "USD", "gold", "EM debt"],
+    "mechanism": "After months of 'transitory' inflation narrative, the Fed pivoted to aggressive tightening. The first hike was priced in, but the dot plot signaling 7 hikes in 2022 surprised hawkishly. The resulting repricing of the front end and flattening/inversion of the yield curve marked a structural regime shift.",
+    "causal_chain": [
+      "CPI prints persistently above 7% in early 2022",
+      "Fed acknowledges inflation is not transitory",
+      "March 16, 2022: Fed hikes 25bp; dot plot signals 7 hikes in 2022",
+      "2-year Treasury yield spikes; yield curve begins flattening toward inversion",
+      "growth equities (NDX) and long-duration bonds sell off sharply through 2022"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["medium", "long"],
+      "confidence": "high",
+      "note": "Bearish long-duration bonds; bearish growth/tech equities; bullish USD; gold mixed (higher rates offset by inflation hedge)"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Fed hiked 425bp through 2022 (total 7 hikes). 10-year Treasury yield rose from ~1.5% to ~4.25% by year-end. AGG bond index fell ~13%. NDX fell ~33%.",
+      "chart_note": "Validated — widely documented 2022 bond bear market",
+      "priced_in_note": "First hike largely priced in; dot plot hawkishness and subsequent pace exceeded expectations",
+      "reversal_note": "Rates peaked in October 2023 (~5% on 10yr); equities recovered as rate hike cycle ended"
+    },
+    "regime_tags": ["fed_tightening", "rate_hike_cycle", "bond_bear", "growth_selloff"],
+    "sources": [
+      {"title": "FOMC press release March 2022", "publisher": "Federal Reserve", "url": null, "source_date": "2022-03-16", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2023-boj-ycc-relaxation",
+    "event_date": "2023-07-28",
+    "event_type": "central_bank_surprise",
+    "title": "BoJ YCC Band Widening → Yen Surge / JGB Selloff",
+    "summary": "The Bank of Japan unexpectedly widened its Yield Curve Control (YCC) band for 10-year JGBs from ±0.50% to ±1.00% on July 28, 2023, signaling a potential end to ultra-easy policy. JPY strengthened sharply and JGB yields rose, repricing global carry trades.",
+    "domain": "rates",
+    "actors": ["Bank of Japan", "Kazuo Ueda"],
+    "locations": ["Japan", "Global"],
+    "channels": ["rates", "FX", "carry_trade", "global_bonds"],
+    "first_order_assets": ["10-year JGB", "USD/JPY"],
+    "second_order_assets": ["JPY crosses", "global bond yields", "equity carry plays"],
+    "mechanism": "BoJ's YCC policy had suppressed JGB yields and kept JPY weak, creating a massive carry trade where investors borrowed JPY to buy higher-yielding assets globally. Each BoJ tightening step — first the December 2022 band widening, then the July 2023 widening — partially unwinds these positions and strengthens JPY.",
+    "causal_chain": [
+      "BoJ holds December 2022 YCC decision to ±0.50%; market tests BoJ resolve",
+      "July 28, 2023: BoJ widens YCC band from ±0.50% to ±1.00% — classified as 'flexibility' not tightening",
+      "JGB 10-year yield spikes toward 0.60%+",
+      "USD/JPY drops sharply; JPY carry trades partially unwind",
+      "global carry trade repricing affects AUD, NZD, EM bond positions"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish JPY; bearish USD/JPY; bearish JGB (higher yields); bearish JPY-funded carry positions"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "USD/JPY fell from ~141 to ~137 in the days following the announcement. JGB yields rose. The bigger YCC abandonment came in March 2024 when BoJ ended negative rates.",
+      "chart_note": "Provisional — USD/JPY chart confirms JPY strengthening; JGB yield charts confirm the move",
+      "priced_in_note": "Some probability of adjustment priced after December 2022 move; July 2023 still surprised",
+      "reversal_note": "USD/JPY resumed weakening through late 2023 on Fed rate path and divergence"
+    },
+    "regime_tags": ["boj_ycc", "carry_trade", "fx_shock", "rates_normalization"],
+    "sources": [
+      {"title": "BoJ policy decision July 2023", "publisher": "Bank of Japan", "url": null, "source_date": "2023-07-28", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2021-jackson-hole-powell-taper",
+    "event_date": "2021-08-27",
+    "event_type": "central_bank_signal",
+    "title": "Powell Jackson Hole 2021 → Taper Signal, Markets Shrug",
+    "summary": "Fed Chair Powell's August 27, 2021 Jackson Hole speech confirmed tapering would begin 'this year' but carefully avoided hawkish rate guidance, causing a brief relief rally in equities rather than a repeat of the 2013 taper tantrum.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "Jerome Powell"],
+    "locations": ["United States"],
+    "channels": ["rates", "risk_sentiment", "equity"],
+    "first_order_assets": ["US equities (SPX)", "10-year Treasury", "USD"],
+    "second_order_assets": ["gold", "EM assets", "credit spreads"],
+    "mechanism": "By carefully separating the tapering decision from rate hike timing, Powell avoided the sharp duration selloff of 2013. The speech was interpreted as dovish relative to fears, confirming the Fed's separation of taper from hikes. Equities rallied on relief; bonds were relatively stable.",
+    "causal_chain": [
+      "Markets had been anxious about taper announcement through mid-2021",
+      "Powell at Jackson Hole August 27, 2021 signals taper 'this year' but decouples from rate hikes",
+      "equity markets interpret speech as dovish vs fears — SPX rallies",
+      "10-year Treasury yield relatively stable, no tantrum repeat",
+      "USD strengthens modestly; gold dips"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["immediate"],
+      "confidence": "medium",
+      "note": "Mildly bullish risk assets on relief; bond market stable (no taper tantrum repeat); outcome depends on market's prior positioning"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "SPX rallied ~0.9% the day of the speech. 10-year Treasury yield rose only modestly. No repeat of 2013 tantrum. Formal taper announcement came November 2021.",
+      "chart_note": "Provisional — SPX and Treasury chart confirm muted reaction vs 2013",
+      "priced_in_note": "Taper was widely expected; speech removed uncertainty",
+      "reversal_note": "Equity rally continued into year-end; taper began November 2021 without disruption"
+    },
+    "regime_tags": ["fed_taper", "jackson_hole", "risk_relief", "rates_stable"],
+    "sources": [
+      {"title": "Powell Jackson Hole speech August 2021", "publisher": "Federal Reserve", "url": null, "source_date": "2021-08-27", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "1994-bond-massacre",
+    "event_date": "1994-02-04",
+    "event_type": "central_bank_surprise",
+    "title": "Fed 1994 Rate Hike Cycle → Global Bond Massacre",
+    "summary": "The Federal Reserve surprised markets on February 4, 1994 by hiking rates 25bp — the first hike in five years — launching a tightening cycle that would eventually raise rates by 300bp. Global bond markets sold off violently, causing losses in excess of $1 trillion. Orange County declared bankruptcy.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "Alan Greenspan"],
+    "locations": ["United States", "Global"],
+    "channels": ["rates", "duration_risk", "credit"],
+    "first_order_assets": ["US Treasuries", "US mortgage bonds"],
+    "second_order_assets": ["European bonds", "MBS", "leveraged bond funds", "municipal bonds"],
+    "mechanism": "After years of falling rates and high leverage in the bond market (especially in MBS and structured products), an unexpected hike triggered a cascade of forced deleveraging. Leveraged positions in MBS and CMOs amplified losses. Duration risk was enormous after years of reach-for-yield.",
+    "causal_chain": [
+      "Fed hikes 25bp February 4, 1994 — first hike in five years, largely unanticipated",
+      "bond markets sell off globally as rate path is repriced",
+      "leveraged bond positions (MBS, CMOs, municipal funds) forced to unwind",
+      "Orange County loses ~$1.7B on leveraged structured bond positions, declares bankruptcy",
+      "Fed hikes rates 300bp total through February 1995"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish long-duration bonds and leveraged bond structures; bearish interest rate-sensitive equities"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "10-year Treasury yield rose from ~5.75% to ~8.0% by November 1994. Global bond markets lost over $1 trillion. Orange County filed for bankruptcy December 1994.",
+      "chart_note": "Provisional — historical Treasury yield data confirms the spike",
+      "priced_in_note": "Hike was not widely anticipated given prior Fed communication",
+      "reversal_note": "Yields fell sharply in 1995 as Fed successfully engineered soft landing"
+    },
+    "regime_tags": ["bond_massacre", "fed_tightening", "duration_risk", "deleveraging"],
+    "sources": [
+      {"title": "Federal Reserve history 1994 rate decisions", "publisher": "Federal Reserve", "url": null, "source_date": "1994-02-04", "source_type": "event"},
+      {"title": "Orange County bankruptcy 1994", "publisher": "NYT archive", "url": null, "source_date": "1994-12", "source_type": "secondary_context"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2022-fed-pivot-signal-november",
+    "event_date": "2022-11-02",
+    "event_type": "central_bank_signal",
+    "title": "Fed November 2022 FOMC → Pivot Speculation Begins",
+    "summary": "The Fed's November 2, 2022 FOMC statement included language suggesting future hikes would consider 'cumulative tightening' and 'lags', sparking the first credible pivot speculation. Markets began pricing a slower terminal rate, driving a sharp equity rally and bond recovery in Q4 2022.",
+    "domain": "rates",
+    "actors": ["Federal Reserve", "Jerome Powell"],
+    "locations": ["United States"],
+    "channels": ["rates", "risk_sentiment", "equity"],
+    "first_order_assets": ["US equities (SPX, NDX)", "2-year Treasury", "10-year Treasury"],
+    "second_order_assets": ["USD", "gold", "credit spreads", "EM equities"],
+    "mechanism": "After five consecutive large hikes in 2022, the Fed introduced language acknowledging that tightening works with lags and that it would consider cumulative effects. Markets interpreted this as the beginning of a deceleration in the hiking pace, sparking a risk-on rotation and short-covering rally.",
+    "causal_chain": [
+      "Fed delivers 75bp hike November 2, 2022 (fourth consecutive 75bp)",
+      "statement includes 'cumulative tightening' and 'lags' language",
+      "markets interpret as pivot signal — terminal rate expectations pulled lower",
+      "equities rally sharply; 2-year Treasury yield begins to peak",
+      "December 2022 FOMC confirms deceleration to 50bp hike"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "medium",
+      "note": "Bullish risk assets (equities, credit) on pivot expectation; bearish USD; bullish gold; terminal rate expectations compress"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "SPX rallied ~14% from October 2022 lows to year-end. NDX up ~15% in Q4 2022. 2-year Treasury yield peaked in November 2022 (~4.75%). USD DXY declined from ~114 to ~104 by year-end.",
+      "chart_note": "Provisional — SPX and DXY charts confirm the Q4 2022 rally",
+      "priced_in_note": "Some pivot expectation building after October CPI print; FOMC language accelerated it",
+      "reversal_note": "Rally paused in early 2023 as Fed signaled higher-for-longer; terminal rate re-priced higher in Q1 2023"
+    },
+    "regime_tags": ["fed_pivot", "rates_peak", "risk_on", "equity_rally"],
+    "sources": [
+      {"title": "FOMC press release November 2, 2022", "publisher": "Federal Reserve", "url": null, "source_date": "2022-11-02", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]

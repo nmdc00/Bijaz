@@ -662,6 +662,85 @@ CREATE INDEX IF NOT EXISTS idx_alert_deliveries_status ON alert_deliveries(statu
 CREATE INDEX IF NOT EXISTS idx_alert_deliveries_created ON alert_deliveries(created_at);
 
 -- ============================================================================
+-- Causal Event Reasoning (v1.95)
+-- ============================================================================
+
+-- Normalized events: canonical representation of a market-moving occurrence.
+CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    event_key TEXT NOT NULL UNIQUE,   -- deterministic dedup key
+    title TEXT NOT NULL,
+    domain TEXT NOT NULL,             -- crypto, energy, agri, macro, equity, rates, fx, metals, other
+    occurred_at TEXT NOT NULL,        -- ISO8601 event timestamp (not ingest timestamp)
+    source_intel_ids TEXT,            -- JSON array of intel_items.id
+    tags TEXT,                        -- JSON array of mechanism/category tags
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded')),
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_event_key ON events(event_key);
+CREATE INDEX IF NOT EXISTS idx_events_domain ON events(domain);
+CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
+
+-- Versioned thought artifacts linked to events.
+CREATE TABLE IF NOT EXISTS event_thoughts (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL DEFAULT 1,
+    mechanism TEXT NOT NULL,          -- plain-text causal mechanism
+    causal_chain TEXT NOT NULL,       -- JSON array of ordered steps
+    impacted_assets TEXT NOT NULL,    -- JSON array of {symbol, direction, confidence}
+    invalidation_conditions TEXT,     -- JSON array of falsifier conditions
+    model_version TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_thoughts_event_id ON event_thoughts(event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_thoughts_event_version ON event_thoughts(event_id, version);
+
+-- Explicit asset/direction/horizon forecasts derived from thoughts.
+CREATE TABLE IF NOT EXISTS event_forecasts (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    thought_id TEXT NOT NULL REFERENCES event_thoughts(id) ON DELETE CASCADE,
+    asset TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('up', 'down', 'neutral')),
+    horizon_hours INTEGER NOT NULL CHECK(horizon_hours > 0),
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    invalidation_conditions TEXT,     -- JSON array
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'confirmed', 'invalidated', 'expired')),
+    expires_at TEXT NOT NULL,
+    resolved_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_forecasts_event_id ON event_forecasts(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_forecasts_thought_id ON event_forecasts(thought_id);
+CREATE INDEX IF NOT EXISTS idx_event_forecasts_status ON event_forecasts(status);
+CREATE INDEX IF NOT EXISTS idx_event_forecasts_asset ON event_forecasts(asset);
+CREATE INDEX IF NOT EXISTS idx_event_forecasts_open ON event_forecasts(expires_at) WHERE status = 'open';
+
+-- Outcome records: deferred resolution of forecasts.
+CREATE TABLE IF NOT EXISTS event_outcomes (
+    id TEXT PRIMARY KEY,
+    forecast_id TEXT NOT NULL REFERENCES event_forecasts(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN ('confirmed', 'invalidated', 'expired', 'error')),
+    resolution_note TEXT,
+    actual_direction TEXT NOT NULL CHECK(actual_direction IN ('up', 'down', 'neutral', 'unknown')),
+    resolution_price REAL,
+    resolved_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_outcomes_forecast_id ON event_outcomes(forecast_id);
+CREATE INDEX IF NOT EXISTS idx_event_outcomes_event_id ON event_outcomes(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_outcomes_resolution ON event_outcomes(resolution_status);
+
+-- ============================================================================
 -- Views
 -- ============================================================================
 

@@ -1,0 +1,202 @@
+[
+  {
+    "case_key": "2022-uk-truss-mini-budget-gilts",
+    "event_date": "2022-09-23",
+    "event_type": "sovereign_fiscal_shock",
+    "title": "UK Truss Mini-Budget → Gilt Crisis / GBP Flash Crash",
+    "summary": "Chancellor Kwasi Kwarteng's September 23, 2022 'mini-budget' announced £45B of unfunded tax cuts. Gilt markets sold off violently and GBP/USD collapsed to a record low near $1.035 on September 26, 2022. The BoE was forced into emergency gilt purchases to prevent pension fund collapse.",
+    "domain": "rates",
+    "actors": ["UK Treasury", "Kwasi Kwarteng", "Liz Truss", "Bank of England"],
+    "locations": ["United Kingdom"],
+    "channels": ["sovereign_spreads", "FX", "rates", "credit"],
+    "first_order_assets": ["UK gilts (30yr)", "GBP/USD"],
+    "second_order_assets": ["UK LDI pension funds", "UK equities", "UK mortgage rates"],
+    "mechanism": "The mini-budget was read as a fiscal credibility failure — unfunded cuts at a time of already-high inflation and rising global rates. Gilt yields spiked as markets priced in default risk / monetization risk. LDI pension funds with leveraged gilt positions faced margin calls, requiring emergency BoE intervention. GBP collapsed as confidence in UK fiscal management evaporated.",
+    "causal_chain": [
+      "September 23, 2022: mini-budget announces £45B in unfunded tax cuts",
+      "gilt markets sell off sharply; 30-year gilt yield spikes from ~3.5% toward 5%+",
+      "GBP/USD falls to record low ~1.035 on September 26",
+      "LDI pension funds face margin calls on leveraged gilt collateral",
+      "BoE announces emergency gilt purchase programme September 28",
+      "Kwarteng fired October 14; Truss resigns October 20"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bearish GBP; bearish gilts (higher yields); bearish UK equities; bullish BoE emergency intervention probability"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "GBP/USD hit ~1.035 on September 26, 2022. 30-year gilt yields spiked to ~5% before BoE intervention. Multiple pension funds faced insolvency risk. Kwarteng fired, Truss resigned within weeks.",
+      "chart_note": "Validated — GBP/USD and gilt yield charts confirm the crisis; extensively documented",
+      "priced_in_note": "Some fiscal risk priced after announcement; severity exceeded initial estimates",
+      "reversal_note": "Gilt yields recovered sharply after BoE intervention; GBP recovered to ~1.10+ after Truss resignation"
+    },
+    "regime_tags": ["fiscal_crisis", "gilt_selloff", "fx_crash", "sovereign_credibility"],
+    "sources": [
+      {"title": "UK mini-budget September 23, 2022", "publisher": "HM Treasury", "url": null, "source_date": "2022-09-23", "source_type": "event"},
+      {"title": "BoE emergency gilt purchase announcement", "publisher": "Bank of England", "url": null, "source_date": "2022-09-28", "source_type": "event"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2015-greece-capital-controls",
+    "event_date": "2015-06-28",
+    "event_type": "sovereign_crisis",
+    "title": "Greece Capital Controls and Referendum → Euro Tail Risk",
+    "summary": "Following the breakdown of bailout negotiations, Greece imposed capital controls on June 28, 2015, closed banks, and called a referendum. Markets repriced Euro break-up risk briefly, sending peripheral spreads wider and EUR lower. Greece ultimately stayed in the euro after accepting terms.",
+    "domain": "rates",
+    "actors": ["Greek government", "Alexis Tsipras", "ECB", "Eurogroup", "IMF"],
+    "locations": ["Greece", "Europe"],
+    "channels": ["sovereign_spreads", "credit_risk", "FX", "tail_risk"],
+    "first_order_assets": ["Greek government bonds", "EUR/USD"],
+    "second_order_assets": ["Italian BTPs", "Spanish Bonos", "European bank equities", "Greek equities (ASE)"],
+    "mechanism": "The collapse of talks and imposition of capital controls resurrected Euro break-up risk that had been suppressed since the 2012 Draghi speech. Markets briefly repriced the probability of Grexit, widening all peripheral spreads and weakening EUR. When Greece ultimately accepted the third bailout, spreads rapidly recompressed.",
+    "causal_chain": [
+      "Negotiations between Greece and creditors break down June 26, 2015",
+      "Capital controls imposed June 28; banks closed; ATM withdrawals capped at €60/day",
+      "Referendum called for July 5 — OXI (No) wins 61%",
+      "Euro peripheral spreads widen; EUR/USD falls; European bank stocks under pressure",
+      "After threats of Grexit, Greek parliament accepts third bailout July 13, 2015"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short"],
+      "confidence": "medium",
+      "note": "Bearish EUR and periphery during acute phase; tail risk of Grexit kept spreads wide; outcome binary on negotiation result"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Greek stock market closed for weeks; reopened down ~23% on July 20. Italian and Spanish spreads widened ~40–80bp briefly. EUR/USD fell from ~1.12 to ~1.08 during acute phase.",
+      "chart_note": "Provisional — EUR/USD and peripheral spread charts confirm the volatility pattern",
+      "priced_in_note": "Negotiations had been ongoing for months; capital controls were the cliff-edge event",
+      "reversal_note": "Once bailout accepted, spreads rapidly recompressed; EUR stabilized"
+    },
+    "regime_tags": ["sovereign_crisis", "euro_tail_risk", "capital_controls", "contagion"],
+    "sources": [
+      {"title": "Greek capital controls July 2015", "publisher": "Reuters", "url": null, "source_date": "2015-06-28", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2018-turkey-lira-crisis",
+    "event_date": "2018-08-10",
+    "event_type": "sovereign_crisis",
+    "title": "Turkey Lira Crisis → EM Contagion",
+    "summary": "Turkey's lira collapsed ~18% on August 10, 2018 after President Erdogan's refusal to raise rates despite 15%+ inflation, combined with US sanctions over a detained pastor. USD/TRY hit record highs, causing contagion to other EM currencies (ZAR, ARS, INR) and temporary stress in European banks with Turkish exposure.",
+    "domain": "fx",
+    "actors": ["Turkish government", "Erdogan", "TCMB (Turkish central bank)", "US government"],
+    "locations": ["Turkey", "Emerging Markets"],
+    "channels": ["FX", "EM_contagion", "sovereign_credit", "political_risk"],
+    "first_order_assets": ["TRY (Turkish lira)", "USD/TRY"],
+    "second_order_assets": ["Turkish sovereign bonds", "European banks with Turkey exposure (BBVA, UniCredit)", "ZAR", "ARS", "EM bond index"],
+    "mechanism": "Erdogan's unorthodox belief that high rates cause inflation rather than cure it prevented the TCMB from hiking aggressively. US sanctions doubled tariffs on Turkish steel/aluminum, adding pressure. The confluence of political pressure on central bank independence, current account deficit, and FX-denominated debt created a self-reinforcing lira collapse.",
+    "causal_chain": [
+      "Turkey runs large current account deficit funded by FX borrowing",
+      "Erdogan publicly pressures TCMB not to raise rates despite rising inflation",
+      "US announces tariffs on Turkish steel/aluminum August 10, 2018",
+      "TRY collapses ~18% in one session; USD/TRY hits 7.0+",
+      "EM contagion: ZAR, ARS, INR all weaken; European banks with Turkish exposure fall",
+      "TCMB finally hikes aggressively in September 2018, providing partial stabilization"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Bearish TRY; bearish EM basket; bearish European banks with Turkey exposure; gold may benefit from EM safe-haven demand"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "TRY fell from ~5.0 to ~7.0 against USD in August 2018. Turkish inflation hit 25% by October 2018. BBVA, UniCredit fell 5–10% on Turkey exposure fears.",
+      "chart_note": "Provisional — TRY chart confirms the crash; EM contagion charts confirm secondary effects",
+      "priced_in_note": "Some TRY weakness was priced; August 10 collapse was sharp relative to prior trend",
+      "reversal_note": "TRY stabilized temporarily after TCMB 625bp hike in September 2018; resumed weakening in 2021"
+    },
+    "regime_tags": ["em_crisis", "fx_crash", "central_bank_independence", "contagion"],
+    "sources": [
+      {"title": "Turkey lira crisis August 2018", "publisher": "Reuters", "url": null, "source_date": "2018-08-10", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2011-euro-sovereign-debt-crisis-peak",
+    "event_date": "2011-11-09",
+    "event_type": "sovereign_crisis",
+    "title": "Euro Sovereign Debt Crisis Peak → Italy 7% Yield Threshold",
+    "summary": "Italian 10-year bond yields crossed 7% on November 9, 2011 — the level at which Greece, Ireland, and Portugal had required bailouts — triggering fears of a systemic Euro break-up. Berlusconi resigned shortly after; the crisis was eventually stabilized by ECB intervention.",
+    "domain": "rates",
+    "actors": ["Italian government", "ECB", "Berlusconi", "Eurogroup", "IMF"],
+    "locations": ["Italy", "Europe"],
+    "channels": ["sovereign_spreads", "credit_risk", "contagion", "tail_risk"],
+    "first_order_assets": ["Italian BTPs (10yr)", "EUR/USD"],
+    "second_order_assets": ["Spanish Bonos", "French OATs", "European bank equities", "EUR/CHF"],
+    "mechanism": "Italy's combination of high public debt (~120% GDP), low growth, and political dysfunction created a self-reinforcing dynamic: higher yields → higher refinancing costs → worse fiscal outlook → higher yields. The 7% level was the psychological threshold investors used to gauge bailout necessity; Italy was too large to bail out under existing facilities.",
+    "causal_chain": [
+      "European sovereign debt crisis spreads from Greece to Ireland, Portugal through 2010-2011",
+      "Italian political dysfunction (Berlusconi scandals) undermines reform credibility",
+      "Italian 10-year yield breaks through 7% on November 9, 2011",
+      "Berlusconi resigns November 12, 2011; replaced by technocrat Monti",
+      "ECB accelerates SMP (Securities Markets Programme) bond purchases to cap yields",
+      "Yields stay elevated until Draghi's July 2012 'whatever it takes' speech"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish Italian and Spanish bonds; bearish EUR; bearish European banks; elevated tail risk of Euro break-up"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "Italian 10-year yields hit 7.5% by end of 2011. EUR/USD fell from ~1.40 to ~1.20 by mid-2012. European bank stocks fell 30–50% through the crisis. Stabilization came only with Draghi's July 2012 intervention.",
+      "chart_note": "Provisional — Italian BTP yield charts and EUR/USD charts confirm the crisis trajectory",
+      "priced_in_note": "Rising yields were already a trend; 7% was the key psychological threshold that triggered forced selling",
+      "reversal_note": "Yields began recovering after Draghi 'whatever it takes'; BTP 10yr fell below 4% by end of 2012"
+    },
+    "regime_tags": ["sovereign_crisis", "euro_periphery", "rates_shock", "contagion"],
+    "sources": [
+      {"title": "Italian bond yields and Euro crisis 2011", "publisher": "ECB", "url": null, "source_date": "2011-11", "source_type": "secondary_context"}
+    ],
+    "validation_status": "provisional"
+  },
+  {
+    "case_key": "2018-argentina-imf-crisis",
+    "event_date": "2018-05-01",
+    "event_type": "sovereign_crisis",
+    "title": "Argentina Peso Crisis → IMF Emergency Loan",
+    "summary": "Argentina's peso fell sharply from May 2018 as capital flight accelerated, forcing the government to seek an IMF emergency credit line of $50B. The peso lost ~50% of its value against USD in 2018. Argentina's central bank was forced to hike rates to 60%+ to stem outflows.",
+    "domain": "fx",
+    "actors": ["Argentine government", "Mauricio Macri", "BCRA (Argentine central bank)", "IMF"],
+    "locations": ["Argentina", "Latin America"],
+    "channels": ["FX", "sovereign_credit", "EM_contagion", "rates"],
+    "first_order_assets": ["ARS (Argentine peso)", "Argentine sovereign bonds"],
+    "second_order_assets": ["BRL", "EM currencies basket", "Argentine equities"],
+    "mechanism": "Argentina's large fiscal deficit, high USD-denominated debt, and reliance on foreign capital made it vulnerable to the 2018 global EM selloff triggered by Fed tightening and a rising USD. The government's credibility gap — Macri had tried to gradually reduce subsidies but lacked market confidence — led to self-fulfilling capital flight.",
+    "causal_chain": [
+      "Fed tightening in 2018 strengthens USD, pressures EM currencies",
+      "Argentina faces large refinancing need with thinning external buffer",
+      "Peso begins depreciating rapidly from April 2018",
+      "BCRA hikes rates to 40% in May 2018 to stem outflows — insufficient",
+      "Argentina requests IMF standby arrangement May 8, 2018 — $50B facility agreed June",
+      "Peso continues depreciating; BCRA hikes to 60% by September 2018"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish ARS; bearish Argentine sovereign bonds; bearish Latin American EM basket on contagion risk"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "ARS fell from ~20 to ~40 per USD through 2018 (~50% depreciation). Argentine sovereign bonds traded at distressed levels. BCRA hiked to 60%. Argentina went on to default in 2020.",
+      "chart_note": "Provisional — ARS/USD chart confirms the depreciation trajectory",
+      "priced_in_note": "Some ARS weakness anticipated; pace and extent of collapse exceeded most forecasts",
+      "reversal_note": "No sustained recovery; ARS continued weakening through 2019 before default in 2020"
+    },
+    "regime_tags": ["em_crisis", "fx_crash", "imf_bailout", "sovereign_debt"],
+    "sources": [
+      {"title": "Argentina IMF standby arrangement 2018", "publisher": "IMF", "url": null, "source_date": "2018-06", "source_type": "event"}
+    ],
+    "validation_status": "provisional"
+  }
+]
