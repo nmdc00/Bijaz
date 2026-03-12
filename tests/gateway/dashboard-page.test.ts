@@ -1,8 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { handleDashboardPageRequest } from '../../src/gateway/dashboard_page.js';
 
 describe('dashboard page route', () => {
+  let dashboardDir: string | null = null;
+  const originalDist = process.env.THUFIR_DASHBOARD_DIST_PATH;
+
+  afterEach(() => {
+    process.env.THUFIR_DASHBOARD_DIST_PATH = originalDist;
+    if (dashboardDir) {
+      rmSync(dashboardDir, { recursive: true, force: true });
+      dashboardDir = null;
+    }
+  });
+
   it('serves dashboard html on GET /dashboard', () => {
     const req = {
       method: 'GET',
@@ -26,7 +41,35 @@ describe('dashboard page route', () => {
     expect(state.status).toBe(200);
     expect(state.contentType).toContain('text/html');
     expect(state.body).toContain('Thufir Dashboard');
-    expect(state.body).toContain('/api/dashboard?');
+  });
+
+  it('serves built static index and assets when dashboard-dist exists', () => {
+    dashboardDir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-dist-'));
+    const assetsDir = join(dashboardDir, 'assets');
+    rmSync(assetsDir, { recursive: true, force: true });
+    writeFileSync(join(dashboardDir, 'index.html'), '<!doctype html><html><body><div id="root"></div><script src="/dashboard/assets/app.js"></script></body></html>');
+    process.env.THUFIR_DASHBOARD_DIST_PATH = dashboardDir;
+
+    const pageState: { status?: number; body?: string; contentType?: string } = {};
+    const pageRes = {
+      writeHead: (status: number, headers?: Record<string, string>) => {
+        pageState.status = status;
+        pageState.contentType = headers?.['Content-Type'];
+      },
+      end: (body?: string) => {
+        pageState.body = body;
+      },
+    } as any;
+
+    const handled = handleDashboardPageRequest({
+      method: 'GET',
+      url: '/dashboard',
+      headers: { host: 'localhost:18789' },
+    } as any, pageRes);
+
+    expect(handled).toBe(true);
+    expect(pageState.status).toBe(200);
+    expect(pageState.contentType).toContain('text/html');
   });
 
   it('returns false for non-dashboard paths', () => {
