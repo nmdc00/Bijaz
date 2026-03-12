@@ -220,4 +220,124 @@ describe('web search provider resilience', () => {
     expect(second.data.provider).toBe('duckduckgo');
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it('tavily succeeds with valid API key and returns results', async () => {
+    process.env.TAVILY_API_KEY = 'tvly-test-key';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          { title: 'BTC News', url: 'https://example.com/btc', content: 'Bitcoin update', published_date: '2024-01-01' },
+          { title: 'ETH Analysis', url: 'https://example.com/eth', content: 'Ethereum analysis', published_date: null },
+        ],
+      }),
+    });
+    // @ts-expect-error test mock
+    globalThis.fetch = fetchMock;
+
+    const cfg = {
+      ...baseConfig,
+      intel: {
+        ...baseConfig.intel,
+        webSearch: {
+          ...baseConfig.intel.webSearch,
+          providers: { order: ['tavily'], tavily: { enabled: true } },
+        },
+      },
+    };
+
+    const result = await resilientWebSearch('btc news', 3, cfg as any);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.provider).toBe('tavily');
+    expect(result.data.results[0]?.title).toBe('BTC News');
+    expect(result.data.results[0]?.url).toBe('https://example.com/btc');
+    expect(result.data.results[0]?.snippet).toBe('Bitcoin update');
+    expect(result.data.results[0]?.date).toBe('2024-01-01');
+    // Tavily uses POST
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.tavily.com/search');
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body as string);
+    expect(body.query).toBe('btc news');
+    expect(body.api_key).toBe('tvly-test-key');
+  });
+
+  it('tavily is skipped when API key is missing and falls back to next provider', async () => {
+    delete process.env.TAVILY_API_KEY;
+    process.env.BRAVE_API_KEY = 'brave-key';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        web: { results: [{ title: 'Brave Result', url: 'https://brave.example', description: 'ok' }] },
+      }),
+    });
+    // @ts-expect-error test mock
+    globalThis.fetch = fetchMock;
+
+    const cfg = {
+      ...baseConfig,
+      intel: {
+        ...baseConfig.intel,
+        webSearch: {
+          ...baseConfig.intel.webSearch,
+          providers: { order: ['tavily', 'brave'], tavily: { enabled: true }, brave: { enabled: true } },
+        },
+      },
+    };
+
+    const result = await resilientWebSearch('eth news', 3, cfg as any);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.provider).toBe('brave');
+    // Tavily was skipped (misconfigured), brave was tried
+    const tavilyAttempt = result.data.attempts.find((a) => a.provider === 'tavily');
+    expect(tavilyAttempt?.status).toBe('failed');
+    expect(tavilyAttempt?.error_class).toBe('provider_misconfigured');
+    // fetch only called once (for brave, not for tavily since key absent)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('tavily handles non-ok HTTP response and falls back', async () => {
+    process.env.TAVILY_API_KEY = 'tvly-test-key';
+    process.env.SERPAPI_KEY = 'serp-key';
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('tavily.com')) {
+        return Promise.resolve({ ok: false, status: 401 });
+      }
+      if (url.includes('serpapi.com')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            organic_results: [{ title: 'serp', link: 'https://serp.example', snippet: 'ok' }],
+          }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 500 });
+    });
+    // @ts-expect-error test mock
+    globalThis.fetch = fetchMock;
+
+    const cfg = {
+      ...baseConfig,
+      intel: {
+        ...baseConfig.intel,
+        webSearch: {
+          ...baseConfig.intel.webSearch,
+          providers: {
+            order: ['tavily', 'serpapi'],
+            tavily: { enabled: true },
+            serpapi: { enabled: true },
+          },
+        },
+      },
+    };
+
+    const result = await resilientWebSearch('sol setup', 3, cfg as any);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.provider).toBe('serpapi');
+    const tavilyAttempt = result.data.attempts.find((a) => a.provider === 'tavily');
+    expect(tavilyAttempt?.status).toBe('failed');
+  });
 });
