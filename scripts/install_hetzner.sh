@@ -77,6 +77,10 @@ export PATH="${BUN_INSTALL}/bin:${PATH}"
 
 echo "Installing QMD (local knowledge search)..."
 bun install -g github:tobi/qmd || echo "Warning: QMD install failed, will retry after deploy"
+if [[ -x "${PWD}/scripts/patch_qmd_safe_query.sh" ]]; then
+  echo "Patching QMD safe query mode..."
+  "${PWD}/scripts/patch_qmd_safe_query.sh" || true
+fi
 
 echo "Cloning/updating repo..."
 sudo mkdir -p "${INSTALL_PATH}"
@@ -91,6 +95,10 @@ cd "${INSTALL_PATH}"
 printf "a\ny\n" | pnpm approve-builds
 pnpm install
 pnpm build
+if [[ -x "./scripts/patch_qmd_safe_query.sh" ]]; then
+  echo "Re-patching QMD safe query mode from deployed repo..."
+  ./scripts/patch_qmd_safe_query.sh || true
+fi
 
 echo "Writing .env..."
 cat > "${INSTALL_PATH}/.env" <<EOF
