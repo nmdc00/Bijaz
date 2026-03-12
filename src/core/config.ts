@@ -116,6 +116,14 @@ const ConfigSchema = z.object({
         storagePath: z.string().optional(),
       })
       .default({}),
+    promptBudget: z
+      .object({
+        enrichment: z.number().default(10000),
+        autonomous: z.number().default(60000),
+        trivial: z.number().default(10000),
+        chat: z.number().default(120000),
+      })
+      .default({}),
     provider: z.enum(['anthropic', 'openai', 'local']).default('anthropic'),
     apiBaseUrl: z.string().optional(),
     localBaseUrl: z.string().optional(),
@@ -446,8 +454,8 @@ const ConfigSchema = z.object({
           providers: z
             .object({
               order: z
-                .array(z.enum(['brave', 'perplexity', 'serpapi', 'duckduckgo']))
-                .default(['brave', 'serpapi', 'duckduckgo']),
+                .array(z.enum(['brave', 'perplexity', 'serpapi', 'duckduckgo', 'tavily']))
+                .default(['tavily', 'brave', 'serpapi', 'duckduckgo']),
               brave: z
                 .object({
                   enabled: z.boolean().default(true),
@@ -472,6 +480,13 @@ const ConfigSchema = z.object({
               duckduckgo: z
                 .object({
                   enabled: z.boolean().default(true),
+                  baseUrl: z.string().optional(),
+                })
+                .default({}),
+              tavily: z
+                .object({
+                  enabled: z.boolean().default(true),
+                  apiKey: z.string().optional(),
                   baseUrl: z.string().optional(),
                 })
                 .default({}),
@@ -766,6 +781,15 @@ const ConfigSchema = z.object({
           blockBelowScore: z.number().default(0.45),
           downweightBelowScore: z.number().default(0.6),
           downweightMultiplier: z.number().default(0.6),
+        })
+        .default({}),
+      adaptiveEdge: z
+        .object({
+          enabled: z.boolean().default(true),
+          priorEdge: z.number().min(0).max(1).default(0.015),
+          minSamples: z.number().int().min(1).default(10),
+          signalScaleFactor: z.number().min(0).max(1).default(0.5),
+          decayHalfLifeDays: z.number().positive().nullable().default(null),
         })
         .default({}),
       asyncEnrichment: z

@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import fetch from 'node-fetch';
 
 import type { ThufirConfig } from './config.js';
-import { THUFIR_TOOLS } from './tool-schemas.js';
+import { THUFIR_TOOLS, getToolsForSubset, type ToolSubset } from './tool-schemas.js';
 import { executeToolCall, type ToolExecutorContext } from './tool-executor.js';
 import { Logger } from './logger.js';
 import {
@@ -58,7 +58,22 @@ export interface LlmClient {
   meta?: LlmClientMeta;
 }
 
-function resolveIdentityPromptMode(
+export function resolveMaxPromptChars(config: ThufirConfig, meta?: LlmClientMeta): number {
+  const budget = config.agent?.promptBudget;
+  if (meta?.kind === 'trivial') {
+    return budget?.trivial ?? 10000;
+  }
+  const ctx = getExecutionContext();
+  if (ctx?.reason === 'autonomous_async_execution_enrichment') {
+    return budget?.enrichment ?? 10000;
+  }
+  if (ctx?.source === 'autonomous') {
+    return budget?.autonomous ?? 60000;
+  }
+  return budget?.chat ?? config.agent?.maxPromptChars ?? 120000;
+}
+
+export function resolveIdentityPromptMode(
   config: ThufirConfig,
   kind?: LlmClientMeta['kind']
 ): 'full' | 'minimal' | 'none' {
@@ -72,12 +87,38 @@ function isDebugEnabled(): boolean {
   return (process.env.THUFIR_LOG_LEVEL ?? '').toLowerCase() === 'debug';
 }
 
-function finalizeMessages(
+export function finalizeMessages(
   messages: ChatMessage[],
   config: ThufirConfig,
   meta?: LlmClientMeta
 ): ChatMessage[] {
   const promptMode = resolveIdentityPromptMode(config, meta?.kind);
+
+  // Skip identity injection entirely for 'none' mode (trivial/internal calls)
+  if (promptMode === 'none') {
+    const sanitized = messages.map((msg) => {
+      if (
+        msg.role === 'user' &&
+        typeof msg.content === 'string' &&
+        looksLikeToolOutput(msg.content)
+      ) {
+        return {
+          ...msg,
+          content: sanitizeUntrustedText(
+            msg.content,
+            config.agent?.maxToolResultChars ?? 8000
+          ),
+        };
+      }
+      return msg;
+    });
+    return trimMessagesByCharBudget(
+      sanitized,
+      resolveMaxPromptChars(config, meta),
+      config.agent?.maxToolResultChars ?? 8000
+    );
+  }
+
   const identityConfig = {
     workspacePath: config.agent?.workspace,
     bootstrapMaxChars: config.agent?.identityBootstrapMaxChars,
@@ -132,7 +173,7 @@ function finalizeMessages(
 
   const trimmed = trimMessagesByCharBudget(
     withSystem,
-    config.agent?.maxPromptChars ?? 120000,
+    resolveMaxPromptChars(config, meta),
     config.agent?.maxToolResultChars ?? 8000
   );
 
@@ -371,13 +412,13 @@ export function createLlmClient(config: ThufirConfig): LlmClient {
   assertLocalProviderNotAllowed(config.agent.provider, 'primary LLM usage');
   switch (config.agent.provider) {
     case 'anthropic':
-      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+      return wrapWithLimiter(createAnthropicClientWithFallback(config));
     case 'openai':
       return wrapWithLimiter(wrapWithInfra(new OpenAiClient(config), config));
     case 'local':
       return wrapWithLimiter(wrapWithInfra(new LocalClient(config), config));
     default:
-      return wrapWithLimiter(wrapWithInfra(createAnthropicClientWithFallback(config), config));
+      return wrapWithLimiter(createAnthropicClientWithFallback(config));
   }
 }
 
@@ -414,7 +455,8 @@ export function createExecutorClient(
 export function createAgenticExecutorClient(
   config: ThufirConfig,
   toolContext: ToolExecutorContext,
-  modelOverride?: string
+  modelOverride?: string,
+  toolSubset?: ToolSubset
 ): LlmClient {
   const provider = config.agent.executorProvider ?? 'openai';
   assertLocalProviderNotAllowed(provider, 'agentic executor usage');
@@ -424,14 +466,19 @@ export function createAgenticExecutorClient(
     config.agent.openaiModel ??
     config.agent.model;
   if (provider === 'anthropic') {
-    const primary = new AgenticAnthropicClient(config, toolContext, model);
+    const primary = new AgenticAnthropicClient(config, toolContext, model, toolSubset);
     const fallbackModel = config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
-    const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel);
+    const fallback = new AgenticAnthropicClient(config, toolContext, fallbackModel, toolSubset);
     return wrapWithLimiter(
-      wrapWithInfra(new FallbackLlmClient(primary, fallback, isRateLimitError, config), config)
+      new FallbackLlmClient(
+        wrapWithInfra(primary, config),
+        wrapWithInfra(fallback, config),
+        isRateLimitError,
+        config
+      )
     );
   }
-  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model), config));
+  return wrapWithLimiter(wrapWithInfra(new AgenticOpenAiClient(config, toolContext, model, toolSubset), config));
 }
 
 export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null {
@@ -486,16 +533,17 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
     };
 
     const primary = new TrivialTaskClient(guarded, localDefaults);
-    // Under llm-mux proxy, OpenAI requests may be unsupported; use Anthropic as the default remote fallback.
     const fallbackRemote =
-      config.agent.provider === 'anthropic' || config.agent.useProxy
+      config.agent.provider === 'anthropic'
         ? new AnthropicClient(config, config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022', 'trivial')
         : new OpenAiClient(config, config.agent.openaiModel ?? config.agent.model, 'trivial');
     const fallback = new TrivialTaskClient(fallbackRemote, fallbackDefaults);
 
     return wrapWithLimiter(
-      wrapWithInfra(
-        new FallbackLlmClient(primary, fallback, () => true, config),
+      new FallbackLlmClient(
+        wrapWithInfra(primary, config),
+        wrapWithInfra(fallback, config),
+        () => true,
         config
       )
     );
@@ -957,12 +1005,14 @@ export class AgenticAnthropicClient implements LlmClient {
   private client: Anthropic;
   private model: string;
   private toolContext: ToolExecutorContext;
+  private toolSubset: ToolSubset;
   meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
     toolContext: ToolExecutorContext,
-    modelOverride?: string
+    modelOverride?: string,
+    toolSubset?: ToolSubset
   ) {
     const baseURL = resolveAnthropicBaseUrl(config);
     this.client = new Anthropic({
@@ -971,6 +1021,7 @@ export class AgenticAnthropicClient implements LlmClient {
     });
     this.model = modelOverride ?? config.agent.model;
     this.toolContext = toolContext;
+    this.toolSubset = toolSubset ?? 'full';
     this.meta = { provider: 'anthropic', model: this.model, kind: 'agentic' };
   }
 
@@ -1008,7 +1059,7 @@ export class AgenticAnthropicClient implements LlmClient {
         temperature,
         system: systemPrompt,
         messages: anthropicMessages,
-        tools: THUFIR_TOOLS,
+        tools: getToolsForSubset(this.toolSubset),
       });
 
       const toolUseBlocks = response.content.filter(
@@ -1148,18 +1199,21 @@ export class AgenticOpenAiClient implements LlmClient {
   private toolContext: ToolExecutorContext;
   private includeTemperature: boolean;
   private useResponsesApi: boolean;
+  private toolSubset: ToolSubset;
   meta?: LlmClientMeta;
 
   constructor(
     config: ThufirConfig,
     toolContext: ToolExecutorContext,
-    modelOverride?: string
+    modelOverride?: string,
+    toolSubset?: ToolSubset
   ) {
     this.model = resolveOpenAiModel(config, modelOverride);
     this.baseUrl = resolveOpenAiBaseUrl(config);
     this.toolContext = toolContext;
     this.includeTemperature = !config.agent.useProxy;
     this.useResponsesApi = config.agent.useResponsesApi ?? config.agent.useProxy;
+    this.toolSubset = toolSubset ?? 'full';
     this.meta = { provider: 'openai', model: this.model, kind: 'agentic' };
   }
 
@@ -1183,7 +1237,8 @@ export class AgenticOpenAiClient implements LlmClient {
       content: msg.content,
     }));
 
-    const tools: OpenAiTool[] = THUFIR_TOOLS.map((tool) => ({
+    const scopedTools = getToolsForSubset(this.toolSubset);
+    const tools: OpenAiTool[] = scopedTools.map((tool) => ({
       type: 'function',
       function: {
         name: tool.name,
@@ -1213,22 +1268,27 @@ export class AgenticOpenAiClient implements LlmClient {
                     .join('\n\n---\n\n') || undefined,
                   input: openaiMessages
                     .filter((msg) => msg.role !== 'system')
-                    .map((msg) => ({
-                      role: msg.role,
-                      content:
-                        msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls
-                          ? msg.tool_calls.map((call) => ({
-                              type: 'function_call',
-                              name: call.function.name,
-                              arguments: call.function.arguments,
-                            }))
-                          : [{ type: 'text', text: msg.content ?? '' }],
-                    })),
-                  tools: THUFIR_TOOLS.map((tool) => ({
+                    .flatMap((msg): unknown[] => {
+                      if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
+                        return msg.tool_calls.map((call) => ({
+                          type: 'function_call',
+                          name: call.function.name,
+                          arguments: call.function.arguments,
+                          call_id: call.id,
+                        }));
+                      }
+                      if (msg.role === 'tool') {
+                        return [{ type: 'function_call_output', call_id: (msg as any).tool_call_id, output: msg.content ?? '' }];
+                      }
+                      return [{ role: msg.role, content: [{ type: 'input_text', text: msg.content ?? '' }] }];
+                    }),
+                  tools: scopedTools.map((tool) => ({
                     type: 'function',
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: tool.input_schema as Record<string, unknown>,
+                    function: {
+                      name: tool.name,
+                      description: tool.description,
+                      parameters: tool.input_schema as Record<string, unknown>,
+                    },
                   })),
                 }
               : {
@@ -1279,20 +1339,24 @@ export class AgenticOpenAiClient implements LlmClient {
 
       if (this.useResponsesApi) {
         const root = data.response ?? data;
-        const contentParts =
-          root.output?.flatMap((item) => (Array.isArray(item.content) ? item.content : [])) ?? [];
-        const toolCalls = contentParts
-          .filter((part) => part.type === 'function_call')
-          .map((part) => ({
-            id: 'call_id' in part && part.call_id ? part.call_id : `call_${Date.now()}`,
+        const outputItems = root.output ?? [];
+        // In Responses API, function calls are top-level output items (not nested in content)
+        const toolCalls = outputItems
+          .filter((item) => item.type === 'function_call')
+          .map((item) => ({
+            id: 'call_id' in item && (item as any).call_id ? (item as any).call_id : `call_${Date.now()}`,
             type: 'function' as const,
             function: {
-              name: (part as { name: string }).name,
-              arguments: (part as { arguments: string }).arguments,
+              name: (item as any).name,
+              arguments: (item as any).arguments,
             },
           }));
 
         if (toolCalls.length === 0) {
+          // Text content lives inside message items' content arrays
+          const contentParts = outputItems.flatMap((item) =>
+            item.type === 'message' && Array.isArray(item.content) ? item.content : []
+          );
           const text = contentParts
             .filter((part) => part.type === 'output_text')
             .map((part) => (part as { text?: string }).text ?? '')
@@ -1466,7 +1530,7 @@ class OpenAiClient implements LlmClient {
                   .filter((msg) => msg.role !== 'system')
                   .map((msg) => ({
                     role: msg.role,
-                    content: [{ type: 'text', text: msg.content }],
+                    content: [{ type: 'input_text', text: msg.content }],
                   })),
               }
             : {
@@ -1587,6 +1651,7 @@ export class FallbackLlmClient implements LlmClient {
     private config?: ThufirConfig,
     logger?: Logger
   ) {
+    this.meta = primary.meta;
     this.logger = logger ?? new Logger('info');
   }
 
@@ -1695,5 +1760,12 @@ function createAnthropicClientWithFallback(config: ThufirConfig): LlmClient {
   const fallbackModel =
     config.agent.fallbackModel ?? 'claude-3-5-haiku-20241022';
   const fallback = new AnthropicClient(config, fallbackModel);
-  return new FallbackLlmClient(primary, fallback, isRateLimitError, config);
+  // Wrap each leg individually so InfraLlmClient tracks cooldowns per real client,
+  // not against the FallbackLlmClient wrapper (which had no meta → defaulted to openai:unknown).
+  return new FallbackLlmClient(
+    wrapWithInfra(primary, config),
+    wrapWithInfra(fallback, config),
+    isRateLimitError,
+    config
+  );
 }

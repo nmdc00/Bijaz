@@ -58,10 +58,11 @@ import { JSDOM } from 'jsdom';
 import { isIP } from 'node:net';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, access } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { constants as fsConstants } from 'node:fs';
 
 const execAsync = promisify(exec);
 
@@ -3878,10 +3879,36 @@ async function fetchAndExtract(url: string, maxChars: number): Promise<ToolResul
 /**
  * Check if QMD is available on the system.
  */
+async function resolveQmdCommand(): Promise<string | null> {
+  const candidates = [
+    process.env.QMD_BIN,
+    'qmd',
+    join(homedir(), '.local', 'bin', 'qmd'),
+    join(homedir(), '.bun', 'bin', 'qmd'),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      if (candidate.includes('/')) {
+        await access(candidate, fsConstants.X_OK);
+      } else {
+        await execAsync(`${candidate} --version`);
+      }
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 async function isQmdAvailable(): Promise<boolean> {
   try {
-    await execAsync('qmd --version');
-    return true;
+    return (await resolveQmdCommand()) !== null;
   } catch {
     return false;
   }
@@ -3922,6 +3949,10 @@ async function qmdQuery(
   if (!available) {
     return { success: false, error: 'QMD is not installed. Run: bun install -g github:tobi/qmd' };
   }
+  const qmdCommand = await resolveQmdCommand();
+  if (!qmdCommand) {
+    return { success: false, error: 'QMD is not installed. Run: bun install -g github:tobi/qmd' };
+  }
 
   try {
     const args = [mode, JSON.stringify(query), '--format', 'json', '--limit', String(limit)];
@@ -3929,7 +3960,7 @@ async function qmdQuery(
       args.push('--collection', collection);
     }
 
-    const { stdout, stderr } = await execAsync(`qmd ${args.join(' ')}`, {
+    const { stdout, stderr } = await execAsync(`${JSON.stringify(qmdCommand)} ${args.join(' ')}`, {
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -3985,6 +4016,10 @@ async function qmdIndex(
   if (!available) {
     return { success: false, error: 'QMD is not installed. Run: bun install -g github:tobi/qmd' };
   }
+  const qmdCommand = await resolveQmdCommand();
+  if (!qmdCommand) {
+    return { success: false, error: 'QMD is not installed. Run: bun install -g github:tobi/qmd' };
+  }
 
   const knowledgePath = getQmdKnowledgePath(ctx);
 
@@ -4010,7 +4045,7 @@ async function qmdIndex(
 
     // Run qmd embed to update embeddings
     try {
-      await execAsync(`qmd embed --collection ${collection}`, {
+      await execAsync(`${JSON.stringify(qmdCommand)} embed --collection ${collection}`, {
         timeout: 60000,
       });
     } catch {

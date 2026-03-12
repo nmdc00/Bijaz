@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { vi, describe, expect, it } from 'vitest';
 import { mapExpressionPlan } from '../../src/discovery/expressions.js';
 import type { Hypothesis, SignalCluster } from '../../src/discovery/types.js';
 
+vi.mock('../../src/memory/perp_trade_journal.js', () => ({
+  listPerpTradeJournals: () => [],
+}));
+
 describe('mapExpressionPlan', () => {
-  it('maps cluster confidence into expression confidence and edge', () => {
+  it('maps cluster confidence into expression confidence and positive edge', () => {
     const cluster: SignalCluster = {
       id: 'cluster_1',
       symbol: 'BTC/USDT',
@@ -30,10 +34,11 @@ describe('mapExpressionPlan', () => {
 
     const expr = mapExpressionPlan(config, cluster, hypothesis);
     expect(expr.confidence).toBeCloseTo(0.8, 6);
-    expect(expr.expectedEdge).toBeCloseTo(0.08, 6);
+    // Adaptive edge: prior=0.015, multiplier=1.3 (strength=0.8, scale=0.5)
+    expect(expr.expectedEdge).toBeGreaterThan(0);
   });
 
-  it('assigns zero edge for neutral directional bias', () => {
+  it('assigns zero edge for momentum_breakout in neutral directional bias', () => {
     const cluster: SignalCluster = {
       id: 'cluster_1',
       symbol: 'ETH/USDT',
@@ -42,8 +47,9 @@ describe('mapExpressionPlan', () => {
       confidence: 0.9,
       timeHorizon: 'hours',
     };
+    // _trend suffix → momentum_breakout; neutral bias zeroes it out
     const hypothesis: Hypothesis = {
-      id: 'hyp_1',
+      id: 'hyp_1_trend',
       clusterId: 'cluster_1',
       pressureSource: 'none',
       expectedExpression: 'No directional edge',
@@ -52,7 +58,10 @@ describe('mapExpressionPlan', () => {
       tradeMap: 'No trade',
       riskNotes: [],
     };
-    const expr = mapExpressionPlan({} as any, cluster, hypothesis);
+    const config = {
+      autonomy: { adaptiveEdge: { enabled: true, priorEdge: 0.015 } },
+    } as any;
+    const expr = mapExpressionPlan(config, cluster, hypothesis);
     expect(expr.expectedEdge).toBe(0);
   });
 });

@@ -8,6 +8,18 @@ const SUSPICIOUS_PATTERNS = [
   /\bdeveloper message\b/i,
   /begin system prompt/i,
   /end system prompt/i,
+  /your name is/i,
+  /you are now/i,
+  /from now on/i,
+  /new instructions/i,
+  /forget (everything|your|all|previous)/i,
+  /respond as/i,
+  /roleplay as/i,
+  /pretend (to be|you are)/i,
+  /disregard (all|previous|your)/i,
+  /\boverride\b/i,
+  /\byou must now\b/i,
+  /\bdo not identify as\b/i,
 ];
 
 export function sanitizeUntrustedText(text: string, maxChars = DEFAULT_MAX_CHARS): string {
