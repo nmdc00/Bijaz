@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,5 +58,92 @@ describe('SessionStore', () => {
     store.getSessionId('user-b');
     const sessions = store.listSessions();
     expect(sessions.length).toBe(2);
+  });
+
+  it('skips compaction when the llm is a local trivial client', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-sessions-'));
+    const config = {
+      memory: { sessionsPath: dir, maxHistoryMessages: 2, compactAfterTokens: 1, keepRecentMessages: 1 },
+    } as any;
+    const llm = {
+      meta: { provider: 'local', model: 'qwen2.5:1.5b-instruct', kind: 'trivial' },
+      complete: vi.fn(async () => ({ content: 'Summary text', model: 'test' })),
+    };
+
+    const store = new SessionStore(config);
+    const userId = 'user-1';
+    store.appendEntry(userId, {
+      type: 'message',
+      role: 'user',
+      content: 'Hello world',
+      timestamp: new Date().toISOString(),
+    });
+    store.appendEntry(userId, {
+      type: 'message',
+      role: 'assistant',
+      content: 'Hi there',
+      timestamp: new Date().toISOString(),
+    });
+    store.appendEntry(userId, {
+      type: 'message',
+      role: 'user',
+      content: 'More history',
+      timestamp: new Date().toISOString(),
+    });
+
+    await store.compactIfNeeded({
+      userId,
+      llm: llm as any,
+      maxMessages: 2,
+      compactAfterTokens: 1,
+      keepRecent: 1,
+    });
+
+    expect(llm.complete).not.toHaveBeenCalled();
+    expect(store.getSummary(userId)).toBeUndefined();
+  });
+
+  it('does not throw when non-critical compaction fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-sessions-'));
+    const config = {
+      memory: { sessionsPath: dir, maxHistoryMessages: 2, compactAfterTokens: 1, keepRecentMessages: 1 },
+    } as any;
+    const llm = {
+      complete: vi.fn(async () => {
+        throw new Error('timed out');
+      }),
+    };
+
+    const store = new SessionStore(config);
+    const userId = 'user-1';
+    store.appendEntry(userId, {
+      type: 'message',
+      role: 'user',
+      content: 'Hello world',
+      timestamp: new Date().toISOString(),
+    });
+    store.appendEntry(userId, {
+      type: 'message',
+      role: 'assistant',
+      content: 'Hi there',
+      timestamp: new Date().toISOString(),
+    });
+    store.appendEntry(userId, {
+      type: 'message',
+      role: 'user',
+      content: 'More history',
+      timestamp: new Date().toISOString(),
+    });
+
+    await expect(
+      store.compactIfNeeded({
+        userId,
+        llm: llm as any,
+        maxMessages: 2,
+        compactAfterTokens: 1,
+        keepRecent: 1,
+      })
+    ).resolves.toBeUndefined();
+    expect(store.getSummary(userId)).toBeUndefined();
   });
 });

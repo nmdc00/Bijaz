@@ -164,6 +164,9 @@ export class SessionStore {
     keepRecent: number;
   }): Promise<void> {
     const { userId, llm, maxMessages, compactAfterTokens, keepRecent } = params;
+    if (llm.meta?.provider === 'local' && llm.meta?.kind === 'trivial') {
+      return;
+    }
     const entries = this.listMessageEntries(userId);
     if (entries.length <= maxMessages) {
       return;
@@ -194,17 +197,22 @@ New content to summarize:
 ${messagesText}
 `.trim();
 
-    const response = await withExecutionContext(
-      { mode: 'LIGHT_REASONING', critical: false, reason: 'session_compaction', source: 'memory' },
-      () =>
-        llm.complete(
-          [
-            { role: 'system', content: 'You are a precise summarizer.' },
-            { role: 'user', content: prompt },
-          ],
-          { temperature: 0.2 }
-        )
-    );
+    let response;
+    try {
+      response = await withExecutionContext(
+        { mode: 'LIGHT_REASONING', critical: false, reason: 'session_compaction', source: 'memory' },
+        () =>
+          llm.complete(
+            [
+              { role: 'system', content: 'You are a precise summarizer.' },
+              { role: 'user', content: prompt },
+            ],
+            { temperature: 0.2 }
+          )
+      );
+    } catch {
+      return;
+    }
 
     const summary = response.content.trim();
     this.updateSummary(userId, summary);
