@@ -39,6 +39,12 @@ const TOOL_SUBSETS: Record<Exclude<ToolSubset, 'full'>, Set<string>> = {
   chat: new Set([
     'intel_search',
     'intel_recent',
+    'events_list',
+    'event_get',
+    'event_latest_thought',
+    'event_forecasts',
+    'event_outcomes',
+    'historical_case_search',
     'web_search',
     'web_fetch',
     'qmd_query',
@@ -136,6 +142,77 @@ export const THUFIR_TOOLS: Tool[] = [
           type: 'number',
           description: 'Number of items (default: 10)',
         },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'events_list',
+    description: 'List normalized causal events by domain or status.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Optional domain filter such as energy, agri, crypto, macro.' },
+        status: { type: 'string', description: 'Optional status filter such as active or superseded.' },
+        limit: { type: 'number', description: 'Maximum results (default: 10)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'event_get',
+    description: 'Get a normalized event by id.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'Event id' },
+      },
+      required: ['event_id'],
+    },
+  },
+  {
+    name: 'event_latest_thought',
+    description: 'Get the latest thought artifact linked to an event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'Event id' },
+      },
+      required: ['event_id'],
+    },
+  },
+  {
+    name: 'event_forecasts',
+    description: 'List forecast artifacts linked to an event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'Event id' },
+      },
+      required: ['event_id'],
+    },
+  },
+  {
+    name: 'event_outcomes',
+    description: 'List outcome artifacts linked to an event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'Event id' },
+      },
+      required: ['event_id'],
+    },
+  },
+  {
+    name: 'historical_case_search',
+    description: 'Search the seeded historical casebase by domain, mechanism text, or regime tags.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Optional domain filter such as energy or macro.' },
+        mechanism_query: { type: 'string', description: 'Optional mechanism text query.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional regime or mechanism tags.' },
+        limit: { type: 'number', description: 'Maximum results (default: 5)' },
       },
       required: [],
     },
