@@ -32,6 +32,7 @@ describe('proactive refresh', () => {
       snapshot: {
         asOf: new Date().toISOString(),
         query: 'cached',
+        domain: 'crypto' as const,
         sources: ['perp_market_list'],
         data: { markets: [{ symbol: 'BTC' }] },
       },
@@ -67,6 +68,7 @@ describe('proactive refresh', () => {
     const executeTool = vi.fn(async (toolName: string) => {
       if (toolName === 'perp_market_list') return { success: true, data: [{ symbol: 'BTC' }] };
       if (toolName === 'web_search') return { success: true, data: [{ title: 'Market update' }] };
+      if (toolName === 'intel_search') return { success: true, data: [{ title: 'Macro note' }] };
       if (toolName === 'current_time') return { success: true, data: { iso: '2026-01-01T00:00:00Z' } };
       return { success: false, error: 'not configured' };
     });
@@ -78,12 +80,33 @@ describe('proactive refresh', () => {
     });
 
     expect(outcome.failClosed).toBe(false);
-    expect(outcome.snapshot?.sources).toContain('perp_market_list');
+    expect(outcome.snapshot?.domain).toBe('macro');
+    expect(outcome.snapshot?.sources).toContain('web_search:market_context:macro');
     expect(outcome.snapshot?.sources).toContain('web_search');
     expect(outcome.contextText).toContain('as_of:');
+    expect(outcome.contextText).toContain('domain: macro');
 
     const reply = appendProactiveAttribution('Current view: mildly bullish.', outcome.snapshot ?? null);
     expect(reply).toContain('as_of:');
     expect(reply).toContain('sources:');
+  });
+
+  it('does not require perp market tools for energy-domain refreshes', async () => {
+    const executeTool = vi.fn(async (toolName: string, input: Record<string, unknown>) => {
+      if (toolName === 'web_search') return { success: true as const, data: [{ query: input.query }] };
+      if (toolName === 'intel_search') return { success: true as const, data: [{ title: 'Oil disruption update' }] };
+      if (toolName === 'current_time') return { success: true as const, data: { iso: '2026-01-01T00:00:00Z' } };
+      return { success: false as const, error: 'not configured' };
+    });
+
+    const outcome = await runProactiveRefresh({
+      message: 'Could Iran escalation push oil higher through Hormuz?',
+      settings: baseSettings,
+      executeTool,
+    });
+
+    expect(outcome.failClosed).toBe(false);
+    expect(outcome.snapshot?.domain).toBe('energy');
+    expect(outcome.snapshot?.sources).toContain('web_search:market_context:energy');
   });
 });
