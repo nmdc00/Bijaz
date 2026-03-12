@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
+import { extname, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function buildDashboardHtml(): string {
   return `<!doctype html>
@@ -553,13 +556,47 @@ function buildDashboardHtml(): string {
 export function handleDashboardPageRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const path = url.pathname;
-  if (path !== '/dashboard' && path !== '/dashboard/') {
+  if (path !== '/dashboard' && path !== '/dashboard/' && !path.startsWith('/dashboard/')) {
     return false;
   }
 
   if (req.method !== 'GET') {
     res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Method not allowed');
+    return true;
+  }
+
+  const distDir = String(process.env.THUFIR_DASHBOARD_DIST_PATH ?? '').trim()
+    || join(fileURLToPath(new URL('.', import.meta.url)), 'dashboard-dist');
+  const indexPath = join(distDir, 'index.html');
+  if (existsSync(indexPath)) {
+    if (path.startsWith('/dashboard/assets/')) {
+      const relative = path.slice('/dashboard/'.length);
+      const assetPath = normalize(join(distDir, relative));
+      if (!assetPath.startsWith(distDir) || !existsSync(assetPath)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Not found');
+        return true;
+      }
+      const contentType =
+        extname(assetPath) === '.js'
+          ? 'text/javascript; charset=utf-8'
+          : extname(assetPath) === '.css'
+            ? 'text/css; charset=utf-8'
+            : 'application/octet-stream';
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      });
+      res.end(readFileSync(assetPath));
+      return true;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(readFileSync(indexPath, 'utf-8'));
     return true;
   }
 
