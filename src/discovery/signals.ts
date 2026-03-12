@@ -119,14 +119,23 @@ export async function signalCrossAssetDivergence(
   const priceService = new PriceService(config);
   const results: SignalPrimitive[] = [];
 
-  const series = await Promise.all(
+  const seriesRaw = await Promise.all(
     symbols.map(async (symbol) => {
-      const candles = await priceService.getCandles(symbol, '1h', 40);
-      const closes = candles.map((c) => c.close);
-      const trend = pctChange(closes[0]!, closes[closes.length - 1]!);
-      return { symbol, trend };
+      try {
+        const candles = await priceService.getCandles(symbol, '1h', 40);
+        const closes = candles.map((c) => c.close);
+        const trend = pctChange(closes[0]!, closes[closes.length - 1]!);
+        return { symbol, trend };
+      } catch {
+        return null;
+      }
     })
   );
+  const series = seriesRaw.filter((s): s is { symbol: string; trend: number } => s !== null);
+  if (series.length < 2) {
+    signalCache.set(cacheKey, [], getSignalCacheTtlMs(config));
+    return [];
+  }
 
   const avgTrend = mean(series.map((s) => s.trend));
   for (const s of series) {

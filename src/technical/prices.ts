@@ -21,6 +21,7 @@ export class PriceService {
   private exchange: any;
   private cache = new Map<string, CacheEntry<OHLCV[]>>();
   private tickerCache = new Map<string, CacheEntry<number>>();
+  private supportedSymbolsPromise: Promise<Set<string> | null> | null = null;
 
   constructor(private config: ThufirConfig) {
     this.exchange = this.createExchange();
@@ -88,6 +89,32 @@ export class PriceService {
       active = false;
       clearInterval(timer);
     };
+  }
+
+  async supportsSymbol(symbol: string): Promise<boolean> {
+    const normalized = symbol.trim().toUpperCase();
+    if (!normalized) return false;
+
+    const supportedSymbols = await this.getSupportedSymbols();
+    if (supportedSymbols === null) {
+      return true;
+    }
+    return supportedSymbols.has(normalized);
+  }
+
+  private async getSupportedSymbols(): Promise<Set<string> | null> {
+    if (!this.supportedSymbolsPromise) {
+      this.supportedSymbolsPromise = this.exchange
+        .loadMarkets()
+        .then((markets: Record<string, { symbol?: string }>) => {
+          const symbols = Object.values(markets)
+            .map((market) => market.symbol?.trim().toUpperCase())
+            .filter((symbol): symbol is string => Boolean(symbol));
+          return new Set(symbols);
+        })
+        .catch(() => null);
+    }
+    return this.supportedSymbolsPromise;
   }
 
   private createExchange(): any {
