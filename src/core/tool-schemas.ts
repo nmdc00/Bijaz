@@ -39,6 +39,9 @@ const TOOL_SUBSETS: Record<Exclude<ToolSubset, 'full'>, Set<string>> = {
   chat: new Set([
     'intel_search',
     'intel_recent',
+    'event_recent',
+    'event_get',
+    'event_forecasts_open',
     'web_search',
     'web_fetch',
     'qmd_query',
@@ -135,6 +138,56 @@ export const THUFIR_TOOLS: Tool[] = [
         limit: {
           type: 'number',
           description: 'Number of items (default: 10)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'event_recent',
+    description: 'List recently extracted normalized market events.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter such as energy, macro, metals, agri, crypto',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum results (default: 10)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'event_get',
+    description: 'Get an event with its thoughts, forecasts, and outcomes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Event id',
+        },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'event_forecasts_open',
+    description: 'List open event forecasts, optionally filtered by asset or domain.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        asset: {
+          type: 'string',
+          description: 'Optional asset filter such as CL or GOLD',
+        },
+        domain: {
+          type: 'string',
+          description: 'Optional domain filter',
         },
       },
       required: [],

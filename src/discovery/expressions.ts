@@ -77,9 +77,15 @@ export function mapExpressionPlan(
   if (isMomentumInNeutral) {
     expectedEdge = 0;
   } else if ((config.autonomy as any)?.adaptiveEdge?.enabled !== false) {
+    let journalEntries: ReturnType<typeof listPerpTradeJournals> = [];
+    try {
+      journalEntries = listPerpTradeJournals({ limit: 500 });
+    } catch {
+      journalEntries = [];
+    }
     const edgeResult = resolveAdaptiveEdge(
       config,
-      listPerpTradeJournals({ limit: 500 }),
+      journalEntries,
       { signalClass, marketRegime, volatilityBucket, liquidityBucket },
       confidence
     );

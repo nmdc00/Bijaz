@@ -38,6 +38,47 @@ export const perpMarketGetTool: ToolDefinition = {
   ...READ_TOOL_META,
 };
 
+export const eventRecentTool: ToolDefinition = {
+  name: 'event_recent',
+  description: 'List recently extracted normalized market events.',
+  category: 'intel',
+  schema: z.object({
+    domain: z.string().optional(),
+    limit: z.number().optional(),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('event_recent', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  ...READ_TOOL_META,
+};
+
+export const eventGetTool: ToolDefinition = {
+  name: 'event_get',
+  description: 'Get an event with its thoughts, forecasts, and outcomes.',
+  category: 'intel',
+  schema: z.object({
+    id: z.string(),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('event_get', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  ...READ_TOOL_META,
+};
+
+export const eventForecastsOpenTool: ToolDefinition = {
+  name: 'event_forecasts_open',
+  description: 'List open event forecasts.',
+  category: 'intel',
+  schema: z.object({
+    asset: z.string().optional(),
+    domain: z.string().optional(),
+  }),
+  execute: async (input, ctx): Promise<ToolResult> => {
+    return executeToolCall('event_forecasts_open', input as Record<string, unknown>, toExecutorContext(ctx));
+  },
+  ...READ_TOOL_META,
+};
+
 export const perpPlaceOrderTool: ToolDefinition = {
   name: 'perp_place_order',
   description: 'Place a perp order on the configured exchange.',
@@ -277,6 +318,9 @@ export const perpTradeJournalListTool: ToolDefinition = {
 export const discoveryTools: ToolDefinition[] = [
   perpMarketListTool,
   perpMarketGetTool,
+  eventRecentTool,
+  eventGetTool,
+  eventForecastsOpenTool,
   perpPlaceOrderTool,
   perpOpenOrdersTool,
   perpCancelOrderTool,
