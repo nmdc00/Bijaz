@@ -1846,16 +1846,21 @@ export async function executeToolCall(
           isNativePaperExecutor,
           paperInitialCashUsdc,
         });
-        const lifecycleTradeId = await resolvePerpLifecycleTradeId({
-          symbol,
-          mode: bookMode,
-          hypothesisId,
-          leverage: leverage ?? null,
-          orderType,
-          markPrice: market.markPrice ?? null,
-          before: positionBefore,
-          after: positionAfter,
-        });
+        let lifecycleTradeId: number | null = null;
+        try {
+          lifecycleTradeId = await resolvePerpLifecycleTradeId({
+            symbol,
+            mode: bookMode,
+            hypothesisId,
+            leverage: leverage ?? null,
+            orderType,
+            markPrice: market.markPrice ?? null,
+            before: positionBefore,
+            after: positionAfter,
+          });
+        } catch {
+          lifecycleTradeId = null;
+        }
         const inferredOrderId = parseOrderIdFromResultMessage(result.message);
         const realizedFee = await fetchRealizedPerpFee(ctx, {
           symbol,

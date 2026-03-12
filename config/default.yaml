@@ -469,7 +469,10 @@ intel:
   webSearch:
     enabled: true
     providers:
-      order: [brave, serpapi, duckduckgo] # brave | perplexity | serpapi | duckduckgo
+      order: [tavily, brave, serpapi, duckduckgo] # tavily | brave | perplexity | serpapi | duckduckgo
+      tavily:
+        enabled: true
+        apiKey: ${TAVILY_API_KEY}
       brave:
         enabled: true
         apiKey: ${BRAVE_API_KEY}

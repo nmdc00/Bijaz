@@ -72,6 +72,13 @@ export function mapExpressionPlan(
   // conviction). Mean reversion and liquidation_cascade have non-directional rationale.
   const isMomentumInNeutral =
     signalClass === 'momentum_breakout' && cluster.directionalBias === 'neutral';
+  const journalEntries = (() => {
+    try {
+      return listPerpTradeJournals({ limit: 500 });
+    } catch {
+      return [];
+    }
+  })();
 
   let expectedEdge: number;
   if (isMomentumInNeutral) {
@@ -79,7 +86,7 @@ export function mapExpressionPlan(
   } else if ((config.autonomy as any)?.adaptiveEdge?.enabled !== false) {
     const edgeResult = resolveAdaptiveEdge(
       config,
-      listPerpTradeJournals({ limit: 500 }),
+      journalEntries,
       { signalClass, marketRegime, volatilityBucket, liquidityBucket },
       confidence
     );

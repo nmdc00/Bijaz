@@ -1,0 +1,172 @@
+[
+  {
+    "case_key": "1997-asian-financial-crisis-thb",
+    "event_date": "1997-07-02",
+    "event_type": "currency_crisis",
+    "title": "Asian Financial Crisis → Thai Baht Float and EM Contagion",
+    "summary": "Thailand was forced to float the baht on July 2, 1997 after defending its peg exhausted foreign reserves. Contagion spread to Indonesia, South Korea, Malaysia, and the Philippines. IMF bailouts totalling over $100bn followed. The crisis triggered a severe regional recession, broad EM asset selloffs, and a sharp collapse in commodity import demand.",
+    "domain": "fx",
+    "actors": ["Bank of Thailand", "IMF", "Bank of Indonesia", "Bank of Korea", "George Soros / Quantum Fund"],
+    "locations": ["Thailand", "Indonesia", "South Korea", "Malaysia", "Philippines"],
+    "channels": ["fx", "credit", "capital_flows", "contagion"],
+    "first_order_assets": ["THB/USD", "IDR/USD", "KRW/USD", "MYR/USD", "EM bonds"],
+    "second_order_assets": ["USD", "gold", "JPY", "regional equity indices", "commodity demand"],
+    "mechanism": "Thailand's current account deficit and large short-term external debt made the baht peg vulnerable to speculative attacks. Once reserves were exhausted, the float triggered investor reassessment of other Asian pegs with similar vulnerabilities. Financial contagion was amplified by cross-border bank lending, currency derivative positions, and IMF-imposed austerity programs. The crisis became a seminal case study in EM vulnerability: current account deficit + fixed peg + short-term dollar debt = fragile.",
+    "causal_chain": [
+      "Thailand runs large current account deficit financed by short-term dollar borrowing",
+      "speculative pressure mounts on baht peg through 1996–97",
+      "Bank of Thailand exhausts reserves defending peg",
+      "baht floated on July 2, 1997; falls 17% on first day",
+      "contagion spreads to Indonesia (IDR -80%), South Korea (KRW -50%), and others",
+      "IMF arranges $17.2bn Thailand, $43bn South Korea, $40bn Indonesia packages",
+      "regional GDP contracts sharply; commodity import demand collapses",
+      "USD and JPY (safe haven) strengthen; gold holds"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish EM FX and equities; bearish commodity demand from affected region; bullish USD and gold as safe havens"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "THB fell ~55% vs USD by year-end 1997. IDR eventually fell ~80%. KRW fell ~50%. Regional stock markets fell 40–70%. IMF imposed austerity. South Korea and Thailand recovered by 1999–2000; Indonesia suffered longer political and economic disruption.",
+      "chart_note": "IMF World Economic Outlook data and central bank historical FX series confirm the magnitude of currency falls",
+      "priced_in_note": null,
+      "reversal_note": "Recovery began 1999–2000 as IMF programs stabilised balance of payments and capital flows resumed"
+    },
+    "regime_tags": ["currency_crisis", "contagion", "em_stress", "capital_flows", "fx_bear"],
+    "sources": [
+      {"title": "The Asian Crisis — Overview", "publisher": "IMF", "url": "https://www.imf.org/en/About/Factsheets/Sheets/2016/08/01/16/35/Asia-1997-98", "source_date": null, "source_type": "official"},
+      {"title": "What Caused East Asia's Financial Crisis?", "publisher": "Federal Reserve Bank of San Francisco", "url": "https://www.frbsf.org/economic-research/publications/economic-letter/1998/august/what-caused-east-asia-financial-crisis/", "source_date": "1998-08-07", "source_type": "research"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "1992-erm-crisis-black-wednesday",
+    "event_date": "1992-09-16",
+    "event_type": "currency_crisis",
+    "title": "ERM Crisis / Black Wednesday → GBP and ITL Devaluation",
+    "summary": "Speculative pressure — led by George Soros's Quantum Fund — forced the UK to withdraw the pound sterling from the European Exchange Rate Mechanism on September 16, 1992. Italy also withdrew. The UK spent £3.3bn defending the peg before capitulating. GBP fell approximately 15% against the Deutschmark within weeks. The event is widely seen as the definitive modern example of a successful speculative attack on a currency peg.",
+    "domain": "fx",
+    "actors": ["George Soros / Quantum Fund", "Bank of England", "HM Treasury", "Bundesbank", "Italian Treasury"],
+    "locations": ["United Kingdom", "Italy", "Germany"],
+    "channels": ["fx", "monetary_policy", "sovereign"],
+    "first_order_assets": ["GBP/DEM", "GBP/USD", "ITL/DEM", "UK gilts"],
+    "second_order_assets": ["ERM membership stability", "DEM", "European sovereign spreads", "UK equities"],
+    "mechanism": "The ERM required member currencies to stay within ±2.25% bands against the Deutschmark. Post-reunification Germany required tight monetary policy to control inflation, while the UK was in recession and needed rate cuts. The Bundesbank's reluctance to lower rates made the GBP peg unsustainable. Soros and others shorted GBP in size; the Bank of England burned £3.3bn in reserves and raised rates to 15% in one day before being forced to float. The cost to UK taxpayers was estimated at £3.3bn.",
+    "causal_chain": [
+      "German reunification inflation drives Bundesbank to keep rates high",
+      "UK economy in recession; ERM peg requires higher UK rates than economy needs",
+      "speculative investors (led by Soros) accumulate short GBP / long DEM positions",
+      "Bank of England intervenes heavily and raises base rate from 10% to 12% to 15%",
+      "reserves exhausted; UK suspends ERM membership on September 16",
+      "GBP falls 15%+ vs DEM; UK rates cut sharply thereafter",
+      "UK economy recovers through 1993–94; scepticism of Euro project deepens in UK"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["immediate", "short"],
+      "confidence": "high",
+      "note": "Strongly bearish GBP vs DEM while peg defence is unsustainable; outcome determined by political will and reserve adequacy"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "GBP fell from approximately 2.95 DEM at peg to 2.40 DEM within weeks — roughly 15–18%. The UK Treasury estimated losses of £3.3bn from defending the peg. Soros's Quantum Fund reportedly made ~$1bn profit on the trade.",
+      "chart_note": "Bank of England historical FX data and contemporaneous reporting confirm the peg collapse and GBP depreciation",
+      "priced_in_note": "Some market participants had been positioning against the peg for weeks prior",
+      "reversal_note": "GBP remained weak through 1993 but UK economy benefited from monetary freedom; no full reversion to peg levels"
+    },
+    "regime_tags": ["currency_crisis", "peg_collapse", "speculative_attack", "fx_bear", "sovereign"],
+    "sources": [
+      {"title": "Black Wednesday — Bank of England", "publisher": "Bank of England", "url": "https://www.bankofengland.co.uk/archive/Documents/historicpubs/qb/1992/qb92q4401419.pdf", "source_date": "1992-12-01", "source_type": "official"},
+      {"title": "Black Wednesday: how Britain was forced out of the ERM", "publisher": "Financial Times", "url": "https://www.ft.com/content/b56d0e62-b8b3-11e7-9bfb-4a9c83ffa852", "source_date": "2017-10-13", "source_type": "event"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2022-dxy-dollar-surge-em-pressure",
+    "event_date": "2022-01-01",
+    "event_type": "fx_regime_shift",
+    "title": "DXY Dollar Surge (Peak 114) → EM Currency Stress and Commodity Headwinds",
+    "summary": "The Federal Reserve's aggressive tightening cycle drove the US Dollar Index (DXY) from approximately 95 in January 2022 to a peak of 114.8 in September 2022 — the highest level since 2002. The dollar surge created broad EM currency stress, pushed EUR to parity with the USD for the first time since 2002, forced GBP to an all-time low of $1.035, and created a headwind for dollar-denominated commodity prices.",
+    "domain": "fx",
+    "actors": ["Federal Reserve", "ECB", "Bank of England", "EM central banks", "US Treasury"],
+    "locations": ["United States", "Eurozone", "United Kingdom", "South Korea", "Japan", "global EM"],
+    "channels": ["monetary_policy", "fx", "capital_flows", "rates"],
+    "first_order_assets": ["DXY", "EUR/USD", "GBP/USD", "USD/JPY", "USD/KRW"],
+    "second_order_assets": ["gold", "commodity indices", "EM sovereign spreads", "US Treasury yields", "dollar-denominated debt service"],
+    "mechanism": "Dollar appreciation has multiple mechanism channels: (1) tightens global dollar liquidity as USD is the dominant trade and debt currency; (2) raises dollar-denominated commodity import costs for EM consumers; (3) increases debt service burdens for EM sovereigns and corporates with USD liabilities; (4) attracts capital flows from EM to US as yield differential widens. The 2022 cycle was amplified by the energy shock feeding additional safe-haven USD demand.",
+    "causal_chain": [
+      "Fed pivots from transitory inflation stance; signals aggressive tightening (March 2022)",
+      "Fed hikes 75bps four times through 2022 — fastest cycle in 40 years",
+      "DXY rises from ~95 to 114.8 by September 2022",
+      "EUR breaches parity with USD for first time since 2002",
+      "GBP falls to all-time low of $1.035 (September 2022)",
+      "EM currencies under broad pressure: KRW -17%, INR -10%, BRL, ZAR, TRY all weaker",
+      "gold prices fall despite inflation as dollar strength overwhelms haven demand",
+      "commodity prices in USD headwind even as supply shocks persist"
+    ],
+    "forecast": {
+      "direction": "up",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bullish USD while Fed tightening leads global peers; bearish EM FX; headwind for dollar-denominated commodities; bearish gold near-term"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "DXY peaked at 114.8 in late September 2022. EUR/USD hit 0.9535. GBP/USD hit 1.035 (Truss mini-budget concurrent). Dollar subsequently weakened as Fed approached peak rate in H1 2023.",
+      "chart_note": "MacroTrends DXY chart confirms the 2022 peak; EUR/USD and GBP/USD charts confirm parity and all-time low",
+      "priced_in_note": null,
+      "reversal_note": "Dollar weakened from Q4 2022 onward as markets priced the approaching end of the hike cycle"
+    },
+    "regime_tags": ["dollar_bull", "monetary_policy", "em_stress", "fx_regime", "rates"],
+    "sources": [
+      {"title": "Dollar index hits 20-year high as Fed tightening accelerates", "publisher": "Reuters", "url": "https://www.reuters.com/markets/currencies/dollar-hits-20-year-high-fed-tightening-2022-09-28/", "source_date": "2022-09-28", "source_type": "event"},
+      {"title": "US Dollar Index - Historical Data", "publisher": "MacroTrends", "url": "https://www.macrotrends.net/1329/us-dollar-index-historical-chart", "source_date": null, "source_type": "price_chart"}
+    ],
+    "validation_status": "validated"
+  },
+  {
+    "case_key": "2013-em-currency-rout-fragile-five",
+    "event_date": "2013-08-01",
+    "event_type": "fx_spillover",
+    "title": "Fragile Five EM Currency Rout → Taper Tantrum Capital Outflows",
+    "summary": "Following Ben Bernanke's May 2013 hint that the Fed might taper QE, capital flowed out of emerging markets through the summer of 2013. India, Brazil, Turkey, Indonesia, and South Africa — dubbed the 'Fragile Five' by Morgan Stanley — saw their currencies fall 10–20% as yield differentials compressed and current account vulnerabilities were exposed.",
+    "domain": "fx",
+    "actors": ["Federal Reserve", "Reserve Bank of India", "Bank of Indonesia", "CBRT", "Raghuram Rajan", "Morgan Stanley"],
+    "locations": ["India", "Brazil", "Turkey", "Indonesia", "South Africa"],
+    "channels": ["capital_flows", "monetary_policy", "fx"],
+    "first_order_assets": ["INR/USD", "BRL/USD", "TRY/USD", "IDR/USD", "ZAR/USD"],
+    "second_order_assets": ["EM sovereign bonds", "EM equity indices", "gold (India import demand)"],
+    "mechanism": "The five currencies labelled 'Fragile Five' shared common characteristics: large current account deficits financed by volatile short-term portfolio inflows, significant foreign ownership of local currency bonds, and inflation above target. When the Fed signalled QE tapering, the yield pickup from EM assets narrowed, triggering capital reversals. Countries with higher twin deficits (current account + fiscal) and lower reserve adequacy suffered most.",
+    "causal_chain": [
+      "Bernanke testimony (May 22, 2013) hints at possible QE tapering",
+      "US Treasury yields rise; EM yield pickup narrows",
+      "portfolio capital flows out of EM bonds and equities",
+      "INR, BRL, TRY, IDR, ZAR sell off 10–20% June–August 2013",
+      "EM central banks hike rates defensively (RBI, CBRT, Bank Indonesia)",
+      "India's new RBI governor Rajan announces stabilisation measures (September 2013)",
+      "Fed ultimately delays taper to December 2013, giving temporary relief"
+    ],
+    "forecast": {
+      "direction": "down",
+      "horizons": ["short", "medium"],
+      "confidence": "high",
+      "note": "Bearish EM FX with current account deficits and high external financing needs; bullish USD; EM central banks face impossible choice between growth and currency stability"
+    },
+    "outcome": {
+      "direction_correct": true,
+      "realized_note": "INR fell from ~55 to ~68 vs USD between May and August 2013. BRL, TRY, IDR, ZAR all fell 10–20%. Emergency rate hikes and IMF-style programmes prevented full balance of payments crises. Currencies partially recovered as actual QE taper (December 2013) proved orderly.",
+      "chart_note": "Historical INR/USD, BRL/USD FX series confirm the 2013 currency depreciation episode",
+      "priced_in_note": null,
+      "reversal_note": "Partial recovery when actual taper was orderly and growth differentials reasserted"
+    },
+    "regime_tags": ["capital_flows", "em_stress", "monetary_policy_spillover", "fx_bear", "contagion"],
+    "sources": [
+      {"title": "Fragile Five EM currencies — Morgan Stanley coinage and analysis", "publisher": "Morgan Stanley Research", "url": "https://www.morganstanley.com/ideas/emerging-markets-fragile-five-2013", "source_date": "2013-08-01", "source_type": "research"},
+      {"title": "Taper Tantrum 2013 — EM Capital Flows", "publisher": "IMF Working Paper", "url": "https://www.imf.org/en/Publications/WP/Issues/2016/12/31/Taper-Tantrum-Revisited-41667", "source_date": "2014-01-01", "source_type": "research"}
+    ],
+    "validation_status": "validated"
+  }
+]
