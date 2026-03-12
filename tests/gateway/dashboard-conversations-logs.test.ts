@@ -123,6 +123,27 @@ describe('dashboard conversations and logs api', () => {
     expect(payload.messages.map((item) => item.role)).toEqual(['user', 'assistant']);
   });
 
+  it('returns only the latest 50 messages from a long thread', () => {
+    const db = createDb('thufir-dashboard-thread-limit-');
+    const expectedContents: string[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      const content = `message-${index}`;
+      storeChatMessage({
+        sessionId: 'session-limit',
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content,
+        createdAt: `2026-03-10T10:${String(index).padStart(2, '0')}:00.000Z`,
+      });
+      if (index >= 10) {
+        expectedContents.push(content);
+      }
+    }
+
+    const payload = buildConversationThreadResponse('session-limit', { db, limit: 50 });
+    expect(payload.messages).toHaveLength(50);
+    expect(payload.messages.map((item) => item.content)).toEqual(expectedContents);
+  });
+
   it('returns merged decision and incident log entries with parsed tool traces', () => {
     const db = createDb('thufir-dashboard-logs-');
     recordDecisionAudit({
