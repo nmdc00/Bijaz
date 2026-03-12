@@ -150,7 +150,6 @@ function ConversationThread({ thread }: { thread: ConversationThreadResponse | n
       {thread.messages.map((message) => (
         <div key={message.id} className={`thread-bubble ${message.role === 'user' ? 'thread-user' : 'thread-assistant'}`}>
           <div className="thread-meta">
-            <span>{message.role}</span>
             <span>{timeText(message.createdAt)}</span>
           </div>
           <div className="thread-body">{message.content}</div>
@@ -389,47 +388,39 @@ export default function App() {
       )}
 
       {tab === 'conversations' && (
-        <section className="content-grid">
-          <article className="panel">
-            <div className="panel-head">
-              <h2>Conversations</h2>
-              <p>Read-only session history surfaced from `chat_messages`.</p>
-            </div>
-            <div className="panel-body">
-              {conversationError ? <div className="empty-state">{conversationError}</div> : null}
-              {conversationLoading && conversations.length === 0 ? <div className="empty-state">Loading conversations…</div> : null}
-              <div className="conversation-list">
-                {conversations.length === 0 && !conversationLoading ? <div className="empty-state">No conversations yet.</div> : null}
-                {conversations.map((session) => (
-                  <button
-                    key={session.sessionId}
-                    type="button"
-                    className={`conversation-item ${selectedSessionId === session.sessionId ? 'active' : ''}`}
-                    onClick={() => setSelectedSessionId(session.sessionId)}
-                  >
-                    <div className="conversation-row">
-                      <strong>{shortDateLabel(session.lastMessageAt)}</strong>
-                      <span>{relativeTime(session.lastMessageAt)}</span>
-                    </div>
-                    <div className="conversation-preview">{session.firstMessage}</div>
-                    <div className="conversation-row">
-                      <span>{session.messageCount} messages</span>
-                      <span className="mono">{session.sessionId.slice(0, 8)}</span>
-                    </div>
-                  </button>
-                ))}
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Conversation Thread</h2>
+            <p>Rendered as a straight message thread, like the Telegram chat history.</p>
+          </div>
+          <div className="panel-body">
+            <div className="conversation-toolbar">
+              <div className="conversation-picker">
+                <label htmlFor="conversation-session">Session</label>
+                <select
+                  id="conversation-session"
+                  value={selectedSessionId ?? ''}
+                  onChange={(event) => setSelectedSessionId(event.target.value || null)}
+                >
+                  {conversations.map((session) => (
+                    <option key={session.sessionId} value={session.sessionId}>
+                      {shortDateLabel(session.lastMessageAt)} · {relativeTime(session.lastMessageAt)} · {session.firstMessage}
+                    </option>
+                  ))}
+                </select>
               </div>
+              {selectedSessionId ? (
+                <div className="conversation-summary">
+                  <span>{conversations.find((session) => session.sessionId === selectedSessionId)?.messageCount ?? 0} messages</span>
+                  <span className="mono">{selectedSessionId.slice(0, 8)}</span>
+                </div>
+              ) : null}
             </div>
-          </article>
-          <article className="panel">
-            <div className="panel-head">
-              <h2>Thread View</h2>
-              <p>User and assistant messages only.</p>
-            </div>
-            <div className="panel-body">
-              <ConversationThread thread={thread} />
-            </div>
-          </article>
+            {conversationError ? <div className="empty-state">{conversationError}</div> : null}
+            {conversationLoading && !thread ? <div className="empty-state">Loading conversation…</div> : null}
+            {!conversationLoading && conversations.length === 0 ? <div className="empty-state">No conversations yet.</div> : null}
+            <ConversationThread thread={thread} />
+          </div>
         </section>
       )}
 
