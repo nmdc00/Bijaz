@@ -827,11 +827,12 @@ export class ConversationHandler {
   private async runToolFirstGuard(message: string): Promise<string> {
     const text = message.toLowerCase();
     const wantsNews = /\b(news|headline|breaking|latest|today|yesterday|current events|recent updates)\b/.test(text);
-    const wantsMarket = /\b(price|odds|market|probability|volume|liquidity|bid|ask)\b/.test(text);
+    const wantsMarket = /\b(price|odds|market|markets|ticker|tickers|probability|volume|liquidity|bid|ask)\b/.test(text);
     const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding|position|positions)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
+    const wantsCommodityDiscovery = /\b(commodit(?:y|ies)|oil|gold|silver|xau|xag|wti|brent|natgas|copper)\b/.test(text);
 
-    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime) {
+    if (!wantsNews && !wantsMarket && !wantsTrade && !wantsTime && !wantsCommodityDiscovery) {
       return '';
     }
 
@@ -867,7 +868,8 @@ export class ConversationHandler {
         }
       }
 
-      const marketResult = await executeToolCall('perp_market_list', { limit: 20 }, this.toolContext);
+      const marketListLimit = wantsCommodityDiscovery ? 200 : 20;
+      const marketResult = await executeToolCall('perp_market_list', { limit: marketListLimit }, this.toolContext);
       if (marketResult.success) {
         sections.push(`### perp_market_list\n${JSON.stringify(marketResult.data, null, 2)}`);
       }
@@ -901,6 +903,14 @@ export class ConversationHandler {
       const symbolMatch = symbolRegex ? message.match(symbolRegex) : null;
       if (symbolMatch?.[1]) {
         symbols.add(symbolMatch[1].toUpperCase());
+      }
+      const explicitTickerMatches = message.match(/\b[A-Z]{2,12}\/(?:USDC|USDT|USD)\b/g) ?? [];
+      for (const symbol of explicitTickerMatches) {
+        symbols.add(symbol.toUpperCase());
+      }
+      const uppercaseTickerMatches = message.match(/\b[A-Z]{2,10}\b/g) ?? [];
+      for (const symbol of uppercaseTickerMatches) {
+        symbols.add(symbol.toUpperCase());
       }
       for (const symbol of Array.from(symbols).slice(0, 3)) {
         const marketGet = await executeToolCall('perp_market_get', { symbol }, this.toolContext);
