@@ -84,6 +84,7 @@ vi.mock('../../src/core/tool-executor.js', () => ({
 
 describe('ConversationHandler tool-first snapshot', () => {
   it('calls perp_market_list for trade intent even if user does not mention prices', async () => {
+    toolCalls.length = 0;
     const { ConversationHandler } = await import('../../src/core/conversation.js');
     const llm = {
       complete: vi.fn(async () => ({ content: 'ok', model: 'test' })),
@@ -96,5 +97,21 @@ describe('ConversationHandler tool-first snapshot', () => {
 
     expect(toolCalls).toContain('perp_market_list');
   });
-});
 
+  it('routes oil geopolitics prompts through domain-specific retrieval and avoids perp defaults', async () => {
+    toolCalls.length = 0;
+    const { ConversationHandler } = await import('../../src/core/conversation.js');
+    const llm = {
+      complete: vi.fn(async () => ({ content: 'ok', model: 'test' })),
+    };
+    const marketClient = { searchMarkets: vi.fn(async () => []) };
+    const config = { execution: { mode: 'paper', provider: 'hyperliquid' } } as any;
+
+    const handler = new ConversationHandler(llm as any, marketClient as any, config);
+    await handler.chat('user', 'Could Iran escalation push oil higher through Hormuz?');
+
+    expect(toolCalls).toContain('intel_search');
+    expect(toolCalls).toContain('web_search');
+    expect(toolCalls).not.toContain('perp_market_list');
+  });
+});
