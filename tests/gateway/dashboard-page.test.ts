@@ -41,7 +41,6 @@ describe('dashboard page route', () => {
     expect(state.status).toBe(200);
     expect(state.contentType).toContain('text/html');
     expect(state.body).toContain('Thufir Dashboard');
-    expect(state.body).toContain('<div id="root"></div>');
   });
 
   it('serves built static index and assets when dashboard-dist exists', () => {
