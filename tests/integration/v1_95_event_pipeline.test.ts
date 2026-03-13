@@ -50,7 +50,7 @@ describe('v1.95 causal event pipeline acceptance', () => {
       limit: 3,
     });
     expect(historicalCases.length).toBeGreaterThan(0);
-    expect(loadHistoricalEventCases().length).toBeGreaterThanOrEqual(60);
+    expect(loadHistoricalEventCases().length).toBeGreaterThanOrEqual(150);
 
     const thought = await generateThoughtForEvent({} as any, {
       event,

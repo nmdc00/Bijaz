@@ -22,9 +22,12 @@ describe('validateHistoricalCase', () => {
 describe('loadHistoricalEventCases', () => {
   it('loads the seeded corpus successfully', () => {
     const cases = loadHistoricalEventCases();
+    const caseKeys = cases.map((entry) => entry.case_key);
 
-    expect(cases.length).toBeGreaterThanOrEqual(60);
+    expect(cases.length).toBeGreaterThanOrEqual(150);
+    expect(new Set(caseKeys).size).toBe(caseKeys.length);
     expect(cases.some((entry) => entry.case_key === '2019-abqaiq-attack-oil')).toBe(true);
+    expect(cases.some((entry) => entry.case_key === '2018-china-asf-pork-collapse')).toBe(true);
     expect(cases.every((entry) => validateHistoricalCase(entry).valid)).toBe(true);
   });
 });
