@@ -129,7 +129,10 @@ export class HyperliquidMarketClient {
 
   async getMarket(symbol: string): Promise<Market> {
     const markets = await this.listMarkets(500);
-    const match = markets.find((m) => matchesMarketSymbol(m.symbol ?? m.id, symbol) || matchesMarketSymbol(m.id, symbol));
+    const normalizedSymbol = normalizeMarketSymbol(symbol);
+    const match =
+      markets.find((m) => normalizeMarketSymbol(m.symbol ?? m.id) === normalizedSymbol || normalizeMarketSymbol(m.id) === normalizedSymbol) ??
+      markets.find((m) => matchesMarketSymbol(m.symbol ?? m.id, symbol) || matchesMarketSymbol(m.id, symbol));
     if (!match) {
       throw new Error(`Hyperliquid market not found: ${symbol}`);
     }

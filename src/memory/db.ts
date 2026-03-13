@@ -321,7 +321,14 @@ export function openDatabase(dbPath?: string): Database.Database {
   ensureDirectory(resolvedPath);
 
   const db = new Database(resolvedPath);
-  db.pragma('journal_mode = WAL');
+  try {
+    db.pragma('journal_mode = WAL');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (!/readonly/i.test(message)) {
+      throw error;
+    }
+  }
   db.pragma('foreign_keys = ON');
 
   applySchema(db);
