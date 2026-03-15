@@ -3252,20 +3252,39 @@ async function loadPerpPositions(
       const leverageValue = toNumber(leverage?.value);
       const positionValue = toNumber((position as { positionValue?: unknown }).positionValue);
       const marginUsed = toNumber((position as { marginUsed?: unknown }).marginUsed);
-      // Compute effective leverage from notional/margin when the API field is absent (e.g. cross DEX perps)
-      const effectiveLeverage =
-        leverageValue ??
-        (positionValue != null && marginUsed != null && marginUsed > 0
-          ? Math.round((positionValue / marginUsed) * 10) / 10
-          : null);
+      const unrealizedPnl = toNumber((position as { unrealizedPnl?: unknown }).unrealizedPnl);
+      const returnOnEquity = toNumber((position as { returnOnEquity?: unknown }).returnOnEquity);
+      const coin = String((position as { coin?: unknown }).coin ?? '');
+
+      // Tier 1: API field
+      let effectiveLeverage: number | null = leverageValue;
+      // Tier 2: positionValue / marginUsed (cross positions where margin is reported)
+      if (effectiveLeverage == null && positionValue != null && marginUsed != null && marginUsed > 0) {
+        effectiveLeverage = Math.round((positionValue / marginUsed) * 10) / 10;
+      }
+      // Tier 3: derive margin from ROE (returnOnEquity = unrealizedPnl / marginUsed)
+      if (effectiveLeverage == null && positionValue != null && returnOnEquity != null && returnOnEquity !== 0 && unrealizedPnl != null && unrealizedPnl !== 0) {
+        const derivedMargin = unrealizedPnl / returnOnEquity;
+        if (Number.isFinite(derivedMargin) && derivedMargin > 0) {
+          effectiveLeverage = Math.round((positionValue / derivedMargin) * 10) / 10;
+        }
+      }
+      // Tier 4: look up from perp trade journal (for Thufir-placed positions)
+      if (effectiveLeverage == null && coin) {
+        const journalEntry = listPerpTrades({ symbol: coin, limit: 20 })
+          .find((t) => t.leverage != null);
+        if (journalEntry?.leverage != null) {
+          effectiveLeverage = Number(journalEntry.leverage);
+        }
+      }
       return {
-        symbol: String((position as { coin?: unknown }).coin ?? ''),
+        symbol: coin,
         side,
         size: Math.abs(size),
         entry_price: toNumber((position as { entryPx?: unknown }).entryPx),
         position_value: positionValue,
-        unrealized_pnl: toNumber((position as { unrealizedPnl?: unknown }).unrealizedPnl),
-        return_on_equity: toNumber((position as { returnOnEquity?: unknown }).returnOnEquity),
+        unrealized_pnl: unrealizedPnl,
+        return_on_equity: returnOnEquity,
         liquidation_price: toNumber((position as { liquidationPx?: unknown }).liquidationPx),
         margin_used: marginUsed,
         leverage_type: leverage?.type ?? null,
