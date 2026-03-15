@@ -18,6 +18,23 @@ export type PaperPerpPosition = {
   updatedAt: string;
 };
 
+export type PaperPerpFill = {
+  id: number;
+  orderId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  size: number;
+  fillPrice: number;
+  markPrice: number;
+  slippageBps: number | null;
+  reduceOnly: boolean;
+  realizedPnlUsd: number;
+  feeUsd: number;
+  createdAt: string;
+  leverage: number | null;
+  orderType: 'market' | 'limit';
+};
+
 export type PaperPerpOpenOrder = {
   id: string;
   symbol: string;
@@ -196,6 +213,71 @@ export function listPaperPerpOpenOrders(initialCashUsdc = 200): PaperPerpOpenOrd
   }));
 }
 
+export function listPaperPerpFills(
+  options?: { symbol?: string; limit?: number },
+  initialCashUsdc = 200
+): PaperPerpFill[] {
+  initializePaperPerpBook(initialCashUsdc);
+  const db = openDatabase();
+  const symbol = options?.symbol ? options.symbol.trim().toUpperCase() : null;
+  const limit = Math.min(Math.max(Number(options?.limit ?? 20), 1), 100);
+
+  const rows = (
+    symbol
+      ? db
+          .prepare(
+            `
+              SELECT id, order_id, symbol, side, size, fill_price, mark_price,
+                     slippage_bps, reduce_only, realized_pnl_usd, fee_usd, created_at, metadata
+              FROM paper_perp_fills
+              WHERE symbol = @symbol
+              ORDER BY created_at DESC
+              LIMIT @limit
+            `
+          )
+          .all({ symbol, limit })
+      : db
+          .prepare(
+            `
+              SELECT id, order_id, symbol, side, size, fill_price, mark_price,
+                     slippage_bps, reduce_only, realized_pnl_usd, fee_usd, created_at, metadata
+              FROM paper_perp_fills
+              ORDER BY created_at DESC
+              LIMIT @limit
+            `
+          )
+          .all({ limit })
+  ) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => {
+    let leverage: number | null = null;
+    let orderType: 'market' | 'limit' = 'market';
+    try {
+      const meta = JSON.parse(String(row.metadata ?? '{}')) as Record<string, unknown>;
+      leverage = meta.leverage != null ? Number(meta.leverage) : null;
+      orderType = meta.orderType === 'limit' ? 'limit' : 'market';
+    } catch {
+      // malformed metadata — leave defaults
+    }
+    return {
+      id: Number(row.id ?? 0),
+      orderId: String(row.order_id ?? ''),
+      symbol: String(row.symbol ?? ''),
+      side: String(row.side ?? 'buy') === 'sell' ? 'sell' : 'buy',
+      size: Number(row.size ?? 0),
+      fillPrice: Number(row.fill_price ?? 0),
+      markPrice: Number(row.mark_price ?? 0),
+      slippageBps: row.slippage_bps == null ? null : Number(row.slippage_bps),
+      reduceOnly: Number(row.reduce_only ?? 0) === 1,
+      realizedPnlUsd: Number(row.realized_pnl_usd ?? 0),
+      feeUsd: Number(row.fee_usd ?? 0),
+      createdAt: String(row.created_at ?? ''),
+      leverage,
+      orderType,
+    };
+  });
+}
+
 export function cancelPaperPerpOrder(orderId: string, initialCashUsdc = 200): void {
   initializePaperPerpBook(initialCashUsdc);
   const db = openDatabase();
@@ -303,7 +385,7 @@ export function placePaperPerpOrder(
         side = excluded.side,
         size = excluded.size,
         entry_price = excluded.entry_price,
-        leverage = excluded.leverage,
+        leverage = COALESCE(excluded.leverage, paper_perp_positions.leverage),
         opened_at = excluded.opened_at,
         updated_at = datetime('now')
     `

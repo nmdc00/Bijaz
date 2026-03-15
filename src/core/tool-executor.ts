@@ -57,7 +57,7 @@ export interface ToolSpendingLimiter {
   getState?(): { todaySpent: number; reserved: number } & Record<string, unknown>;
 }
 import { getCashBalance } from '../memory/portfolio.js';
-import { getPaperPerpBookSummary, listPaperPerpPositions } from '../memory/paper_perps.js';
+import { getPaperPerpBookSummary, listPaperPerpFills, listPaperPerpPositions } from '../memory/paper_perps.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
 import { loadKeystore } from '../execution/wallet/keystore.js';
@@ -307,12 +307,19 @@ function buildPaperPerpSnapshot(initialCashUsdc: number, mids: Record<string, nu
     const markPrice = resolveMidForSymbol(position.symbol, mids);
     const effectivePrice = markPrice ?? position.entryPrice;
     const direction = position.side === 'long' ? 1 : -1;
+    // Recover leverage from fill metadata when position column is null
+    let leverage = position.leverage;
+    if (leverage == null) {
+      const openFill = listPaperPerpFills({ symbol: position.symbol, limit: 20 }, initialCashUsdc)
+        .find((f) => !f.reduceOnly && f.leverage != null);
+      leverage = openFill?.leverage ?? null;
+    }
     return {
       symbol: position.symbol,
       side: position.side,
       size: position.size,
       entry_price: position.entryPrice,
-      leverage: position.leverage,
+      leverage,
       position_value: effectivePrice * position.size,
       unrealized_pnl: markPrice != null
         ? (markPrice - position.entryPrice) * position.size * direction
@@ -2676,6 +2683,99 @@ export async function executeToolCall(
         return getPortfolio(ctx, toolInput);
       }
 
+      case 'get_fills': {
+        const mode = resolvePerpBookMode(ctx.config, toolInput);
+        const symbol = typeof toolInput.symbol === 'string' && toolInput.symbol.trim().length > 0
+          ? toolInput.symbol.trim()
+          : undefined;
+        const limit = Math.min(Math.max(toolInput.limit != null ? Number(toolInput.limit) : 20, 1), 100);
+
+        if (mode === 'paper') {
+          const fills = listPaperPerpFills({ symbol, limit }, ctx.config.paper?.initialCashUsdc ?? 200);
+          const totalRealizedPnl = fills.reduce((sum, f) => sum + f.realizedPnlUsd, 0);
+          return {
+            success: true,
+            data: {
+              mode,
+              fills: fills.map((f) => ({
+                symbol: f.symbol,
+                side: f.side,
+                size: f.size,
+                fill_price: f.fillPrice,
+                realized_pnl_usd: f.realizedPnlUsd,
+                fee_usd: f.feeUsd,
+                reduce_only: f.reduceOnly,
+                leverage: f.leverage,
+                order_type: f.orderType,
+                filled_at: f.createdAt,
+                order_id: f.orderId,
+              })),
+              summary: {
+                count: fills.length,
+                total_realized_pnl_usd: totalRealizedPnl,
+              },
+            },
+          };
+        }
+
+        // Live mode: fetch from Hyperliquid
+        if (ctx.config.execution?.provider !== 'hyperliquid') {
+          return { success: false, error: 'get_fills live mode requires hyperliquid provider' };
+        }
+        try {
+          const client = new HyperliquidClient(ctx.config);
+          if (!client.getAccountAddress()) {
+            return { success: false, error: 'Hyperliquid account address not configured' };
+          }
+          const lookbackDays = Math.min(Math.max(toolInput.lookback_days != null ? Number(toolInput.lookback_days) : 30, 1), 90);
+          const startTime = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+          const rawFills = await client.getUserFillsByTime({ startTime, aggregateByTime: false });
+          const allFills = (Array.isArray(rawFills) ? rawFills : []) as Array<Record<string, unknown>>;
+          const filtered = symbol
+            ? allFills.filter((f) => String(f.coin ?? '').toUpperCase() === symbol.toUpperCase())
+            : allFills;
+          const limited = filtered.slice(0, limit);
+          const mapped = limited.map((f) => {
+            const sideRaw = String(f.side ?? '');
+            const side = sideRaw === 'B' ? 'buy' : 'sell';
+            const fillPrice = Number(f.px ?? NaN);
+            const size = Number(f.sz ?? NaN);
+            const realizedPnl = Number(f.closedPnl ?? 0);
+            const fee = Number(f.fee ?? 0);
+            const filledAt = Number.isFinite(Number(f.time)) ? new Date(Number(f.time)).toISOString() : '';
+            const orderId = f.oid != null ? String(f.oid) : '';
+            return {
+              symbol: String(f.coin ?? ''),
+              side,
+              size: Number.isFinite(size) ? size : null,
+              fill_price: Number.isFinite(fillPrice) ? fillPrice : null,
+              realized_pnl_usd: Number.isFinite(realizedPnl) ? realizedPnl : 0,
+              fee_usd: Number.isFinite(fee) ? fee : 0,
+              reduce_only: null,
+              leverage: null,
+              order_type: null,
+              filled_at: filledAt,
+              order_id: orderId,
+              dir: f.dir != null ? String(f.dir) : null,
+            };
+          });
+          const totalRealizedPnl = mapped.reduce((sum, f) => sum + (f.realized_pnl_usd ?? 0), 0);
+          return {
+            success: true,
+            data: {
+              mode,
+              fills: mapped,
+              summary: {
+                count: mapped.length,
+                total_realized_pnl_usd: totalRealizedPnl,
+              },
+            },
+          };
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+        }
+      }
+
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
@@ -3150,18 +3250,26 @@ async function loadPerpPositions(
       const leverage = (position as { leverage?: { type?: string; value?: number | string } })
         .leverage;
       const leverageValue = toNumber(leverage?.value);
+      const positionValue = toNumber((position as { positionValue?: unknown }).positionValue);
+      const marginUsed = toNumber((position as { marginUsed?: unknown }).marginUsed);
+      // Compute effective leverage from notional/margin when the API field is absent (e.g. cross DEX perps)
+      const effectiveLeverage =
+        leverageValue ??
+        (positionValue != null && marginUsed != null && marginUsed > 0
+          ? Math.round((positionValue / marginUsed) * 10) / 10
+          : null);
       return {
         symbol: String((position as { coin?: unknown }).coin ?? ''),
         side,
         size: Math.abs(size),
         entry_price: toNumber((position as { entryPx?: unknown }).entryPx),
-        position_value: toNumber((position as { positionValue?: unknown }).positionValue),
+        position_value: positionValue,
         unrealized_pnl: toNumber((position as { unrealizedPnl?: unknown }).unrealizedPnl),
         return_on_equity: toNumber((position as { returnOnEquity?: unknown }).returnOnEquity),
         liquidation_price: toNumber((position as { liquidationPx?: unknown }).liquidationPx),
-        margin_used: toNumber((position as { marginUsed?: unknown }).marginUsed),
+        margin_used: marginUsed,
         leverage_type: leverage?.type ?? null,
-        leverage: leverageValue,
+        leverage: effectiveLeverage,
         max_leverage: toNumber((position as { maxLeverage?: unknown }).maxLeverage),
       };
     })
