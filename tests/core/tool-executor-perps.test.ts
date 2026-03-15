@@ -1084,36 +1084,93 @@ describe('tool-executor perps', () => {
     expect((res as any).data.fills.length).toBe(5);
   });
 
-  it('get_positions live mode computes effective leverage from notional/margin when API field absent', async () => {
+  it('get_positions live: tier-2 leverage from positionValue/marginUsed', async () => {
     vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
-      assetPositions: [
-        {
-          position: {
-            coin: 'ZEC',
-            szi: '0.5',
-            entryPx: '226.85',
-            positionValue: '115.0',
-            marginUsed: '38.33',
-            unrealizedPnl: '1.67',
-            // leverage field absent — simulates DEX perp returning no value
-          },
+      assetPositions: [{
+        position: {
+          coin: 'ZEC',
+          szi: '0.5',
+          entryPx: '226.85',
+          positionValue: '115.0',
+          marginUsed: '38.33',
+          unrealizedPnl: '1.67',
+          // no leverage field
         },
-      ],
+      }],
       marginSummary: { accountValue: '603', totalNtlPos: '115', totalMarginUsed: '38.33' },
       withdrawable: '387.68',
     } as any);
 
-    const res = await executeToolCall(
-      'get_positions',
-      { mode: 'live' },
-      { config: { execution: { provider: 'hyperliquid', mode: 'live' } } as any, marketClient }
-    );
+    const res = await executeToolCall('get_positions', { mode: 'live' },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient });
     expect(res.success).toBe(true);
-    const positions = (res as any).data?.positions ?? [];
-    const zec = positions.find((p: any) => p.symbol === 'ZEC');
+    const zec = ((res as any).data?.positions ?? []).find((p: any) => p.symbol === 'ZEC');
     expect(zec).toBeDefined();
-    // 115.0 / 38.33 ≈ 3.0 (rounded to 1 decimal)
+    // 115.0 / 38.33 ≈ 3.0
     expect(zec.leverage).not.toBeNull();
     expect(Number(zec.leverage)).toBeCloseTo(3.0, 1);
+  });
+
+  it('get_positions live: tier-3 leverage derived from ROE when marginUsed absent', async () => {
+    // returnOnEquity = unrealizedPnl / marginUsed → marginUsed = unrealizedPnl / ROE
+    // unrealizedPnl=1.67, ROE=0.04355 → marginUsed≈38.35 → leverage≈115/38.35≈3.0
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [{
+        position: {
+          coin: 'ZEC',
+          szi: '0.5',
+          entryPx: '226.85',
+          positionValue: '115.0',
+          unrealizedPnl: '1.67',
+          returnOnEquity: '0.04355',
+          // no leverage, no marginUsed
+        },
+      }],
+      marginSummary: { accountValue: '603', totalNtlPos: '115', totalMarginUsed: '38.33' },
+      withdrawable: '387.68',
+    } as any);
+
+    const res = await executeToolCall('get_positions', { mode: 'live' },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient });
+    expect(res.success).toBe(true);
+    const zec = ((res as any).data?.positions ?? []).find((p: any) => p.symbol === 'ZEC');
+    expect(zec).toBeDefined();
+    expect(zec.leverage).not.toBeNull();
+    expect(Number(zec.leverage)).toBeCloseTo(3.0, 0);
+  });
+
+  it('get_positions live: tier-4 leverage from perp journal when all API fields absent', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [{
+        position: {
+          coin: 'ZECJOURNAL',
+          szi: '0.5',
+          entryPx: '226.85',
+          positionValue: '115.0',
+          unrealizedPnl: '0',      // zero PnL → ROE fallback can't fire
+          returnOnEquity: '0',     // no leverage field, no marginUsed
+        },
+      }],
+      marginSummary: { accountValue: '603', totalNtlPos: '115', totalMarginUsed: '38.33' },
+      withdrawable: '387.68',
+    } as any);
+
+    // Record a live trade for this symbol with leverage=3 in the journal
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = { checkAndReserve: async () => ({ allowed: true }), confirm: () => {}, release: () => {} };
+    await executeToolCall('perp_place_order',
+      { symbol: 'ZECJOURNAL', side: 'buy', size: 0.5, leverage: 3 },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter });
+
+    const res = await executeToolCall('get_positions', { mode: 'live' },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient });
+    expect(res.success).toBe(true);
+    const zec = ((res as any).data?.positions ?? []).find((p: any) => p.symbol === 'ZECJOURNAL');
+    expect(zec).toBeDefined();
+    expect(zec.leverage).toBe(3);
   });
 });
