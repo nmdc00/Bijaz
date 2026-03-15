@@ -239,20 +239,28 @@ function resolveMidForSymbol(symbol: string, mids: Record<string, number>): numb
   return undefined;
 }
 
-async function resolvePaperMids(marketClient: MarketClient): Promise<Record<string, number>> {
+async function resolvePaperMids(
+  marketClient: MarketClient,
+  config?: ThufirConfig
+): Promise<Record<string, number>> {
   try {
-    if (!marketClient.isAvailable()) return {};
-    const markets = await marketClient.listMarkets(500);
-    const mids: Record<string, number> = {};
-    for (const m of markets) {
-      if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
-        mids[m.symbol] = m.markPrice;
-        // Also index by base symbol so DEX-prefixed positions (XYZ:CL) can find quoted markets (CL/USDC → CL)
-        const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
-        if (base && base !== m.symbol) mids[base] = m.markPrice;
+    if (marketClient.isAvailable()) {
+      const markets = await marketClient.listMarkets(500);
+      const mids: Record<string, number> = {};
+      for (const m of markets) {
+        if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+          mids[m.symbol] = m.markPrice;
+          const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
+          if (base && base !== m.symbol) mids[base] = m.markPrice;
+        }
       }
+      return mids;
     }
-    return mids;
+    // Fall back to direct HyperliquidClient when execution provider doesn't expose a market client
+    if (config?.hyperliquid?.enabled !== false) {
+      return await new HyperliquidClient(config!).getAllMids();
+    }
+    return {};
   } catch {
     return {};
   }
@@ -2089,7 +2097,7 @@ export async function executeToolCall(
       case 'perp_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const mids = await resolvePaperMids(ctx.marketClient);
+          const mids = await resolvePaperMids(ctx.marketClient, ctx.config);
           const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200, mids);
           return {
             success: true,
@@ -2636,7 +2644,7 @@ export async function executeToolCall(
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const mids = await resolvePaperMids(ctx.marketClient);
+          const mids = await resolvePaperMids(ctx.marketClient, ctx.config);
           const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200, mids);
           return {
             success: true,
@@ -2890,7 +2898,7 @@ async function getPortfolio(
     let dexAbstraction: boolean | null = null;
     let dexAbstractionError: string | null = null;
     if (mode === 'paper') {
-      const mids = await resolvePaperMids(ctx.marketClient);
+      const mids = await resolvePaperMids(ctx.marketClient, ctx.config);
       const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200, mids);
       perpPositions = {
         positions: snapshot.positions,
