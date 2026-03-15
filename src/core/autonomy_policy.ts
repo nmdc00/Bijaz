@@ -77,8 +77,20 @@ export function classifyMarketRegime(cluster: SignalCluster): MarketRegime {
   return 'choppy';
 }
 
+const KNOWN_SIGNAL_CLASSES = new Set<string>([
+  'momentum_breakout',
+  'mean_reversion',
+  'news_event',
+  'liquidation_cascade',
+  'unknown',
+]);
+
+function isSignalClass(value: string | null | undefined): value is SignalClass {
+  return typeof value === 'string' && KNOWN_SIGNAL_CLASSES.has(value);
+}
+
 export function classifySignalClass(expression: ExpressionPlan): SignalClass {
-  if (expression.signalClass) return expression.signalClass as SignalClass;
+  if (isSignalClass(expression.signalClass)) return expression.signalClass;
   if (expression.newsTrigger?.enabled) return 'news_event';
   if (expression.hypothesisId.includes('_revert')) return 'mean_reversion';
   if (expression.hypothesisId.includes('_reflex')) return 'liquidation_cascade';
@@ -550,7 +562,12 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
     let accumulatedSizeMultiplier = 1;
     let policyReasonCode: string | undefined;
     let policyReason: string | undefined;
-    const perf = summarizeSignalPerformance(listPerpTradeJournals({ limit: 200 }), input.signalClass);
+    // Only resolved entries (thesisCorrect set) are valid for Sharpe computation.
+    // Unresolved/failed entries (blocked orders) have no outcome data and would skew the metric.
+    const resolvedEntries = listPerpTradeJournals({ limit: 200 }).filter(
+      (e) => typeof e.thesisCorrect === 'boolean'
+    );
+    const perf = summarizeSignalPerformance(resolvedEntries, input.signalClass);
     const minSharpe = Number((config.autonomy as any)?.signalPerformance?.minSharpe ?? 0.8);
     const minSamples = Number((config.autonomy as any)?.signalPerformance?.minSamples ?? 8);
     if (perf.sampleCount >= minSamples && perf.sharpeLike < minSharpe) {
@@ -563,7 +580,7 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
       };
     }
 
-    if (input.marketRegime && !isSignalClassAllowedForRegime(input.signalClass as SignalClass, input.marketRegime)) {
+    if (input.marketRegime && isSignalClass(input.signalClass) && !isSignalClassAllowedForRegime(input.signalClass, input.marketRegime)) {
       return {
         allowed: false,
         reasonCode: 'policy.signal_regime_matrix',
