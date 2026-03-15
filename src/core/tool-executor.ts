@@ -226,7 +226,36 @@ function resolvePerpExecutor(ctx: ToolExecutorContext, mode: PerpBookMode): Exec
   return new PaperExecutor();
 }
 
-function buildPaperPerpSnapshot(initialCashUsdc: number): {
+function resolveMidForSymbol(symbol: string, mids: Record<string, number>): number | undefined {
+  if (mids[symbol] != null) return mids[symbol];
+  // Strip DEX prefix: "XYZ:CL" → "CL"
+  if (symbol.includes(':')) {
+    const afterColon = symbol.split(':').at(-1);
+    if (afterColon && mids[afterColon] != null) return mids[afterColon];
+  }
+  // Strip quote currency: "CL/USDC" → "CL"
+  const beforeSlash = symbol.split('/')[0];
+  if (beforeSlash && beforeSlash !== symbol && mids[beforeSlash] != null) return mids[beforeSlash];
+  return undefined;
+}
+
+async function resolvePaperMids(marketClient: MarketClient): Promise<Record<string, number>> {
+  try {
+    if (!marketClient.isAvailable()) return {};
+    const markets = await marketClient.listMarkets(500);
+    const mids: Record<string, number> = {};
+    for (const m of markets) {
+      if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+        mids[m.symbol] = m.markPrice;
+      }
+    }
+    return mids;
+  } catch {
+    return {};
+  }
+}
+
+function buildPaperPerpSnapshot(initialCashUsdc: number, mids: Record<string, number> = {}): {
   cashBalanceUsdc: number;
   totalNotionalUsdc: number;
   accountValueUsdc: number;
@@ -246,20 +275,27 @@ function buildPaperPerpSnapshot(initialCashUsdc: number): {
   }>;
 } {
   const book = getPaperPerpBookSummary(initialCashUsdc);
-  const positions = listPaperPerpPositions(initialCashUsdc).map((position) => ({
-    symbol: position.symbol,
-    side: position.side,
-    size: position.size,
-    entry_price: position.entryPrice,
-    leverage: position.leverage,
-    position_value: position.entryPrice * position.size,
-    unrealized_pnl: null,
-    return_on_equity: null,
-    liquidation_price: null,
-    margin_used: null,
-    leverage_type: null,
-    max_leverage: null,
-  }));
+  const positions = listPaperPerpPositions(initialCashUsdc).map((position) => {
+    const markPrice = resolveMidForSymbol(position.symbol, mids);
+    const effectivePrice = markPrice ?? position.entryPrice;
+    const direction = position.side === 'long' ? 1 : -1;
+    return {
+      symbol: position.symbol,
+      side: position.side,
+      size: position.size,
+      entry_price: position.entryPrice,
+      leverage: position.leverage,
+      position_value: effectivePrice * position.size,
+      unrealized_pnl: markPrice != null
+        ? (markPrice - position.entryPrice) * position.size * direction
+        : null,
+      return_on_equity: null,
+      liquidation_price: null,
+      margin_used: null,
+      leverage_type: null,
+      max_leverage: null,
+    };
+  });
   const totalNotionalUsdc = positions.reduce((sum, position) => sum + Number(position.position_value ?? 0), 0);
   return {
     cashBalanceUsdc: book.cashBalanceUsdc,
@@ -2050,7 +2086,8 @@ export async function executeToolCall(
       case 'perp_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+          const mids = await resolvePaperMids(ctx.marketClient);
+          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200, mids);
           return {
             success: true,
             data: {
@@ -2596,7 +2633,8 @@ export async function executeToolCall(
       case 'get_positions': {
         const mode = resolvePerpBookMode(ctx.config, toolInput);
         if (mode === 'paper') {
-          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+          const mids = await resolvePaperMids(ctx.marketClient);
+          const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200, mids);
           return {
             success: true,
             data: {
@@ -2849,7 +2887,8 @@ async function getPortfolio(
     let dexAbstraction: boolean | null = null;
     let dexAbstractionError: string | null = null;
     if (mode === 'paper') {
-      const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200);
+      const mids = await resolvePaperMids(ctx.marketClient);
+      const snapshot = buildPaperPerpSnapshot(ctx.config.paper?.initialCashUsdc ?? 200, mids);
       perpPositions = {
         positions: snapshot.positions,
         summary: {
