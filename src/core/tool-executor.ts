@@ -420,6 +420,19 @@ function toOptionalNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const CANONICAL_SIGNAL_CLASSES = new Set([
+  'momentum_breakout',
+  'mean_reversion',
+  'news_event',
+  'liquidation_cascade',
+  'unknown',
+]);
+
+function toCanonicalSignalClass(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return CANONICAL_SIGNAL_CLASSES.has(value) ? value : null;
+}
+
 function inferSignalClassFromSetupKey(setupKey: string | null): string | null {
   if (!setupKey) return null;
   const normalized = setupKey.trim();
@@ -452,19 +465,24 @@ function inferSignalClass(params: {
   hypothesisId: string | null;
   entryTrigger: 'news' | 'technical' | 'hybrid' | null;
 }): string | null {
-  if (params.explicitSignalClass) return params.explicitSignalClass;
+  // All LLM-supplied string sources are validated against the canonical set.
+  // Non-canonical values (e.g. "scan_trend_follow") fall through to hypothesis inference.
+  const explicitCanonical = toCanonicalSignalClass(params.explicitSignalClass);
+  if (explicitCanonical) return explicitCanonical;
 
-  const planContextSignalClass =
+  const planContextRaw =
     toOptionalNonEmptyString(params.planContext?.signal_class) ??
     toOptionalNonEmptyString(params.planContext?.signalClass);
-  if (planContextSignalClass) return planContextSignalClass;
+  const planContextCanonical = toCanonicalSignalClass(planContextRaw);
+  if (planContextCanonical) return planContextCanonical;
 
-  const setupKeySignalClass =
+  const setupKeyRaw =
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.toolInput.setup_key)) ??
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.toolInput.setupKey)) ??
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.planContext?.setup_key)) ??
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.planContext?.setupKey));
-  if (setupKeySignalClass) return setupKeySignalClass;
+  const setupKeyCanonical = toCanonicalSignalClass(setupKeyRaw);
+  if (setupKeyCanonical) return setupKeyCanonical;
 
   const inferredFromHypothesis = inferSignalClassFromHypothesisId(params.hypothesisId);
   if (inferredFromHypothesis) return inferredFromHypothesis;
