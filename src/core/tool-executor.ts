@@ -247,11 +247,26 @@ async function resolvePaperMids(
     if (marketClient.isAvailable()) {
       const markets = await marketClient.listMarkets(500);
       const mids: Record<string, number> = {};
+      // First pass: index main-perp markets (no colon prefix) so they take priority.
       for (const m of markets) {
-        if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+        if (m.symbol && !m.symbol.includes(':') && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
           mids[m.symbol] = m.markPrice;
-          const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
-          if (base && base !== m.symbol) mids[base] = m.markPrice;
+          // Also index by base for slash-quoted symbols (e.g. "CL/USDC" → "CL").
+          if (m.symbol.includes('/')) {
+            const base = m.symbol.split('/')[0];
+            if (base && base !== m.symbol) mids[base] = m.markPrice;
+          }
+        }
+      }
+      // Second pass: index DEX markets; strip prefix only if base has no main-perp price.
+      // e.g. "xyz:CL" → "CL" when there is no main "CL", but "cash:BTC" → "BTC" is skipped.
+      for (const m of markets) {
+        if (m.symbol && m.symbol.includes(':') && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+          mids[m.symbol] = m.markPrice;
+          const afterColon = m.symbol.split(':').at(-1);
+          if (afterColon && afterColon !== m.symbol && mids[afterColon] == null) {
+            mids[afterColon] = m.markPrice;
+          }
         }
       }
       return mids;
@@ -405,6 +420,19 @@ function toOptionalNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const CANONICAL_SIGNAL_CLASSES = new Set([
+  'momentum_breakout',
+  'mean_reversion',
+  'news_event',
+  'liquidation_cascade',
+  'unknown',
+]);
+
+function toCanonicalSignalClass(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return CANONICAL_SIGNAL_CLASSES.has(value) ? value : null;
+}
+
 function inferSignalClassFromSetupKey(setupKey: string | null): string | null {
   if (!setupKey) return null;
   const normalized = setupKey.trim();
@@ -437,19 +465,24 @@ function inferSignalClass(params: {
   hypothesisId: string | null;
   entryTrigger: 'news' | 'technical' | 'hybrid' | null;
 }): string | null {
-  if (params.explicitSignalClass) return params.explicitSignalClass;
+  // All LLM-supplied string sources are validated against the canonical set.
+  // Non-canonical values (e.g. "scan_trend_follow") fall through to hypothesis inference.
+  const explicitCanonical = toCanonicalSignalClass(params.explicitSignalClass);
+  if (explicitCanonical) return explicitCanonical;
 
-  const planContextSignalClass =
+  const planContextRaw =
     toOptionalNonEmptyString(params.planContext?.signal_class) ??
     toOptionalNonEmptyString(params.planContext?.signalClass);
-  if (planContextSignalClass) return planContextSignalClass;
+  const planContextCanonical = toCanonicalSignalClass(planContextRaw);
+  if (planContextCanonical) return planContextCanonical;
 
-  const setupKeySignalClass =
+  const setupKeyRaw =
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.toolInput.setup_key)) ??
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.toolInput.setupKey)) ??
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.planContext?.setup_key)) ??
     inferSignalClassFromSetupKey(toOptionalNonEmptyString(params.planContext?.setupKey));
-  if (setupKeySignalClass) return setupKeySignalClass;
+  const setupKeyCanonical = toCanonicalSignalClass(setupKeyRaw);
+  if (setupKeyCanonical) return setupKeyCanonical;
 
   const inferredFromHypothesis = inferSignalClassFromHypothesisId(params.hypothesisId);
   if (inferredFromHypothesis) return inferredFromHypothesis;
