@@ -846,7 +846,7 @@ Just type naturally to chat about markets, risks, or positioning.
   }
 
   private isSetupRequest(message: string): boolean {
-    return /\b(set\s*up|enable|configure)\b.*\b(live|trading|trade)\b/i.test(message);
+    return /\b(set\s*up|enable|configure)\s+(live\s+trading|live\s+trade|live|trading|trade)\b/i.test(message);
   }
 }
 
