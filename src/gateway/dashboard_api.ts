@@ -6,6 +6,7 @@ import { buildPaperPromotionReport } from '../core/paper_promotion.js';
 import { loadConfig, type ThufirConfig } from '../core/config.js';
 import { getDailyPnLRollup } from '../core/daily_pnl.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
+import { createMarketClient } from '../execution/market-client.js';
 import { openDatabase } from '../memory/db.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
 import { cached, cachedAsync } from './dashboard_cache.js';
@@ -903,7 +904,18 @@ type OpenPositionRow = {
   updatedAt: string;
 };
 
-function listPaperOpenPositionRows(db: Database.Database): OpenPositionRow[] {
+function resolveMidForDashboard(symbol: string, mids: Record<string, number>): number | undefined {
+  if (mids[symbol] != null) return mids[symbol];
+  if (symbol.includes(':')) {
+    const base = symbol.split(':').at(-1);
+    if (base && mids[base] != null) return mids[base];
+  }
+  const beforeSlash = symbol.split('/')[0];
+  if (beforeSlash && beforeSlash !== symbol && mids[beforeSlash] != null) return mids[beforeSlash];
+  return undefined;
+}
+
+function listPaperOpenPositionRows(db: Database.Database, mids: Record<string, number> = {}): OpenPositionRow[] {
   if (!tableExists(db, 'paper_perp_positions')) {
     return [];
   }
@@ -942,7 +954,7 @@ function listPaperOpenPositionRows(db: Database.Database): OpenPositionRow[] {
     const side = String(row.side ?? 'long') === 'short' ? 'short' : 'long';
     const size = Number(row.size ?? 0);
     const entryPrice = Number(row.entryPrice ?? 0);
-    const currentPrice = Number(row.currentPrice ?? entryPrice);
+    const currentPrice = resolveMidForDashboard(symbol, mids) ?? Number(row.currentPrice ?? entryPrice);
     const openedAt = String(row.openedAt ?? '');
     const updatedAt = String(row.updatedAt ?? '');
     const openedMs = Date.parse(openedAt);
@@ -1684,6 +1696,7 @@ function buildPolicyStateSection(db: Database.Database): {
 export function buildDashboardApiPayload(params?: {
   db?: Database.Database;
   filters?: DashboardFilters;
+  mids?: Record<string, number>;
 }): {
   meta: {
     generatedAt: string;
@@ -1746,6 +1759,7 @@ export function buildDashboardApiPayload(params?: {
     from: null,
     to: null,
   };
+  const mids = params?.mids ?? {};
 
   const perpTrades = safeCount(db, 'SELECT COUNT(*) AS c FROM perp_trades');
   const journals = countTradeJournalRows(db, filters);
@@ -1756,7 +1770,7 @@ export function buildDashboardApiPayload(params?: {
   const equityCurve = isPaperMode(filters) || filters.mode === 'combined'
     ? buildPaperEquitySeries(db, filters)
     : buildEmptyEquitySeries();
-  const openPositionRows = isLiveMode(filters) ? [] : listPaperOpenPositionRows(db);
+  const openPositionRows = isLiveMode(filters) ? [] : listPaperOpenPositionRows(db, mids);
   const longCount = openPositionRows.filter((row) => row.side === 'long').length;
   const shortCount = openPositionRows.filter((row) => row.side === 'short').length;
   const totalUnrealizedPnlUsd = openPositionRows.reduce(
@@ -1845,15 +1859,38 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
     const filters = parseDashboardFilters(url);
     const ttlMs = isLiveMode(filters) ? 5_000 : 30_000;
     const cacheKey = buildDashboardCacheKey('dashboard', url);
+    const baseConfig = (req as IncomingMessage & { thufirConfig?: ThufirConfig }).thufirConfig;
+
     if (!isLiveMode(filters)) {
-      const payload = cached(cacheKey, ttlMs, () => buildDashboardApiPayload({ filters }));
-      writeJson(res, 200, payload);
+      if (!baseConfig) {
+        const payload = cached(cacheKey, ttlMs, () => buildDashboardApiPayload({ filters }));
+        writeJson(res, 200, payload);
+        return true;
+      }
+      void cachedAsync(cacheKey, ttlMs, async () => {
+        const mc = createMarketClient(baseConfig);
+        let mids: Record<string, number> = {};
+        if (mc.isAvailable()) {
+          try {
+            const markets = await mc.listMarkets(500);
+            for (const m of markets) {
+              if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+                mids[m.symbol] = m.markPrice;
+                const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
+                if (base && base !== m.symbol) mids[base] = m.markPrice;
+              }
+            }
+          } catch { /* fall through with empty mids */ }
+        }
+        return buildDashboardApiPayload({ filters, mids });
+      })
+        .then((payload) => writeJson(res, 200, payload))
+        .catch(() => writeJson(res, 200, buildDashboardApiPayload({ filters })));
       return true;
     }
 
     // Live mode: overlay latest wallet snapshot from Hyperliquid when credentials are available.
     // If unavailable, return the DB-backed payload as-is.
-    const baseConfig = (req as IncomingMessage & { thufirConfig?: ThufirConfig }).thufirConfig;
     if (!baseConfig) {
       const payload = cached(cacheKey, ttlMs, () => buildDashboardApiPayload({ filters }));
       writeJson(res, 200, payload);
