@@ -258,7 +258,9 @@ async function resolvePaperMids(
     }
     // Fall back to direct HyperliquidClient when execution provider doesn't expose a market client
     if (config?.hyperliquid?.enabled !== false) {
-      return await new HyperliquidClient(config!).getAllMids();
+      const raw = await new HyperliquidClient(config!).getAllMids();
+      // Normalize keys to uppercase so "xyz:CL" → "XYZ:CL" matches position symbols
+      return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k.toUpperCase(), v]));
     }
     return {};
   } catch {

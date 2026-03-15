@@ -1870,7 +1870,9 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
         let mids: Record<string, number> = {};
         if (baseConfig.hyperliquid?.enabled !== false) {
           try {
-            mids = await new HyperliquidClient(baseConfig).getAllMids();
+            const raw = await new HyperliquidClient(baseConfig).getAllMids();
+            // Normalize keys to uppercase so "xyz:CL" → "XYZ:CL" matches position symbols
+            mids = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k.toUpperCase(), v]));
           } catch { /* fall through with empty mids */ }
         }
         return buildDashboardApiPayload({ filters, mids });
