@@ -114,7 +114,7 @@ export class TelegramAdapter implements ChannelAdapter {
           const data = (await response.json()) as { result: Array<any> };
           for (const update of data.result ?? []) {
             this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
-            const message = update.message ?? update.edited_message;
+            const message = update.message;
             if (!message?.text) {
               continue;
             }
