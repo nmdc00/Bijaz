@@ -30,6 +30,8 @@ const TOOL_SUBSETS: Record<Exclude<ToolSubset, 'full'>, Set<string>> = {
     'perp_market_get',
     'get_portfolio',
     'get_positions',
+    'get_fills',
+    'get_open_orders',
     'position_analysis',
     'paper_promotion_report',
     'current_time',
@@ -69,6 +71,7 @@ const TOOL_SUBSETS: Record<Exclude<ToolSubset, 'full'>, Set<string>> = {
     'proactive_search_run',
     'discovery_report',
     'trade_review',
+    'get_fills',
     'perp_trade_journal_list',
     'paper_promotion_report',
     'calibration_stats',
@@ -412,6 +415,29 @@ export const THUFIR_TOOLS: Tool[] = [
     input_schema: {
       type: 'object',
       properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_fills',
+    description:
+      'Get fill history with realized PnL. Works in both paper and live mode. Use to review closed trades, check realized PnL on a specific symbol, or look up leverage used on past trades.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: {
+          type: 'string',
+          description: 'Filter by symbol (e.g. "BTC", "ZEC"). Omit for all symbols.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max fills to return (default 20, max 100)',
+        },
+        lookback_days: {
+          type: 'number',
+          description: 'Live mode only: how many days back to fetch fills (default 30, max 90).',
+        },
+      },
       required: [],
     },
   },

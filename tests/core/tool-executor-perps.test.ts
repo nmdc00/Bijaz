@@ -937,7 +937,7 @@ describe('tool-executor perps', () => {
           symbol,
           side,
           size: 0.001,
-          signal_class: 'breakout_15m',
+          signal_class: 'momentum_breakout',
           thesis_invalidation_hit: side === 'sell',
           exit_mode: side === 'sell' ? 'take_profit' : undefined,
           reduce_only: side === 'sell',
@@ -948,7 +948,7 @@ describe('tool-executor perps', () => {
 
     const res = await executeToolCall(
       'paper_promotion_report',
-      { symbol, signal_class: 'breakout_15m' },
+      { symbol, signal_class: 'momentum_breakout' },
       {
         config: { execution: { provider: 'hyperliquid' }, paper: { promotionGates: { minTrades: 1 } } } as any,
         marketClient,
@@ -956,8 +956,164 @@ describe('tool-executor perps', () => {
     );
     expect(res.success).toBe(true);
     if (res.success) {
-      expect((res.data as any).setupKey).toBe(`${symbol}:breakout_15m`);
+      expect((res.data as any).setupKey).toBe(`${symbol}:momentum_breakout`);
       expect((res.data as any).sampleCount).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it('get_fills paper mode returns fill history with realized PnL after open+close', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    await executeToolCall('perp_place_order', { symbol: 'BTC', side: 'buy', size: 0.01, mode: 'paper' }, ctx);
+    await executeToolCall('perp_place_order', { symbol: 'BTC', side: 'sell', size: 0.01, reduce_only: true, mode: 'paper' }, ctx);
+
+    const res = await executeToolCall('get_fills', { symbol: 'BTC', limit: 10 }, ctx);
+    expect(res.success).toBe(true);
+    const data = (res as any).data;
+    expect(data.mode).toBe('paper');
+    expect(Array.isArray(data.fills)).toBe(true);
+    expect(data.fills.length).toBeGreaterThanOrEqual(2);
+    const closeFill = data.fills.find((f: any) => f.side === 'sell' && f.reduce_only === true);
+    expect(closeFill).toBeDefined();
+    expect(typeof closeFill.realized_pnl_usd).toBe('number');
+    expect(typeof data.summary.total_realized_pnl_usd).toBe('number');
+  });
+
+  it('get_fills live mode returns mapped fills from Hyperliquid API', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getAccountAddress').mockReturnValue('0xdeadbeef');
+    vi.spyOn(HyperliquidClient.prototype, 'getUserFillsByTime').mockResolvedValue([
+      {
+        coin: 'BTC',
+        px: '70500',
+        sz: '0.01',
+        side: 'A',
+        closedPnl: '10.25',
+        fee: '0.35',
+        time: 1741996800000,
+        oid: 987654,
+        dir: 'Close Long',
+        feeToken: 'USDC',
+      },
+      {
+        coin: 'BTC',
+        px: '70000',
+        sz: '0.01',
+        side: 'B',
+        closedPnl: '0',
+        fee: '0.35',
+        time: 1741900000000,
+        oid: 987600,
+        dir: 'Open Long',
+        feeToken: 'USDC',
+      },
+      {
+        coin: 'ZEC',
+        px: '230',
+        sz: '0.5',
+        side: 'B',
+        closedPnl: '0',
+        fee: '0.12',
+        time: 1741800000000,
+        oid: 111111,
+        dir: 'Open Long',
+        feeToken: 'USDC',
+      },
+    ] as any);
+
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid' } } as any,
+      marketClient,
+    };
+
+    // All symbols — mode: 'live' in toolInput to bypass requireExplicitLive guard
+    const resAll = await executeToolCall('get_fills', { mode: 'live', limit: 10 }, ctx);
+    expect(resAll.success).toBe(true);
+    const allData = (resAll as any).data;
+    expect(allData.mode).toBe('live');
+    expect(allData.fills.length).toBe(3);
+    expect(typeof allData.summary.total_realized_pnl_usd).toBe('number');
+    expect(allData.summary.total_realized_pnl_usd).toBeCloseTo(10.25, 5);
+
+    // Filter by symbol
+    const resBtc = await executeToolCall('get_fills', { mode: 'live', symbol: 'BTC', limit: 10 }, ctx);
+    expect(resBtc.success).toBe(true);
+    const btcData = (resBtc as any).data;
+    expect(btcData.fills.length).toBe(2);
+    expect(btcData.fills.every((f: any) => f.symbol === 'BTC')).toBe(true);
+
+    // Side mapping: 'A' → 'sell', 'B' → 'buy'
+    const closeFill = btcData.fills[0];
+    expect(closeFill.side).toBe('sell');
+    expect(closeFill.fill_price).toBe(70500);
+    expect(closeFill.realized_pnl_usd).toBeCloseTo(10.25, 5);
+    expect(closeFill.dir).toBe('Close Long');
+  });
+
+  it('get_fills live mode respects limit parameter', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getAccountAddress').mockReturnValue('0xdeadbeef');
+    const fills = Array.from({ length: 50 }, (_, i) => ({
+      coin: 'ETH',
+      px: '3000',
+      sz: '0.1',
+      side: 'B',
+      closedPnl: '0',
+      fee: '0.01',
+      time: Date.now() - i * 1000,
+      oid: i,
+      dir: 'Open Long',
+    }));
+    vi.spyOn(HyperliquidClient.prototype, 'getUserFillsByTime').mockResolvedValue(fills as any);
+
+    const res = await executeToolCall(
+      'get_fills',
+      { mode: 'live', symbol: 'ETH', limit: 5 },
+      { config: { execution: { provider: 'hyperliquid' } } as any, marketClient }
+    );
+    expect(res.success).toBe(true);
+    expect((res as any).data.fills.length).toBe(5);
+  });
+
+  it('get_positions live mode computes effective leverage from notional/margin when API field absent', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [
+        {
+          position: {
+            coin: 'ZEC',
+            szi: '0.5',
+            entryPx: '226.85',
+            positionValue: '115.0',
+            marginUsed: '38.33',
+            unrealizedPnl: '1.67',
+            // leverage field absent — simulates DEX perp returning no value
+          },
+        },
+      ],
+      marginSummary: { accountValue: '603', totalNtlPos: '115', totalMarginUsed: '38.33' },
+      withdrawable: '387.68',
+    } as any);
+
+    const res = await executeToolCall(
+      'get_positions',
+      { mode: 'live' },
+      { config: { execution: { provider: 'hyperliquid', mode: 'live' } } as any, marketClient }
+    );
+    expect(res.success).toBe(true);
+    const positions = (res as any).data?.positions ?? [];
+    const zec = positions.find((p: any) => p.symbol === 'ZEC');
+    expect(zec).toBeDefined();
+    // 115.0 / 38.33 ≈ 3.0 (rounded to 1 decimal)
+    expect(zec.leverage).not.toBeNull();
+    expect(Number(zec.leverage)).toBeCloseTo(3.0, 1);
   });
 });
