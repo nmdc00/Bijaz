@@ -562,7 +562,12 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
     let accumulatedSizeMultiplier = 1;
     let policyReasonCode: string | undefined;
     let policyReason: string | undefined;
-    const perf = summarizeSignalPerformance(listPerpTradeJournals({ limit: 200 }), input.signalClass);
+    // Only resolved entries (thesisCorrect set) are valid for Sharpe computation.
+    // Unresolved/failed entries (blocked orders) have no outcome data and would skew the metric.
+    const resolvedEntries = listPerpTradeJournals({ limit: 200 }).filter(
+      (e) => typeof e.thesisCorrect === 'boolean'
+    );
+    const perf = summarizeSignalPerformance(resolvedEntries, input.signalClass);
     const minSharpe = Number((config.autonomy as any)?.signalPerformance?.minSharpe ?? 0.8);
     const minSamples = Number((config.autonomy as any)?.signalPerformance?.minSamples ?? 8);
     if (perf.sampleCount >= minSamples && perf.sharpeLike < minSharpe) {
