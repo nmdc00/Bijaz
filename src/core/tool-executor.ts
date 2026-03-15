@@ -250,8 +250,12 @@ async function resolvePaperMids(
       for (const m of markets) {
         if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
           mids[m.symbol] = m.markPrice;
-          const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
-          if (base && base !== m.symbol) mids[base] = m.markPrice;
+          // Index by base for slash-quoted markets only (e.g. "CL/USDC" → "CL").
+          // Do NOT strip DEX prefixes ("cash:BTC" → "BTC") — overwrites main-perp prices.
+          if (m.symbol.includes('/')) {
+            const base = m.symbol.split('/')[0];
+            if (base && base !== m.symbol) mids[base] = m.markPrice;
+          }
         }
       }
       return mids;
