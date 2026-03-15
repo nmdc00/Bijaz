@@ -6,7 +6,6 @@ import { buildPaperPromotionReport } from '../core/paper_promotion.js';
 import { loadConfig, type ThufirConfig } from '../core/config.js';
 import { getDailyPnLRollup } from '../core/daily_pnl.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
-import { createMarketClient } from '../execution/market-client.js';
 import { openDatabase } from '../memory/db.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
 import { cached, cachedAsync } from './dashboard_cache.js';
@@ -1868,18 +1867,10 @@ export function handleDashboardApiRequest(req: IncomingMessage, res: ServerRespo
         return true;
       }
       void cachedAsync(cacheKey, ttlMs, async () => {
-        const mc = createMarketClient(baseConfig);
         let mids: Record<string, number> = {};
-        if (mc.isAvailable()) {
+        if (baseConfig.hyperliquid?.enabled !== false) {
           try {
-            const markets = await mc.listMarkets(500);
-            for (const m of markets) {
-              if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
-                mids[m.symbol] = m.markPrice;
-                const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
-                if (base && base !== m.symbol) mids[base] = m.markPrice;
-              }
-            }
+            mids = await new HyperliquidClient(baseConfig).getAllMids();
           } catch { /* fall through with empty mids */ }
         }
         return buildDashboardApiPayload({ filters, mids });
