@@ -247,6 +247,9 @@ async function resolvePaperMids(marketClient: MarketClient): Promise<Record<stri
     for (const m of markets) {
       if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
         mids[m.symbol] = m.markPrice;
+        // Also index by base symbol so DEX-prefixed positions (XYZ:CL) can find quoted markets (CL/USDC → CL)
+        const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
+        if (base && base !== m.symbol) mids[base] = m.markPrice;
       }
     }
     return mids;

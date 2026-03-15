@@ -480,7 +480,7 @@ function buildDashboardHtml(): string {
                     <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th><th>Size</th><th>Unrealized</th><th>Held</th></tr></thead>
                     <tbody>
                       {(openPositions.rows || []).length === 0 ? <tr><td colSpan="7" className="muted">No open positions.</td></tr> : (openPositions.rows || []).map((row) => (
-                        <tr key={row.symbol + row.openedAt}><td>{row.symbol}</td><td><span className={row.side === 'long' ? 'pill good' : 'pill bad'}>{row.side}</span></td><td className="mono">{money(row.entryPrice)}</td><td className="mono">{money(row.currentPrice)}</td><td className="mono">{num(row.size, 4)}</td><td className="mono">{money(row.unrealizedPnlUsd)}</td><td className="mono">{num((row.heldSeconds || 0) / 60, 1)}m</td></tr>
+                        <tr key={row.symbol + row.openedAt}><td>{row.symbol}</td><td><span className={row.side === 'long' ? 'pill good' : 'pill bad'}>{row.side}</span></td><td className="mono">{money(row.entryPrice)}</td><td className="mono">{money(row.currentPrice)}</td><td className="mono">{num(row.size, 4)}</td><td className="mono">{money(row.unrealizedPnlUsd)}</td><td className="mono">{Math.floor((row.heldSeconds || 0) / 3600) < 24 ? (Math.floor((row.heldSeconds || 0) / 3600) + 'h') : (Math.floor((row.heldSeconds || 0) / 86400) + 'd ' + Math.floor(((row.heldSeconds || 0) % 86400) / 3600) + 'h')}</td></tr>
                       ))}
                     </tbody>
                   </table>

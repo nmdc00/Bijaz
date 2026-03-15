@@ -36,6 +36,14 @@ function numberText(value: number | null | undefined, digits = 2): string {
   return Number(value).toFixed(digits);
 }
 
+function formatHeld(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  const remH = h % 24;
+  return `${d}d ${remH}h`;
+}
+
 function timeText(value: string | null | undefined): string {
   if (!value) return '-';
   const parsed = new Date(value);
@@ -425,7 +433,7 @@ export default function App() {
       )}
 
       {tab === 'positions' && (
-        <section className="panel"><div className="panel-head"><h2>Open Positions</h2><p>Current mark-to-market exposure for paper or live mode.</p></div><div className="panel-body"><DataTable headers={['Symbol', 'Side', 'Entry', 'Current', 'Size', 'Unrealized', 'Held']} empty="No open positions." rows={openPositions.map((row) => [String(row.symbol ?? '-'), <span className={badgeClass(row.side)}>{String(row.side ?? '-')}</span>, <span className="mono">{money(Number(row.entryPrice ?? 0))}</span>, <span className="mono">{money(Number(row.currentPrice ?? 0))}</span>, <span className="mono">{numberText(Number(row.size ?? 0), 4)}</span>, <span className="mono">{money(Number(row.unrealizedPnlUsd ?? 0))}</span>, <span className="mono">{numberText(Number(row.heldSeconds ?? 0) / 60, 1)}m</span>])} /></div></section>
+        <section className="panel"><div className="panel-head"><h2>Open Positions</h2><p>Current mark-to-market exposure for paper or live mode.</p></div><div className="panel-body"><DataTable headers={['Symbol', 'Side', 'Entry', 'Current', 'Size', 'Unrealized', 'Held']} empty="No open positions." rows={openPositions.map((row) => [String(row.symbol ?? '-'), <span className={badgeClass(row.side)}>{String(row.side ?? '-')}</span>, <span className="mono">{money(Number(row.entryPrice ?? 0))}</span>, <span className="mono">{money(Number(row.currentPrice ?? 0))}</span>, <span className="mono">{numberText(Number(row.size ?? 0), 4)}</span>, <span className="mono">{money(Number(row.unrealizedPnlUsd ?? 0))}</span>, <span className="mono">{formatHeld(Number(row.heldSeconds ?? 0))}</span>])} /></div></section>
       )}
 
       {tab === 'trades' && (
