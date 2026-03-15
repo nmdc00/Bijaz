@@ -247,11 +247,26 @@ async function resolvePaperMids(
     if (marketClient.isAvailable()) {
       const markets = await marketClient.listMarkets(500);
       const mids: Record<string, number> = {};
+      // First pass: index main-perp markets (no colon prefix) so they take priority.
       for (const m of markets) {
-        if (m.symbol && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+        if (m.symbol && !m.symbol.includes(':') && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
           mids[m.symbol] = m.markPrice;
-          const base = (m.symbol.split('/')[0] ?? m.symbol).split(':').at(-1);
-          if (base && base !== m.symbol) mids[base] = m.markPrice;
+          // Also index by base for slash-quoted symbols (e.g. "CL/USDC" → "CL").
+          if (m.symbol.includes('/')) {
+            const base = m.symbol.split('/')[0];
+            if (base && base !== m.symbol) mids[base] = m.markPrice;
+          }
+        }
+      }
+      // Second pass: index DEX markets; strip prefix only if base has no main-perp price.
+      // e.g. "xyz:CL" → "CL" when there is no main "CL", but "cash:BTC" → "BTC" is skipped.
+      for (const m of markets) {
+        if (m.symbol && m.symbol.includes(':') && typeof m.markPrice === 'number' && Number.isFinite(m.markPrice)) {
+          mids[m.symbol] = m.markPrice;
+          const afterColon = m.symbol.split(':').at(-1);
+          if (afterColon && afterColon !== m.symbol && mids[afterColon] == null) {
+            mids[afterColon] = m.markPrice;
+          }
         }
       }
       return mids;
