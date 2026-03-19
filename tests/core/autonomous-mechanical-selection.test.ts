@@ -123,6 +123,21 @@ vi.mock('../../src/memory/db.js', () => ({
   }),
 }));
 
+vi.mock('../../src/memory/paper_perps.js', () => ({
+  listPaperPerpPositions: () => [],
+  listPaperPerpPositionsWithMark: () => [],
+  getPaperPerpBookSummary: () => ({ cashBalanceUsdc: 200 }),
+}));
+
+vi.mock('../../src/memory/position_exit_policy.js', () => ({
+  getPositionExitPolicy: () => null,
+  upsertPositionExitPolicy: vi.fn(),
+}));
+
+vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
+  recordEntryGateDecision: vi.fn(),
+}));
+
 describe('AutonomousManager mechanical expression selection', () => {
   it('selects highest-edge expression first without LLM selection call', async () => {
     const { AutonomousManager } = await import('../../src/core/autonomous.js');
@@ -141,8 +156,16 @@ describe('AutonomousManager mechanical expression selection', () => {
       release: () => {},
     } as any;
 
+    const gateLlm = {
+      complete: vi.fn(async () => ({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        model: 'test',
+      })),
+    } as any;
+
     const manager = new AutonomousManager(
-      {} as any,
+      gateLlm,
+      gateLlm,
       marketClient,
       executor,
       limiter,

@@ -98,12 +98,29 @@ vi.mock('../../src/memory/db.js', () => ({
   }),
 }));
 
+vi.mock('../../src/memory/paper_perps.js', () => ({
+  listPaperPerpPositions: () => [],
+  listPaperPerpPositionsWithMark: () => [],
+  getPaperPerpBookSummary: () => ({ cashBalanceUsdc: 200 }),
+}));
+
+vi.mock('../../src/memory/position_exit_policy.js', () => ({
+  getPositionExitPolicy: () => null,
+  upsertPositionExitPolicy: vi.fn(),
+}));
+
+vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
+  recordEntryGateDecision: vi.fn(),
+}));
+
 describe('AutonomousManager async enrichment', () => {
   it('does not block execution when async enrichment times out', async () => {
     const { AutonomousManager } = await import('../../src/core/autonomous.js');
-    const llm = {
-      complete: () => new Promise(() => {}),
-    } as any;
+    // Gate call (1st): approve immediately; enrichment call (2nd+): never resolve (timeout test)
+    const completeFn = vi.fn()
+      .mockResolvedValueOnce({ content: JSON.stringify({ verdict: 'approve', reasoning: 'go' }), model: 'test' })
+      .mockImplementation(() => new Promise(() => {}));
+    const llm = { complete: completeFn } as any;
     const executor = {
       execute: vi.fn(async () => ({ executed: true, message: 'ok' })),
       getOpenOrders: async () => [],
@@ -120,6 +137,7 @@ describe('AutonomousManager async enrichment', () => {
     } as any;
 
     const manager = new AutonomousManager(
+      llm,
       llm,
       marketClient,
       executor,
