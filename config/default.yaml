@@ -218,7 +218,7 @@ channels:
 
 # Autonomous scan loop
 autonomy:
-  enabled: true
+  enabled: false
   scanIntervalSeconds: 900
   maxMarketsPerScan: 10
   watchlistOnly: true
