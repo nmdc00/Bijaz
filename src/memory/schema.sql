@@ -741,6 +741,25 @@ CREATE INDEX IF NOT EXISTS idx_event_outcomes_event_id ON event_outcomes(event_i
 CREATE INDEX IF NOT EXISTS idx_event_outcomes_resolution ON event_outcomes(resolution_status);
 
 -- ============================================================================
+-- LLM Exit Consult Log (v1.97)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS llm_exit_consult_log (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  symbol                 TEXT NOT NULL,
+  side                   TEXT NOT NULL,
+  roe_at_consult         REAL NOT NULL,
+  time_held_ms           INTEGER NOT NULL,
+  action                 TEXT NOT NULL,
+  reasoning              TEXT NOT NULL,
+  new_time_stop_at_ms    INTEGER,
+  new_invalidation_price REAL,
+  reduce_to_fraction     REAL,
+  used_fallback          INTEGER NOT NULL DEFAULT 0
+);
+
+-- ============================================================================
 -- Views
 -- ============================================================================
 
@@ -789,3 +808,23 @@ FROM predictions p
 LEFT JOIN market_cache m ON p.market_id = m.id
 WHERE p.executed = 1 AND p.outcome IS NULL
 ORDER BY p.created_at DESC;
+
+-- ============================================================================
+-- LLM Entry Gate Log (v1.97)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS llm_entry_gate_log (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  symbol            TEXT NOT NULL,
+  side              TEXT NOT NULL,
+  notional_usd      REAL NOT NULL,
+  verdict           TEXT NOT NULL,
+  reasoning         TEXT NOT NULL,
+  adjusted_size_usd REAL,
+  used_fallback     INTEGER NOT NULL DEFAULT 0,
+  signal_class      TEXT,
+  regime            TEXT,
+  session           TEXT,
+  edge              REAL
+);

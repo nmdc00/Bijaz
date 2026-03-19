@@ -715,6 +715,13 @@ const ConfigSchema = z.object({
                       sizeCapFraction: z.number().optional(),
                     })
                     .optional(),
+                  llmEntryGate: z
+                    .object({
+                      enabled: z.boolean().optional(),
+                      timeoutMs: z.number().optional(),
+                      rejectOnBothFail: z.boolean().optional(),
+                    })
+                    .optional(),
                 })
                 .default({}),
             })
@@ -836,6 +843,13 @@ const ConfigSchema = z.object({
           sizeCapFraction: z.number().default(0.5),
         })
         .default({}),
+      llmEntryGate: z
+        .object({
+          enabled: z.boolean().default(true),
+          timeoutMs: z.number().default(5000),
+          rejectOnBothFail: z.boolean().default(true),
+        })
+        .default({}),
     })
     .default({}),
   heartbeat: z
@@ -859,6 +873,16 @@ const ConfigSchema = z.object({
           model: z.string().nullable().optional(),
           maxTokens: z.number().default(1024),
           maxCallsPerHour: z.number().default(20),
+        })
+        .default({}),
+      llmExitConsult: z
+        .object({
+          enabled: z.boolean().default(true),
+          firstConsultMinutes: z.number().default(20),
+          cadenceMinutes: z.number().default(20),
+          roeThresholds: z.array(z.number()).default([3, 7, 15]),
+          approachTtlMinutes: z.number().default(15),
+          timeoutMs: z.number().default(8000),
         })
         .default({}),
     })

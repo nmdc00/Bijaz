@@ -94,6 +94,10 @@ function mergeConfig(
         ...base.autonomy.newsEntry,
         ...(override?.autonomy?.newsEntry ?? {}),
       },
+      llmEntryGate: {
+        ...base.autonomy.llmEntryGate,
+        ...(override?.autonomy?.llmEntryGate ?? {}),
+      },
     },
   };
 }

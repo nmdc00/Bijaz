@@ -42,6 +42,8 @@ import { withExecutionContext } from './llm_infra.js';
 import { getPaperPerpBookSummary, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
 import { upsertPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { getCashBalance } from '../memory/portfolio.js';
+import { PositionBook } from './position_book.js';
+import { LlmEntryGate } from './llm_entry_gate.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -149,6 +151,7 @@ export interface AutonomousEvents {
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
   private llm: LlmClient;
+  private fallbackLlm: LlmClient;
   private marketClient: MarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
@@ -156,6 +159,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private thufirConfig: ThufirConfig;
   private readonly schedulerNamespace: string;
   private readonly startedAtMs: number;
+  private notify?: (message: string) => Promise<void>;
+  private entryGate: LlmEntryGate;
 
   private isPaused = false;
   private pauseReason = '';
@@ -164,21 +169,32 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
   constructor(
     llm: LlmClient,
+    fallbackLlm: LlmClient,
     marketClient: MarketClient,
     executor: ExecutionAdapter,
     limiter: DbSpendingLimitEnforcer,
     thufirConfig: ThufirConfig,
-    logger?: Logger
+    logger?: Logger,
+    notify?: (message: string) => Promise<void>
   ) {
     super();
     this.llm = llm;
+    this.fallbackLlm = fallbackLlm;
     this.marketClient = marketClient;
     this.executor = executor;
     this.limiter = limiter;
     this.thufirConfig = thufirConfig;
     this.logger = logger ?? new Logger('info');
+    this.notify = notify;
     this.schedulerNamespace = this.buildSchedulerNamespace();
     this.startedAtMs = Date.now();
+    this.entryGate = new LlmEntryGate(
+      this.llm,
+      this.fallbackLlm,
+      async (msg) => { if (this.notify) await this.notify(msg); },
+      PositionBook.getInstance(),
+      this.thufirConfig,
+    );
 
     // Load autonomous config with defaults
     this.config = {
@@ -278,6 +294,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.logger.info('Autonomous trading resumed');
   }
 
+  setNotify(fn: (message: string) => Promise<void>): void {
+    this.notify = fn;
+  }
+
   /**
    * Get current status
    */
@@ -331,6 +351,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     maxTrades?: number;
     ignoreThresholds?: boolean;
   }): Promise<string> {
+    await PositionBook.getInstance().refresh();
     const telemetry = new AutonomousScanTelemetry();
     const recentJournal = listPerpTradeJournals({ limit: 50 });
     const reflectionMutation = applyReflectionMutation(this.thufirConfig, recentJournal);
@@ -576,7 +597,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         expr.newsTrigger?.enabled === true
           ? Math.min(signalAdjustedUsd, remainingDaily * clamp01(newsSizeCapFraction))
           : signalAdjustedUsd;
-      const probeUsd = Math.min(Math.max(minOrderUsd, cappedForNews), remainingDaily);
+      let probeUsd = Math.min(Math.max(minOrderUsd, cappedForNews), remainingDaily);
       this.logger.info('Session weighting applied to autonomous decision inputs', {
         symbol,
         session: sessionContext.session,
@@ -595,7 +616,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         outputs.push(`${symbol}: Skipped (remaining daily budget $${remainingDaily.toFixed(2)} below min order $${minOrderUsd.toFixed(2)})`);
         continue;
       }
-      const size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+      let size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
       const targetLeverage = Math.min(expr.leverage, adaptiveLeverageCap);
 
       const riskCheck = await checkPerpRiskLimits({
@@ -622,6 +643,33 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         outputs.push(`${symbol}: Blocked (${limitCheck.reason})`);
         continue;
       }
+
+      // LLM entry gate — reviews candidate before execution
+      const gateCandidate = {
+        symbol,
+        side: expr.side,
+        notionalUsd: probeUsd,
+        leverage: targetLeverage,
+        edge: expr.expectedEdge,
+        confidence: confidenceWeighted,
+        signalClass,
+        regime,
+        session: sessionContext.session,
+        entryReasoning: expr.expectedMove ?? '',
+      };
+      if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
+        const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
+        if (gateDecision.verdict === 'reject') {
+          outputs.push(`${symbol}: Rejected by LLM entry gate — ${gateDecision.reasoning}`);
+          this.limiter.release(probeUsd);
+          continue;
+        }
+        if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
+          probeUsd = gateDecision.adjustedSizeUsd;
+          size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+        }
+      }
+      // gate approved or was disabled; fall through to executor.execute()
 
       const decision: TradeDecision = {
         action: expr.side,
@@ -660,6 +708,19 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         try {
           upsertPositionExitPolicy(symbol, expr.side === 'buy' ? 'long' : 'short', timeStopAtMs, null);
         } catch { }
+        // Notify on position open.
+        if (this.notify) {
+          const sideEmoji = expr.side === 'buy' ? '📈' : '📉';
+          const ttlMinutes = Math.round((timeStopAtMs - Date.now()) / 60_000);
+          const mode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+          const notifyMsg =
+            `${sideEmoji} Opened ${expr.side === 'buy' ? 'LONG' : 'SHORT'} ${symbol}` +
+            ` @ $${markPrice > 0 ? markPrice.toFixed(2) : '?'}` +
+            ` | size=${size.toPrecision(4)} notional=$${probeUsd.toFixed(2)}` +
+            ` | lev=${targetLeverage}x edge=${(expr.expectedEdge * 100).toFixed(1)}%` +
+            ` | ttl=${ttlMinutes}min mode=${mode}`;
+          this.notify(notifyMsg).catch(() => {});
+        }
       } else {
         this.limiter.release(probeUsd);
       }
