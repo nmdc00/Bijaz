@@ -42,6 +42,7 @@ import { withExecutionContext } from './llm_infra.js';
 import { getPaperPerpBookSummary, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
 import { upsertPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { getCashBalance } from '../memory/portfolio.js';
+import { PositionBook } from './position_book.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -338,6 +339,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     maxTrades?: number;
     ignoreThresholds?: boolean;
   }): Promise<string> {
+    await PositionBook.getInstance().refresh();
     const telemetry = new AutonomousScanTelemetry();
     const recentJournal = listPerpTradeJournals({ limit: 50 });
     const reflectionMutation = applyReflectionMutation(this.thufirConfig, recentJournal);

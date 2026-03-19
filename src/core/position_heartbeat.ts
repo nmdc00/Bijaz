@@ -16,6 +16,7 @@ import {
   clearPositionExitPolicy,
   getPositionExitPolicy,
 } from '../memory/position_exit_policy.js';
+import { PositionBook } from './position_book.js';
 
 type ToolExecutorFn = (
   toolName: string,
@@ -87,6 +88,8 @@ export class PositionHeartbeatService {
 
   async tickOnce(): Promise<void> {
     if (this.stopped) return;
+
+    await PositionBook.getInstance().refresh();
 
     const hb = this.config.heartbeat;
     if (!hb?.enabled) return;
