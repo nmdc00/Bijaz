@@ -156,6 +156,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private thufirConfig: ThufirConfig;
   private readonly schedulerNamespace: string;
   private readonly startedAtMs: number;
+  private notify?: (message: string) => Promise<void>;
 
   private isPaused = false;
   private pauseReason = '';
@@ -168,7 +169,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     executor: ExecutionAdapter,
     limiter: DbSpendingLimitEnforcer,
     thufirConfig: ThufirConfig,
-    logger?: Logger
+    logger?: Logger,
+    notify?: (message: string) => Promise<void>
   ) {
     super();
     this.llm = llm;
@@ -177,6 +179,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.limiter = limiter;
     this.thufirConfig = thufirConfig;
     this.logger = logger ?? new Logger('info');
+    this.notify = notify;
     this.schedulerNamespace = this.buildSchedulerNamespace();
     this.startedAtMs = Date.now();
 
@@ -276,6 +279,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.consecutiveLosses = 0;
     this.emit('resumed');
     this.logger.info('Autonomous trading resumed');
+  }
+
+  setNotify(fn: (message: string) => Promise<void>): void {
+    this.notify = fn;
   }
 
   /**
@@ -660,6 +667,19 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         try {
           upsertPositionExitPolicy(symbol, expr.side === 'buy' ? 'long' : 'short', timeStopAtMs, null);
         } catch { }
+        // Notify on position open.
+        if (this.notify) {
+          const sideEmoji = expr.side === 'buy' ? '📈' : '📉';
+          const ttlMinutes = Math.round((timeStopAtMs - Date.now()) / 60_000);
+          const mode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+          const notifyMsg =
+            `${sideEmoji} Opened ${expr.side === 'buy' ? 'LONG' : 'SHORT'} ${symbol}` +
+            ` @ $${markPrice > 0 ? markPrice.toFixed(2) : '?'}` +
+            ` | size=${size.toPrecision(4)} notional=$${probeUsd.toFixed(2)}` +
+            ` | lev=${targetLeverage}x edge=${(expr.expectedEdge * 100).toFixed(1)}%` +
+            ` | ttl=${ttlMinutes}min mode=${mode}`;
+          this.notify(notifyMsg).catch(() => {});
+        }
       } else {
         this.limiter.release(probeUsd);
       }

@@ -147,6 +147,15 @@ for (const instance of agentRegistry.agents.values()) {
   instance.start();
 }
 
+if (telegram) {
+  const telegramNotify = async (message: string) => {
+    for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
+      await telegram.sendMessage(String(chatId), message);
+    }
+  };
+  primaryAgent.getAutonomous().setNotify(telegramNotify);
+}
+
 const positionHeartbeatConfig = config.heartbeat;
 if (positionHeartbeatConfig?.enabled) {
   try {
