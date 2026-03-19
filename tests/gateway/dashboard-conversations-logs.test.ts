@@ -169,6 +169,33 @@ describe('dashboard conversations and logs api', () => {
     expect(payload.messages.map((item) => item.content)).toEqual(['first', 'second', 'third']);
   });
 
+  it('strips identity intro from assistant messages in conversation thread', () => {
+    const db = createDb('thufir-dashboard-thread-strip-');
+    storeChatMessage({
+      sessionId: 'session-strip',
+      role: 'user',
+      content: 'Hello',
+      createdAt: '2026-03-10T10:00:00.000Z',
+    });
+    storeChatMessage({
+      sessionId: 'session-strip',
+      role: 'assistant',
+      content: "I'm Thufir Hawat.\nHere is the market update.",
+      createdAt: '2026-03-10T10:01:00.000Z',
+    });
+    storeChatMessage({
+      sessionId: 'session-strip',
+      role: 'assistant',
+      content: 'I am Thufir Hawat. Let me check that for you.',
+      createdAt: '2026-03-10T10:02:00.000Z',
+    });
+
+    const payload = buildConversationThreadResponse('session-strip', { db });
+    const assistant = payload.messages.filter((m) => m.role === 'assistant');
+    expect(assistant[0]!.content).toBe('Here is the market update.');
+    expect(assistant[1]!.content).toBe('Let me check that for you.');
+  });
+
   it('returns merged decision and incident log entries with parsed tool traces', () => {
     const db = createDb('thufir-dashboard-logs-');
     recordDecisionAudit({

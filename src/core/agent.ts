@@ -137,6 +137,11 @@ export class ThufirAgent {
     return this.toolContext;
   }
 
+  /** Expose the trivial/local LLM client for lightweight background tasks. */
+  getInfoLlm(): LlmClient | undefined {
+    return this.infoLlm;
+  }
+
   private async getLiveStatusSnapshot() {
     const base = this.autonomous.getOperatorSnapshot();
     try {
