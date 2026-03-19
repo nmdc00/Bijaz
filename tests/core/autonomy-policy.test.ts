@@ -46,10 +46,15 @@ describe('autonomy_policy', () => {
     ).toBe('low_vol_compression');
   });
 
-  it('enforces regime/signal compatibility matrix', () => {
+  it('allows all known signal classes in any regime, blocks only unknown', () => {
+    // Regime matrix was removed — regime fit is accounted for in adaptive-edge
+    // segment expectancy. All known signal classes are now permitted everywhere.
     expect(isSignalClassAllowedForRegime('momentum_breakout', 'trending')).toBe(true);
-    expect(isSignalClassAllowedForRegime('mean_reversion', 'trending')).toBe(false);
+    expect(isSignalClassAllowedForRegime('mean_reversion', 'trending')).toBe(true);
     expect(isSignalClassAllowedForRegime('mean_reversion', 'choppy')).toBe(true);
+    expect(isSignalClassAllowedForRegime('liquidation_cascade', 'choppy')).toBe(true);
+    expect(isSignalClassAllowedForRegime('momentum_breakout', 'low_vol_compression')).toBe(true);
+    expect(isSignalClassAllowedForRegime('unknown', 'trending')).toBe(false);
   });
 
   it('gates news entries by novelty/confirmation/liquidity/volatility/expiry', () => {

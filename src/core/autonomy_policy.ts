@@ -345,13 +345,12 @@ export function isSignalClassAllowedForRegime(
   signalClass: SignalClass,
   regime: MarketRegime
 ): boolean {
-  const matrix: Record<MarketRegime, Set<SignalClass>> = {
-    trending: new Set(['momentum_breakout', 'news_event', 'liquidation_cascade']),
-    choppy: new Set(['mean_reversion', 'news_event']),
-    high_vol_expansion: new Set(['liquidation_cascade', 'news_event', 'momentum_breakout']),
-    low_vol_compression: new Set(['mean_reversion', 'news_event']),
-  };
-  return matrix[regime].has(signalClass);
+  // All signal classes are permitted in all regimes. Regime fit is already
+  // accounted for in the adaptive-edge segment expectancy (same regime is part
+  // of the segment key). Hard-blocking by regime was causing near-total
+  // suppression of trades in low-vol / choppy conditions.
+  void regime;
+  return signalClass !== 'unknown';
 }
 
 export function evaluateNewsEntryGate(
