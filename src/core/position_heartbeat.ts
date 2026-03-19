@@ -217,6 +217,11 @@ export class PositionHeartbeatService {
       this.toolContext
     );
 
+    this.logger.info(
+      `PositionHeartbeat: ${decisionAction} ${pos.symbol} (${pos.side}) size=${orderSize} ` +
+      `triggers=[${fired.join(',')}] outcome=${tool.success ? 'ok' : 'failed'}`
+    );
+
     recordPositionHeartbeatDecision({
       kind: 'position_heartbeat_journal',
       symbol: pos.symbol,
@@ -309,11 +314,26 @@ function stringifyError(error: unknown): string {
 }
 
 function resolveMid(mids: Record<string, number>, symbol: string): number | null {
-  const direct = mids[symbol];
-  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
-  const upper = symbol.toUpperCase();
-  const normalized = mids[upper];
-  if (typeof normalized === 'number' && Number.isFinite(normalized)) return normalized;
+  // Build a list of candidate keys to try, from most to least specific.
+  const candidates: string[] = [symbol];
+
+  // Strip DEX namespace prefix: "XYZ:CL" → "CL"
+  const colonIdx = symbol.indexOf(':');
+  const stripped = colonIdx !== -1 ? symbol.slice(colonIdx + 1) : symbol;
+  if (stripped !== symbol) candidates.push(stripped);
+
+  // Strip slash-quoted currency: "CL/USDC" → "CL"
+  const slashIdx = stripped.indexOf('/');
+  const base = slashIdx !== -1 ? stripped.slice(0, slashIdx) : stripped;
+  if (base !== stripped) candidates.push(base);
+
+  for (const key of candidates) {
+    const direct = mids[key];
+    if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+    const upper = key.toUpperCase();
+    const normalized = mids[upper];
+    if (typeof normalized === 'number' && Number.isFinite(normalized)) return normalized;
+  }
   return null;
 }
 
