@@ -838,6 +838,7 @@ async function tryBuildLiveWalletSnapshot(config: ThufirConfig): Promise<LiveWal
         entryPrice,
         currentPrice: Number.isFinite(impliedCurrent) ? impliedCurrent : entryPrice,
         size,
+        leverage: null,
         unrealizedPnlUsd,
         heldSeconds: 0,
         openedAt: '',
@@ -905,6 +906,7 @@ type OpenPositionRow = {
   entryPrice: number;
   currentPrice: number;
   size: number;
+  leverage: number | null;
   unrealizedPnlUsd: number;
   heldSeconds: number;
   openedAt: string;
@@ -933,6 +935,7 @@ function listPaperOpenPositionRows(db: Database.Database, mids: Record<string, n
         SELECT p.symbol,
                p.side,
                p.size,
+               p.leverage,
                p.entry_price as entryPrice,
                p.opened_at as openedAt,
                p.updated_at as updatedAt,
@@ -973,12 +976,15 @@ function listPaperOpenPositionRows(db: Database.Database, mids: Record<string, n
       side === 'long'
         ? (currentPrice - entryPrice) * size
         : (entryPrice - currentPrice) * size;
+    const leverageRaw = Number(row.leverage ?? NaN);
+    const leverage = Number.isFinite(leverageRaw) && leverageRaw > 0 ? leverageRaw : null;
     return {
       symbol,
       side,
       entryPrice,
       currentPrice,
       size,
+      leverage,
       unrealizedPnlUsd: Number.isFinite(unrealizedPnlUsd) ? unrealizedPnlUsd : 0,
       heldSeconds,
       openedAt,
