@@ -12,6 +12,10 @@ import {
 } from './heartbeat_triggers.js';
 import { recordPositionHeartbeatDecision } from '../memory/position_heartbeat_journal.js';
 import { placePaperPerpOrder } from '../memory/paper_perps.js';
+import {
+  clearPositionExitPolicy,
+  getPositionExitPolicy,
+} from '../memory/position_exit_policy.js';
 
 type ToolExecutorFn = (
   toolName: string,
@@ -129,12 +133,47 @@ export class PositionHeartbeatService {
       if (buffer.length > max) buffer.splice(0, buffer.length - max);
       this.bufferBySymbol.set(pos.symbol, buffer);
 
+      // Per-position exit policy (written by scanner/LLM at entry time).
+      const policy = (() => {
+        try { return getPositionExitPolicy(pos.symbol); } catch { return null; }
+      })();
+
+      // Thesis time stop: absolute timestamp set at entry.
+      if (policy?.timeStopAtMs != null && nowMs >= policy.timeStopAtMs) {
+        await this.executePolicyClose(pos, 'thesis_time_stop', liqDistPct, nowIso);
+        try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+        continue;
+      }
+
+      // Thesis invalidation: mark crossed the level that invalidates the thesis.
+      if (policy?.invalidationPrice != null && mid != null) {
+        const invalidated =
+          pos.side === 'long' ? mid <= policy.invalidationPrice : mid >= policy.invalidationPrice;
+        if (invalidated) {
+          const invStr = `$${policy.invalidationPrice.toFixed(2)}`;
+          const midStr = `$${mid.toFixed(2)}`;
+          await this.executePolicyClose(
+            pos,
+            `thesis_invalidation (mark ${midStr} crossed ${invStr})`,
+            liqDistPct,
+            nowIso
+          );
+          try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+          continue;
+        }
+      }
+
       const triggerState =
         this.triggerStateBySymbol.get(pos.symbol) ?? new Map<HeartbeatTriggerName, number>();
       this.triggerStateBySymbol.set(pos.symbol, triggerState);
+      // If the position has an explicit time-stop policy, suppress the generic time_ceiling
+      // trigger — the policy governs when this position should be closed, not a global ceiling.
+      const effectiveCfg = policy?.timeStopAtMs != null
+        ? { ...cfg, timeCeilingMinutes: 999_999 }
+        : cfg;
       const fired = evaluateHeartbeatTriggers({
         points: buffer,
-        cfg,
+        cfg: effectiveCfg,
         nowMs,
         lastFiredByTrigger: triggerState,
       });
@@ -284,6 +323,45 @@ export class PositionHeartbeatService {
     if (this.notify) {
       try {
         await this.notify(notifyMsg);
+      } catch (err) {
+        this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+      }
+    }
+  }
+
+  /** Close a position entirely due to a policy-based trigger (time stop or invalidation). */
+  private async executePolicyClose(
+    pos: PositionSnapshot,
+    reason: string,
+    liqDistPct: number | null,
+    timestamp: string
+  ): Promise<void> {
+    const side = pos.side === 'long' ? 'sell' : 'buy';
+    const roe = pos.roePct != null ? `${pos.roePct.toFixed(2)}%` : 'n/a';
+    const tool = await this.toolExec(
+      'perp_place_order',
+      { symbol: pos.symbol, side, size: pos.size, reduce_only: true, order_type: 'market' },
+      this.toolContext
+    );
+    this.logger.info(
+      `PositionHeartbeat: policy_close ${pos.symbol} (${pos.side}) size=${pos.size} ` +
+      `reason="${reason}" outcome=${tool.success ? 'ok' : 'failed'}`
+    );
+    recordPositionHeartbeatDecision({
+      kind: 'position_heartbeat_journal',
+      symbol: pos.symbol,
+      timestamp,
+      triggers: [],
+      decision: { action: 'close_entirely', reason },
+      outcome: tool.success ? 'ok' : 'failed',
+      snapshot: { liqDistPct },
+      error: tool.success ? null : tool.error,
+    });
+    if (this.notify) {
+      try {
+        await this.notify(
+          `🎯 [Heartbeat] Closed ${pos.symbol} (${pos.side}) — ${reason}. ROE: ${roe}.`
+        );
       } catch (err) {
         this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
       }

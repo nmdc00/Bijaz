@@ -48,6 +48,10 @@ import {
   validateEntryTradeContract,
   validateReduceOnlyExitFsm,
 } from './trade_contract.js';
+import {
+  clearPositionExitPolicy,
+  upsertPositionExitPolicy,
+} from '../memory/position_exit_policy.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -2096,6 +2100,23 @@ export async function executeToolCall(
           });
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
+        }
+        // Maintain per-position exit policy for heartbeat.
+        if (!reduceOnly) {
+          // New entry: write time-stop from thesis_expires_at_ms if provided.
+          if (thesisExpiresAtMs != null) {
+            try {
+              upsertPositionExitPolicy(
+                symbol,
+                (side as string) === 'buy' ? 'long' : 'short',
+                thesisExpiresAtMs,
+                null
+              );
+            } catch { }
+          }
+        } else if (positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0)) {
+          // Reduce-only that fully closed the position: clear the policy.
+          try { clearPositionExitPolicy(symbol); } catch { }
         }
         return {
           success: true,
