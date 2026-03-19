@@ -235,6 +235,20 @@ describe('LlmEntryGate', () => {
       expect(result.reasoning).toMatch(/unavailable/i);
     });
 
+    it('allows execution when both LLMs fail and rejectOnBothFail is false', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient(null, true);
+      const fallbackLlm = makeLlmClient(null, true);
+      const gate = new LlmEntryGate(mainLlm, fallbackLlm, notify, book, {
+        autonomy: { llmEntryGate: { rejectOnBothFail: false } },
+      } as any);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.verdict).toBe('approve');
+      expect(result.reasoning).toMatch(/rejectOnBothFail=false/i);
+    });
+
     it('records DB log even when fallback is used', async () => {
       const book = makeBook();
       const mainLlm = makeLlmClient(null, true);

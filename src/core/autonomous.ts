@@ -657,17 +657,19 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         session: sessionContext.session,
         entryReasoning: expr.expectedMove ?? '',
       };
-      const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
-      if (gateDecision.verdict === 'reject') {
-        outputs.push(`${symbol}: Rejected by LLM entry gate — ${gateDecision.reasoning}`);
-        this.limiter.release(probeUsd);
-        continue;
+      if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
+        const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
+        if (gateDecision.verdict === 'reject') {
+          outputs.push(`${symbol}: Rejected by LLM entry gate — ${gateDecision.reasoning}`);
+          this.limiter.release(probeUsd);
+          continue;
+        }
+        if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
+          probeUsd = gateDecision.adjustedSizeUsd;
+          size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+        }
       }
-      if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
-        probeUsd = gateDecision.adjustedSizeUsd;
-        size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
-      }
-      // verdict === 'approve' falls through to executor.execute()
+      // gate approved or was disabled; fall through to executor.execute()
 
       const decision: TradeDecision = {
         action: expr.side,

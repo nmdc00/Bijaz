@@ -144,6 +144,11 @@ export class ThufirAgent {
     return this.infoLlm;
   }
 
+  /** Expose the primary LLM client for background services that need full-quality reasoning. */
+  getLlm(): LlmClient {
+    return this.llm;
+  }
+
   private async getLiveStatusSnapshot() {
     const base = this.autonomous.getOperatorSnapshot();
     try {

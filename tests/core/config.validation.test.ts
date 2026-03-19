@@ -70,6 +70,15 @@ memory: {}
     expect(config.agent.promptBudget.autonomous).toBe(60000);
     expect(config.agent.promptBudget.trivial).toBe(10000);
     expect(config.agent.promptBudget.chat).toBe(120000);
+    expect(config.autonomy.llmEntryGate.enabled).toBe(true);
+    expect(config.autonomy.llmEntryGate.timeoutMs).toBe(5000);
+    expect(config.autonomy.llmEntryGate.rejectOnBothFail).toBe(true);
+    expect(config.heartbeat.llmExitConsult.enabled).toBe(true);
+    expect(config.heartbeat.llmExitConsult.firstConsultMinutes).toBe(20);
+    expect(config.heartbeat.llmExitConsult.cadenceMinutes).toBe(20);
+    expect(config.heartbeat.llmExitConsult.roeThresholds).toEqual([3, 7, 15]);
+    expect(config.heartbeat.llmExitConsult.approachTtlMinutes).toBe(15);
+    expect(config.heartbeat.llmExitConsult.timeoutMs).toBe(8000);
   });
 
   it('rejects invalid enum values', () => {

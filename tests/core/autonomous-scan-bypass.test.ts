@@ -230,4 +230,34 @@ describe('autonomous scan bypass — LLM not called for discovery/filter/evaluat
     expect(llmComplete).not.toHaveBeenCalled();
     expect(executor.execute).not.toHaveBeenCalled();
   });
+
+  it('skips the entry gate entirely when autonomy.llmEntryGate.enabled is false', async () => {
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llmComplete = vi.fn();
+    const llm = { complete: llmComplete } as any;
+    const executor = {
+      execute: vi.fn(async () => ({ executed: true, message: 'paper ok' })),
+    } as any;
+    const marketClient = {
+      getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
+    } as any;
+    const limiter = {
+      getRemainingDaily: () => 100,
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: vi.fn(),
+      release: vi.fn(),
+    } as any;
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, {
+      ...baseConfig,
+      autonomy: {
+        ...baseConfig.autonomy,
+        llmEntryGate: { enabled: false },
+      },
+    });
+    await manager.runScan();
+
+    expect(llmComplete).not.toHaveBeenCalled();
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
 });

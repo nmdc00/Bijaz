@@ -31,9 +31,35 @@ const ExitConsultResponseSchema = z.object({
 // Defaults
 // ---------------------------------------------------------------------------
 
-const CONSULT_CADENCE_MS = 20 * 60 * 1000;       // 20 minutes
 const ROE_THRESHOLDS = [0.03, 0.07, 0.15];        // 3%, 7%, 15%
-const TTL_APPROACH_MS = 15 * 60 * 1000;           // 15 minutes
+
+function resolveFirstConsultMs(config: ThufirConfig): number {
+  return Math.max(1, Number(config.heartbeat?.llmExitConsult?.firstConsultMinutes ?? 20)) * 60_000;
+}
+
+function resolveCadenceMs(config: ThufirConfig): number {
+  return Math.max(1, Number(config.heartbeat?.llmExitConsult?.cadenceMinutes ?? 20)) * 60_000;
+}
+
+function resolveTtlApproachMs(config: ThufirConfig): number {
+  return Math.max(0, Number(config.heartbeat?.llmExitConsult?.approachTtlMinutes ?? 15)) * 60_000;
+}
+
+function resolveTimeoutMs(config: ThufirConfig): number {
+  return Math.max(1, Number(config.heartbeat?.llmExitConsult?.timeoutMs ?? 8_000));
+}
+
+function resolveRoeThresholds(config: ThufirConfig): number[] {
+  const configured = config.heartbeat?.llmExitConsult?.roeThresholds;
+  if (!Array.isArray(configured) || configured.length === 0) {
+    return ROE_THRESHOLDS;
+  }
+  return configured
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => (value > 1 ? value / 100 : value))
+    .sort((a, b) => a - b);
+}
 
 // ---------------------------------------------------------------------------
 // LlmExitConsultant
@@ -62,15 +88,19 @@ export class LlmExitConsultant {
     nowMs: number,
   ): boolean {
     const absRoe = Math.abs(roe);
+    const firstConsultMs = resolveFirstConsultMs(this.config);
+    const cadenceMs = resolveCadenceMs(this.config);
+    const roeThresholds = resolveRoeThresholds(this.config);
+    const ttlApproachMs = resolveTtlApproachMs(this.config);
 
     // Time-based trigger
     if (position.lastConsultAtMs === null) {
       // Never consulted — trigger once position is at least 20 min old
       const entryAge = nowMs - (position.thesisExpiresAtMs - 2 * 60 * 60 * 1000);
-      if (entryAge < 0 || entryAge >= CONSULT_CADENCE_MS) {
+      if (entryAge < 0 || entryAge >= firstConsultMs) {
         return true;
       }
-    } else if (nowMs - position.lastConsultAtMs >= CONSULT_CADENCE_MS) {
+    } else if (nowMs - position.lastConsultAtMs >= cadenceMs) {
       return true;
     }
 
@@ -87,7 +117,7 @@ export class LlmExitConsultant {
         // ignore parse errors
       }
     }
-    for (const threshold of ROE_THRESHOLDS) {
+    for (const threshold of roeThresholds) {
       if (absRoe >= threshold && lastAbsRoe < threshold) {
         return true;
       }
@@ -95,7 +125,7 @@ export class LlmExitConsultant {
 
     // TTL approach trigger
     const remainingMs = position.thesisExpiresAtMs - nowMs;
-    if (remainingMs <= TTL_APPROACH_MS) {
+    if (remainingMs <= ttlApproachMs) {
       return true;
     }
 
@@ -127,7 +157,12 @@ export class LlmExitConsultant {
 
     // Try main LLM
     try {
-      const decision = await callWithTimeout(this.mainLlm, messages, 8000, maxTokens);
+      const decision = await callWithTimeout(
+        this.mainLlm,
+        messages,
+        resolveTimeoutMs(this.config),
+        maxTokens
+      );
       await this.logDecision({ position, roe, nowMs, decision, usedFallback: false });
       return decision;
     } catch {
@@ -141,7 +176,12 @@ export class LlmExitConsultant {
       // best-effort
     }
     try {
-      const decision = await callWithTimeout(this.fallbackLlm, messages, 8000, maxTokens);
+      const decision = await callWithTimeout(
+        this.fallbackLlm,
+        messages,
+        resolveTimeoutMs(this.config),
+        maxTokens
+      );
       await this.logDecision({ position, roe, nowMs, decision, usedFallback: true });
       return decision;
     } catch {

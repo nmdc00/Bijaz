@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { LlmClient } from './llm.js';
+import type { ThufirConfig } from './config.js';
 import type { PositionBook } from './position_book.js';
 import { recordEntryGateDecision } from '../memory/llm_entry_gate_log.js';
 
@@ -38,6 +39,14 @@ function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
     return `${e.symbol.padEnd(6)} | ${e.side.padEnd(5)} | ${e.size.toPrecision(5).padEnd(8)} | ${e.entryPrice.toFixed(4).padEnd(11)} | ${ttlStr}`;
   });
   return [header, divider, ...rows].join('\n');
+}
+
+function resolveTimeoutMs(config: ThufirConfig): number {
+  return Math.max(1, Number(config.autonomy?.llmEntryGate?.timeoutMs ?? 5_000));
+}
+
+function shouldRejectOnBothFail(config: ThufirConfig): boolean {
+  return config.autonomy?.llmEntryGate?.rejectOnBothFail !== false;
 }
 
 function buildPrompt(
@@ -119,7 +128,7 @@ export class LlmEntryGate {
 
   async evaluate(
     candidate: EntryGateCandidate,
-    markPrice: number,
+    _markPrice: number,
   ): Promise<EntryGateDecision> {
     // Conflict fast-path: no LLM call needed
     if (this.book.hasConflict(candidate.symbol, candidate.side)) {
@@ -144,7 +153,7 @@ export class LlmEntryGate {
     }
 
     const bookEntries = this.book.getAll();
-    const timeoutMs = 5_000;
+    const timeoutMs = resolveTimeoutMs(this.config);
     let usedFallback = false;
     let decision: EntryGateDecision;
 
@@ -158,10 +167,15 @@ export class LlmEntryGate {
       try {
         decision = await callLlm(this.fallbackLlm, candidate, bookEntries, timeoutMs);
       } catch {
-        decision = {
-          verdict: 'reject',
-          reasoning: 'LLM unavailable — defaulting to reject (safe)',
-        };
+        decision = shouldRejectOnBothFail(this.config)
+          ? {
+              verdict: 'reject',
+              reasoning: 'LLM unavailable — defaulting to reject (safe)',
+            }
+          : {
+              verdict: 'approve',
+              reasoning: 'LLM unavailable and rejectOnBothFail=false — allowing execution',
+            };
       }
     }
 

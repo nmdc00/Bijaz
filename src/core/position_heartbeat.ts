@@ -2,6 +2,7 @@ import type { ThufirConfig } from './config.js';
 import type { Logger } from './logger.js';
 import type { ToolExecutorContext, ToolResult } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
+import { gatherMarketContext } from '../markets/context.js';
 
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import {
@@ -34,6 +35,20 @@ type PositionSnapshot = {
   roePct: number | null;
   liquidationPrice: number | null;
 };
+
+function summarizeMarketContext(snapshot: Awaited<ReturnType<typeof gatherMarketContext>>): string {
+  const successful = snapshot.results.filter((item) => item.success);
+  if (successful.length === 0) {
+    return '';
+  }
+  return successful
+    .map((item) => {
+      const payload = typeof item.data === 'string' ? item.data : JSON.stringify(item.data);
+      return `### ${item.label}\n${payload}`;
+    })
+    .join('\n\n')
+    .slice(0, 4000);
+}
 
 export class PositionHeartbeatService {
   private timer: NodeJS.Timeout | null = null;
@@ -176,12 +191,16 @@ export class PositionHeartbeatService {
       }
 
       // LLM exit consultant: check whether to consult, and act on the decision.
-      if (this.exitConsultant) {
+      if (this.exitConsultant && this.config.heartbeat?.llmExitConsult?.enabled !== false) {
         const bookEntry = this.getBookEntry(pos.symbol);
         const roe = (pos.roePct ?? 0) / 100; // convert pct → decimal
         if (bookEntry && this.exitConsultant.shouldConsult(bookEntry, mid ?? pos.roePct ?? 0, roe, nowMs)) {
-          const freshContext = ''; // Task 4 will wire in real context via gatherMarketContext
           try {
+            const freshContextSnapshot = await gatherMarketContext(
+              { message: `${pos.symbol} perpetual market context`, signalSymbols: [pos.symbol], marketLimit: 20 },
+              (toolName, toolInput) => this.toolExec(toolName, toolInput, this.toolContext)
+            );
+            const freshContext = summarizeMarketContext(freshContextSnapshot);
             const decision = await this.exitConsultant.consult(bookEntry, mid ?? 0, roe, freshContext);
             bookEntry.lastConsultAtMs = nowMs;
             bookEntry.lastConsultDecision = JSON.stringify({ ...decision, roeAtConsult: roe });

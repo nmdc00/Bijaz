@@ -387,6 +387,13 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
       calls.push({ tool: toolName, input: toolInput });
       if (toolName === 'get_positions') return { success: true as const, data: { positions } };
       if (toolName === 'perp_place_order') return { success: true as const, data: { ok: true } };
+      if (toolName === 'current_time') return { success: true as const, data: { iso: new Date().toISOString() } };
+      if (toolName === 'intel_search') return { success: true as const, data: [{ title: 'fresh intel' }] };
+      if (toolName === 'web_search') return { success: true as const, data: [{ title: 'market update' }] };
+      if (toolName === 'perp_market_list') return { success: true as const, data: [{ symbol: 'BTC', markPrice: 50000 }] };
+      if (toolName === 'signal_hyperliquid_funding_oi_skew') {
+        return { success: true as const, data: { symbol: 'BTC', fundingRate: 0.01 } };
+      }
       return { success: false as const, error: `unexpected: ${toolName}` };
     };
 
@@ -446,5 +453,59 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
     // Verify the consultant was actually consulted (shouldConsult was called)
     expect((consultant.shouldConsult as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
     expect((consultant.consult as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+  });
+
+  it('passes gathered market context into consultant calls', async () => {
+    const consultant = makeStubConsultant({ action: 'hold', reasoning: 'context checked' });
+
+    await runTick([makePosition()], consultant);
+
+    expect((consultant.consult as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Number),
+      expect.any(Number),
+      expect.stringContaining('perp_market_list')
+    );
+  });
+
+  it('skips consultant path entirely when heartbeat.llmExitConsult.enabled is false', async () => {
+    const consultant = makeStubConsultant({ action: 'close', reasoning: 'should not run' });
+    const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
+    const toolExec = async (toolName: string, toolInput: Record<string, unknown>) => {
+      calls.push({ tool: toolName, input: toolInput });
+      if (toolName === 'get_positions') return { success: true as const, data: { positions: [makePosition()] } };
+      if (toolName === 'perp_place_order') return { success: true as const, data: { ok: true } };
+      return { success: false as const, error: `unexpected: ${toolName}` };
+    };
+
+    const service = new PositionHeartbeatService({
+      ...makeHbConfig(),
+      heartbeat: {
+        ...makeHbConfig().heartbeat,
+        llmExitConsult: { enabled: false },
+      },
+    } as any, {} as any, new Logger('error'), {
+      client: { getAllMids: async () => ({ BTC: 50000 }) } as any,
+      toolExec: toolExec as any,
+      exitConsultant: consultant,
+      getBookEntry: () => ({
+        symbol: 'BTC',
+        side: 'long',
+        size: 1,
+        entryPrice: 50000,
+        entryReasoningText: 'test',
+        thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
+        lastConsultAtMs: null,
+        lastConsultDecision: null,
+      }),
+    });
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    expect((consultant.shouldConsult as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect((consultant.consult as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.tool === 'perp_place_order')).toBe(false);
   });
 });
