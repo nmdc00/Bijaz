@@ -159,7 +159,6 @@ if (positionHeartbeatConfig?.enabled) {
       : undefined;
 
     const service = new PositionHeartbeatService(config, primaryAgent.getToolContext(), logger, {
-      infoLlm: primaryAgent.getInfoLlm(),
       notify: heartbeatNotify,
     });
     service.start();

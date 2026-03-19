@@ -57,7 +57,7 @@ export interface ToolSpendingLimiter {
   getState?(): { todaySpent: number; reserved: number } & Record<string, unknown>;
 }
 import { getCashBalance } from '../memory/portfolio.js';
-import { getPaperPerpBookSummary, listPaperPerpPositions } from '../memory/paper_perps.js';
+import { getPaperPerpBookSummary, listPaperPerpPositions, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
 import { loadKeystore } from '../execution/wallet/keystore.js';
@@ -246,16 +246,16 @@ function buildPaperPerpSnapshot(initialCashUsdc: number): {
   }>;
 } {
   const book = getPaperPerpBookSummary(initialCashUsdc);
-  const positions = listPaperPerpPositions(initialCashUsdc).map((position) => ({
+  const positions = listPaperPerpPositionsWithMark(initialCashUsdc).map((position) => ({
     symbol: position.symbol,
     side: position.side,
     size: position.size,
     entry_price: position.entryPrice,
     leverage: position.leverage,
     position_value: position.entryPrice * position.size,
-    unrealized_pnl: null,
-    return_on_equity: null,
-    liquidation_price: null,
+    unrealized_pnl: position.unrealizedPnlUsd,
+    return_on_equity: position.returnOnEquityPct,
+    liquidation_price: position.liquidationPrice,
     margin_used: null,
     leverage_type: null,
     max_leverage: null,
