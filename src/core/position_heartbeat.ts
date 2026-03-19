@@ -2,7 +2,6 @@ import type { ThufirConfig } from './config.js';
 import type { Logger } from './logger.js';
 import type { ToolExecutorContext, ToolResult } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
-import type { LlmClient } from './llm.js';
 
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import {
@@ -37,8 +36,10 @@ export class PositionHeartbeatService {
 
   private client: HyperliquidClient;
   private toolExec: ToolExecutorFn;
-  private infoLlm?: LlmClient;
   private notify?: (message: string) => Promise<void>;
+  // Test hook: override the LLM call with an injected function.
+  // Production always uses callOllamaDirectly() to bypass the infra timeout stack.
+  private llmCall?: (prompt: string) => Promise<string | null>;
 
   constructor(
     private config: ThufirConfig,
@@ -47,14 +48,14 @@ export class PositionHeartbeatService {
     options?: {
       client?: HyperliquidClient;
       toolExec?: ToolExecutorFn;
-      infoLlm?: LlmClient;
       notify?: (message: string) => Promise<void>;
+      llmCall?: (prompt: string) => Promise<string | null>;
     }
   ) {
     this.client = options?.client ?? new HyperliquidClient(config);
     this.toolExec = options?.toolExec ?? executeToolCall;
-    this.infoLlm = options?.infoLlm;
     this.notify = options?.notify;
+    this.llmCall = options?.llmCall;
   }
 
   start(): void {
@@ -186,7 +187,7 @@ export class PositionHeartbeatService {
   ): Promise<void> {
     this.recordInfo(pos.symbol, timestamp, fired, null);
 
-    if (!this.infoLlm || !this.notify) return;
+    if (!this.notify) return;
 
     const prompt = [
       `Position risk triggers fired for ${pos.symbol} (${pos.side}).`,
@@ -199,17 +200,47 @@ export class PositionHeartbeatService {
 
     let alertText: string;
     try {
-      const response = await this.infoLlm.complete([{ role: 'user', content: prompt }]);
-      alertText = response.content?.trim() || `[Heartbeat] ${pos.symbol} triggers: ${fired.join(', ')}`;
+      const callLlm = this.llmCall ?? this.callOllamaDirectly.bind(this);
+      const result = await callLlm(prompt);
+      alertText = result?.trim() || `[Heartbeat] ${pos.symbol} triggers: ${fired.join(', ')}`;
     } catch (err) {
       alertText = `[Heartbeat] ${pos.symbol} (${pos.side}) triggers: ${fired.join(', ')}. Liq dist: ${liqDistPct != null ? `${liqDistPct.toFixed(2)}%` : 'n/a'}.`;
-      this.logger.warn(`PositionHeartbeat: infoLlm failed, using fallback alert: ${stringifyError(err)}`);
+      this.logger.warn(`PositionHeartbeat: local LLM failed, using fallback alert: ${stringifyError(err)}`);
     }
 
     try {
       await this.notify(alertText);
     } catch (err) {
       this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+    }
+  }
+
+  private async callOllamaDirectly(prompt: string): Promise<string | null> {
+    const agent = (this.config as any).agent ?? {};
+    const baseUrl: string = agent.localBaseUrl ?? 'http://localhost:11434';
+    const model: string = agent.trivialTaskModel ?? 'qwen2.5:1.5b-instruct';
+    const timeoutMs = 20_000;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          max_tokens: 128,
+          stream: false,
+        }),
+      });
+      if (!response.ok) throw new Error(`Ollama ${response.status}: ${await response.text()}`);
+      const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      return data.choices?.[0]?.message?.content ?? null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

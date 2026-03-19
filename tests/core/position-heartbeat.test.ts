@@ -40,6 +40,18 @@ function makeSafePosition(symbol = 'ETH') {
   };
 }
 
+// Paper position: no liquidation price (always null in paper mode)
+function makePaperPosition(symbol = 'XYZ:CL') {
+  return {
+    symbol,
+    side: 'short',
+    size: 1,
+    unrealized_pnl: null,
+    return_on_equity: null,
+    liquidation_price: null,
+  };
+}
+
 describe('position heartbeat', () => {
   it('runs in paper mode and can still execute emergency reduce-only close', async () => {
     const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
@@ -237,7 +249,7 @@ describe('position heartbeat', () => {
     expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
   });
 
-  it('calls infoLlm and notify when triggers fire (non-emergency)', async () => {
+  it('calls llmCall and notify when triggers fire (non-emergency)', async () => {
     const config = makeConfig();
     const toolExec = async (toolName: string) => {
       if (toolName === 'get_positions') {
@@ -250,14 +262,12 @@ describe('position heartbeat', () => {
     };
     const client = { getAllMids: async () => ({ ETH: 100 }) } as any;
 
-    const llmResponse = 'ETH long: time-ceiling trigger fired, ROE 1%, liq distance 50% — holding.';
+    const llmResponse = 'ETH long: liq-proximity trigger fired, ROE 1%, liq distance 50%.';
     const llmCalls: string[] = [];
-    const infoLlm = {
-      complete: async (messages: Array<{ role: string; content: string }>) => {
-        llmCalls.push(messages[0]!.content);
-        return { content: llmResponse, model: 'local' };
-      },
-    } as any;
+    const llmCall = async (prompt: string) => {
+      llmCalls.push(prompt);
+      return llmResponse;
+    };
 
     const notified: string[] = [];
     const notify = async (msg: string) => { notified.push(msg); };
@@ -265,7 +275,7 @@ describe('position heartbeat', () => {
     const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
       client,
       toolExec: toolExec as any,
-      infoLlm,
+      llmCall,
       notify,
     });
 
@@ -279,7 +289,7 @@ describe('position heartbeat', () => {
     expect(notified[0]).toContain(llmResponse);
   });
 
-  it('falls back to static alert when infoLlm throws', async () => {
+  it('falls back to static alert when llmCall throws', async () => {
     const config = makeConfig();
     const toolExec = async (toolName: string) => {
       if (toolName === 'get_positions') {
@@ -292,9 +302,9 @@ describe('position heartbeat', () => {
     };
     const client = { getAllMids: async () => ({ SOL: 100 }) } as any;
 
-    const infoLlm = {
-      complete: async () => { throw new Error('model unavailable'); },
-    } as any;
+    const llmCall = async (_prompt: string): Promise<string | null> => {
+      throw new Error('model unavailable');
+    };
 
     const notified: string[] = [];
     const notify = async (msg: string) => { notified.push(msg); };
@@ -302,7 +312,7 @@ describe('position heartbeat', () => {
     const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
       client,
       toolExec: toolExec as any,
-      infoLlm,
+      llmCall,
       notify,
     });
 
@@ -346,14 +356,11 @@ describe('position heartbeat', () => {
     const client = { getAllMids: async () => ({ BTC: 100 }) } as any;
 
     const notified: string[] = [];
-    const infoLlm = {
-      complete: async () => ({ content: 'irrelevant', model: 'local' }),
-    } as any;
 
     const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
       client,
       toolExec: toolExec as any,
-      infoLlm,
+      llmCall: async () => 'irrelevant',
       notify: async (msg) => { notified.push(msg); },
     });
 
@@ -388,9 +395,6 @@ describe('position heartbeat', () => {
     const client = { getAllMids: async () => ({ BTC: 100 }) } as any;
 
     const llmCalls: number[] = [];
-    const infoLlm = {
-      complete: async () => { llmCalls.push(1); return { content: 'x', model: 'local' }; },
-    } as any;
     const notified: string[] = [];
 
     const config = {
@@ -408,7 +412,7 @@ describe('position heartbeat', () => {
     const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
       client,
       toolExec: toolExec as any,
-      infoLlm,
+      llmCall: async () => { llmCalls.push(1); return 'x'; },
       notify: async (msg) => { notified.push(msg); },
     });
 
@@ -421,7 +425,7 @@ describe('position heartbeat', () => {
     expect(notified.length).toBe(0);
   });
 
-  it('skips notify gracefully when infoLlm is not provided', async () => {
+  it('skips notify gracefully when no notify is provided', async () => {
     const config = makeConfig();
     const toolExec = async (toolName: string) => {
       if (toolName === 'get_positions') {
@@ -434,12 +438,60 @@ describe('position heartbeat', () => {
     };
     const client = { getAllMids: async () => ({ AVAX: 100 }) } as any;
 
-    // No infoLlm, no notify — should not throw
+    // No notify — should not throw (triggers fire but nowhere to send)
     const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
       client,
       toolExec: toolExec as any,
+      llmCall: async () => 'alert',
     });
 
     await expect(service.tickOnce()).resolves.toBeUndefined();
+  });
+
+  it('liquidation_proximity does not fire for paper positions with null liqDistPct', async () => {
+    // Mirrors real paper mode: liquidation_price is null, mid not in HL mids for DEX symbols
+    const config = {
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      heartbeat: {
+        enabled: true,
+        tickIntervalSeconds: 1,
+        rollingBufferSize: 10,
+        triggers: {
+          pnlShiftPct: 99,
+          liquidationProximityPct: 5, // would fire if liqDist=0 due to toFinite(null) bug
+          volatilitySpikePct: 99,
+          volatilitySpikeWindowTicks: 100,
+          timeCeilingMinutes: 9999,
+          triggerCooldownSeconds: 0,
+        },
+      },
+    } as any;
+
+    const toolExec = async (toolName: string) => {
+      if (toolName === 'get_positions') {
+        return {
+          success: true as const,
+          data: { positions: [makePaperPosition('XYZ:CL')] },
+        };
+      }
+      return { success: false as const, error: `unexpected: ${toolName}` };
+    };
+    // XYZ:CL not in HL mids → mid is null → liqDistPct is null
+    const client = { getAllMids: async () => ({}) } as any;
+
+    const notified: string[] = [];
+    const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
+      client,
+      toolExec: toolExec as any,
+      llmCall: async () => 'should not be called',
+      notify: async (msg) => { notified.push(msg); },
+    });
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    // No triggers should fire — liqDistPct is null, not 0
+    expect(notified.length).toBe(0);
   });
 });
