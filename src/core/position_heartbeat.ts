@@ -2,6 +2,7 @@ import type { ThufirConfig } from './config.js';
 import type { Logger } from './logger.js';
 import type { ToolExecutorContext, ToolResult } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
+import type { LlmClient } from './llm.js';
 
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import {
@@ -36,15 +37,24 @@ export class PositionHeartbeatService {
 
   private client: HyperliquidClient;
   private toolExec: ToolExecutorFn;
+  private infoLlm?: LlmClient;
+  private notify?: (message: string) => Promise<void>;
 
   constructor(
     private config: ThufirConfig,
     private toolContext: ToolExecutorContext,
     private logger: Logger,
-    options?: { client?: HyperliquidClient; toolExec?: ToolExecutorFn }
+    options?: {
+      client?: HyperliquidClient;
+      toolExec?: ToolExecutorFn;
+      infoLlm?: LlmClient;
+      notify?: (message: string) => Promise<void>;
+    }
   ) {
     this.client = options?.client ?? new HyperliquidClient(config);
     this.toolExec = options?.toolExec ?? executeToolCall;
+    this.infoLlm = options?.infoLlm;
+    this.notify = options?.notify;
   }
 
   start(): void {
@@ -135,7 +145,11 @@ export class PositionHeartbeatService {
       // Hard circuit breakers (no LLM).
       const emergency = liqDistPct != null && liqDistPct < 2;
       if (!emergency) {
-        this.recordInfo(pos.symbol, nowIso, fired, null);
+        if (fired.length > 0) {
+          await this.alertOnTriggers(pos, fired, liqDistPct, nowIso);
+        } else {
+          this.recordInfo(pos.symbol, nowIso, fired, null);
+        }
         continue;
       }
 
@@ -162,6 +176,41 @@ export class PositionHeartbeatService {
     }
 
     this.scheduleNext(this.computeActiveIntervalMs());
+  }
+
+  private async alertOnTriggers(
+    pos: PositionSnapshot,
+    fired: HeartbeatTriggerName[],
+    liqDistPct: number | null,
+    timestamp: string
+  ): Promise<void> {
+    this.recordInfo(pos.symbol, timestamp, fired, null);
+
+    if (!this.infoLlm || !this.notify) return;
+
+    const prompt = [
+      `Position risk triggers fired for ${pos.symbol} (${pos.side}).`,
+      `Triggers: ${fired.join(', ')}.`,
+      `ROE: ${pos.roePct != null ? `${pos.roePct.toFixed(2)}%` : 'n/a'}.`,
+      `Liq distance: ${liqDistPct != null ? `${liqDistPct.toFixed(2)}%` : 'n/a'}.`,
+      `Unrealized PnL: ${pos.unrealizedPnl != null ? pos.unrealizedPnl.toFixed(4) : 'n/a'}.`,
+      `Write one concise alert sentence for the trader. No preamble.`,
+    ].join(' ');
+
+    let alertText: string;
+    try {
+      const response = await this.infoLlm.complete([{ role: 'user', content: prompt }]);
+      alertText = response.content?.trim() || `[Heartbeat] ${pos.symbol} triggers: ${fired.join(', ')}`;
+    } catch (err) {
+      alertText = `[Heartbeat] ${pos.symbol} (${pos.side}) triggers: ${fired.join(', ')}. Liq dist: ${liqDistPct != null ? `${liqDistPct.toFixed(2)}%` : 'n/a'}.`;
+      this.logger.warn(`PositionHeartbeat: infoLlm failed, using fallback alert: ${stringifyError(err)}`);
+    }
+
+    try {
+      await this.notify(alertText);
+    } catch (err) {
+      this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+    }
   }
 
   private parsePositions(raw: unknown): PositionSnapshot[] {

@@ -150,7 +150,18 @@ for (const instance of agentRegistry.agents.values()) {
 const positionHeartbeatConfig = config.heartbeat;
 if (positionHeartbeatConfig?.enabled) {
   try {
-    const service = new PositionHeartbeatService(config, primaryAgent.getToolContext(), logger);
+    const heartbeatNotify = telegram
+      ? async (message: string) => {
+          for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
+            await telegram.sendMessage(String(chatId), `⚠️ ${message}`);
+          }
+        }
+      : undefined;
+
+    const service = new PositionHeartbeatService(config, primaryAgent.getToolContext(), logger, {
+      infoLlm: primaryAgent.getInfoLlm(),
+      notify: heartbeatNotify,
+    });
     service.start();
   } catch (error) {
     logger.error('PositionHeartbeat failed to start', error);
