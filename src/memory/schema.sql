@@ -789,3 +789,23 @@ FROM predictions p
 LEFT JOIN market_cache m ON p.market_id = m.id
 WHERE p.executed = 1 AND p.outcome IS NULL
 ORDER BY p.created_at DESC;
+
+-- ============================================================================
+-- LLM Entry Gate Log (v1.97)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS llm_entry_gate_log (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  symbol            TEXT NOT NULL,
+  side              TEXT NOT NULL,
+  notional_usd      REAL NOT NULL,
+  verdict           TEXT NOT NULL,
+  reasoning         TEXT NOT NULL,
+  adjusted_size_usd REAL,
+  used_fallback     INTEGER NOT NULL DEFAULT 0,
+  signal_class      TEXT,
+  regime            TEXT,
+  session           TEXT,
+  edge              REAL
+);
