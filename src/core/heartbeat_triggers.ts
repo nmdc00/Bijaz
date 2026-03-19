@@ -21,6 +21,7 @@ export type HeartbeatTriggerConfig = {
 };
 
 const toFinite = (value: unknown): number | null => {
+  if (value == null) return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 };

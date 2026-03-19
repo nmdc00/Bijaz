@@ -185,6 +185,75 @@ export function listPaperPerpPositions(initialCashUsdc = 200): PaperPerpPosition
   }));
 }
 
+export type PaperPerpPositionWithMark = PaperPerpPosition & {
+  currentMarkPrice: number;
+  unrealizedPnlUsd: number;
+  returnOnEquityPct: number;
+  liquidationPrice: number | null;
+};
+
+export function listPaperPerpPositionsWithMark(initialCashUsdc = 200): PaperPerpPositionWithMark[] {
+  initializePaperPerpBook(initialCashUsdc);
+  const db = openDatabase();
+  const rows = db
+    .prepare(
+      `
+        SELECT p.symbol, p.side, p.size, p.entry_price, p.leverage, p.opened_at, p.updated_at,
+               COALESCE(m.mark_price, p.entry_price) AS current_price
+        FROM paper_perp_positions p
+        LEFT JOIN (
+          SELECT f.symbol, f.mark_price
+          FROM paper_perp_fills f
+          INNER JOIN (
+            SELECT symbol, MAX(id) AS max_id
+            FROM paper_perp_fills
+            GROUP BY symbol
+          ) latest ON latest.symbol = f.symbol AND latest.max_id = f.id
+        ) m ON m.symbol = p.symbol
+        ORDER BY p.symbol ASC
+      `
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return rows.map((row) => {
+    const side: 'long' | 'short' = String(row.side ?? 'long') === 'short' ? 'short' : 'long';
+    const size = Number(row.size ?? 0);
+    const entryPrice = Number(row.entry_price ?? 0);
+    const leverage = row.leverage == null ? null : Number(row.leverage);
+    const currentMarkPrice = Number(row.current_price ?? entryPrice);
+
+    const unrealizedPnlUsd =
+      side === 'long'
+        ? (currentMarkPrice - entryPrice) * size
+        : (entryPrice - currentMarkPrice) * size;
+
+    const notional = entryPrice * size;
+    const returnOnEquityPct = notional > 0 ? (unrealizedPnlUsd / notional) * 100 : 0;
+
+    // Simplified liq estimate: entry ± entry/leverage (no maintenance margin).
+    // Only computable when leverage is known and valid.
+    let liquidationPrice: number | null = null;
+    if (leverage != null && leverage > 1) {
+      liquidationPrice =
+        side === 'long' ? entryPrice * (1 - 1 / leverage) : entryPrice * (1 + 1 / leverage);
+    }
+
+    return {
+      symbol: String(row.symbol ?? ''),
+      side,
+      size,
+      entryPrice,
+      leverage,
+      openedAt: String(row.opened_at ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+      currentMarkPrice,
+      unrealizedPnlUsd,
+      returnOnEquityPct,
+      liquidationPrice,
+    };
+  });
+}
+
 export function listPaperPerpOpenOrders(initialCashUsdc = 200): PaperPerpOpenOrder[] {
   initializePaperPerpBook(initialCashUsdc);
   const db = openDatabase();
