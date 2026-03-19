@@ -100,6 +100,7 @@ const mockPaperPositions = vi.fn();
 vi.mock('../../src/memory/paper_perps.js', () => ({
   getPaperPerpBookSummary: (...args: unknown[]) => mockPaperSummary(...args),
   listPaperPerpPositionsWithMark: (...args: unknown[]) => mockPaperPositions(...args),
+  listPaperPerpPositions: () => [],
 }));
 
 const mockCashBalance = vi.fn();
