@@ -11,6 +11,7 @@ import {
   type HeartbeatTriggerName,
 } from './heartbeat_triggers.js';
 import { recordPositionHeartbeatDecision } from '../memory/position_heartbeat_journal.js';
+import { placePaperPerpOrder } from '../memory/paper_perps.js';
 
 type ToolExecutorFn = (
   toolName: string,
@@ -137,6 +138,50 @@ export class PositionHeartbeatService {
         nowMs,
         lastFiredByTrigger: triggerState,
       });
+
+      // Paper mode: simulate forced liquidation when mark crosses liquidation price.
+      if (executionMode === 'paper' && liqDistPct !== null && liqDistPct <= 0 && pos.liquidationPrice != null) {
+        const liqSide = pos.side === 'long' ? 'sell' : 'buy';
+        const liqPrice = pos.liquidationPrice;
+        let liqFillSuccess = false;
+        let liqFillError: string | null = null;
+        try {
+          placePaperPerpOrder(
+            { symbol: pos.symbol, side: liqSide, size: pos.size, orderType: 'market', markPrice: liqPrice, reduceOnly: true },
+            { initialCashUsdc: (this.config as any).paper?.initialCashUsdc ?? 200 }
+          );
+          liqFillSuccess = true;
+        } catch (err) {
+          liqFillError = stringifyError(err);
+        }
+
+        const midStr = mid != null ? `$${mid.toFixed(2)}` : 'n/a';
+        const liqStr = `$${liqPrice.toFixed(2)}`;
+        this.logger.info(
+          `PositionHeartbeat: [Paper] Liquidated ${pos.symbol} (${pos.side}) size=${pos.size} ` +
+          `liqPrice=${liqStr} mark=${midStr}`
+        );
+        recordPositionHeartbeatDecision({
+          kind: 'position_heartbeat_journal',
+          symbol: pos.symbol,
+          timestamp: nowIso,
+          triggers: [],
+          decision: { action: 'close_entirely', reason: `[Paper] Liquidation: mark ${midStr} crossed liq price ${liqStr}` },
+          outcome: liqFillSuccess ? 'ok' : 'failed',
+          snapshot: { liqDistPct, liqPrice, mid },
+          error: liqFillError,
+        });
+        if (this.notify) {
+          try {
+            await this.notify(
+              `💀 [Paper] Liquidated: ${pos.symbol} (${pos.side}). Mark: ${midStr}. Liq price: ${liqStr}. Margin lost.`
+            );
+          } catch (err) {
+            this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+          }
+        }
+        continue;
+      }
 
       // Hard circuit breaker — bypass trigger logic, close immediately.
       const emergency = liqDistPct != null && liqDistPct < 2;
