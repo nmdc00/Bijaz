@@ -103,7 +103,7 @@ export function resolveAdaptiveEdge(
 
   const priorEdge = Number.isFinite(Number(adaptiveCfg.priorEdge))
     ? clamp(Number(adaptiveCfg.priorEdge), 0, 1)
-    : 0.015;
+    : 0.03;
   const minSamples = Number.isFinite(Number(adaptiveCfg.minSamples))
     ? Math.max(1, Math.floor(Number(adaptiveCfg.minSamples)))
     : 10;

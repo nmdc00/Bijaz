@@ -137,6 +137,11 @@ export class ThufirAgent {
     return this.toolContext;
   }
 
+  /** Expose the trivial/local LLM client for lightweight background tasks. */
+  getInfoLlm(): LlmClient | undefined {
+    return this.infoLlm;
+  }
+
   private async getLiveStatusSnapshot() {
     const base = this.autonomous.getOperatorSnapshot();
     try {
@@ -733,11 +738,14 @@ Just type naturally to chat about markets, risks, or positioning.
       /\b(find|look\s+for|scan|search|identify)\b.*\b(trade|trades|opportunit|edge)\b/i.test(message) ||
       /\b(start|begin|run|kick\s*off)\b.*\b(trading|auto|autonomous)\b/i.test(message);
 
+    // Require imperative phrasing — questions like "why did you open this position"
+    // must not trigger the trade-placement path.
     const wantsPlaceTradeNow =
       /\b(look\s+at\s+the\s+market|check\s+the\s+market)\b.*\b(place|execute|open|enter)\b.*\b(trade|order|position)\b/i.test(
         message
       ) ||
-      /\b(place|execute|open|enter|make)\b.*\b(a\s+)?(trade|order|position)\b/i.test(message);
+      /\b(please\s+)?(place|execute|make)\b.*\b(a\s+)?(trade|order|position)\b/i.test(message) ||
+      /\b(open|enter)\b\s+(a\s+|me\s+a\s+|us\s+a\s+)?(trade|order|long|short|position)\b/i.test(message);
 
     if (wantsAutoScan) {
       if (!autoEnabled) {
