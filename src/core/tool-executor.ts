@@ -57,7 +57,7 @@ export interface ToolSpendingLimiter {
   getState?(): { todaySpent: number; reserved: number } & Record<string, unknown>;
 }
 import { getCashBalance } from '../memory/portfolio.js';
-import { getPaperPerpBookSummary, listPaperPerpFills, listPaperPerpPositions } from '../memory/paper_perps.js';
+import { getPaperPerpBookSummary, listPaperPerpFills, listPaperPerpPositions, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
 import { loadKeystore } from '../execution/wallet/keystore.js';
@@ -1768,6 +1768,26 @@ export async function executeToolCall(
         // Reduce-only orders are strictly risk-reducing; do not block them on spending limits.
         // This is critical for safety loops (heartbeat/trade-management) that must be able to flatten.
         if (!reduceOnly) {
+          // Paper mode equity guard: block new entries when account is already bankrupt.
+          // Liquidation simulation handles positions-going-underwater; this guard prevents
+          // opening new positions after the account equity has reached zero or below.
+          if (bookMode === 'paper') {
+            try {
+              const paperInitialCash = ctx.config.paper?.initialCashUsdc ?? 200;
+              const paperSummary = getPaperPerpBookSummary(paperInitialCash);
+              const paperPositions = listPaperPerpPositionsWithMark(paperInitialCash);
+              const unrealizedPnl = paperPositions.reduce((sum, p) => sum + p.unrealizedPnlUsd, 0);
+              const paperEquity = paperSummary.cashBalanceUsdc + unrealizedPnl;
+              if (paperEquity <= 0) {
+                return {
+                  success: false,
+                  error: `[Paper] Account bankrupt: equity=$${paperEquity.toFixed(2)}. Reset paper account to trade again.`,
+                };
+              }
+            } catch {
+              // Best-effort: don't block on equity check failure.
+            }
+          }
           const limitCheck = await ctx.limiter.checkAndReserve(size);
           if (!limitCheck.allowed) {
             try {

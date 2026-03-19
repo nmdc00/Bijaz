@@ -41,13 +41,7 @@ export function mapExpressionPlan(
   const leverage = Math.min(config.hyperliquid?.maxLeverage ?? 5, 5);
   const dailyLimit = config.wallet?.limits?.daily ?? 100;
   const probeFraction = config.autonomy?.probeRiskFraction ?? 0.005;
-  // Hard cap probe size so a large wallet.limits.daily (e.g. 100M "unlimited"
-  // sentinel) doesn't generate position-destroying probe amounts. Default max
-  // is $10; override via autonomy.probeMaxSizeUsd in config.
-  const probeMaxSizeUsd = Number.isFinite(Number((config.autonomy as any)?.probeMaxSizeUsd))
-    ? Math.max(1, Number((config.autonomy as any)?.probeMaxSizeUsd))
-    : 10;
-  const probeBudget = Math.min(probeMaxSizeUsd, Math.max(1, dailyLimit * probeFraction));
+  const probeBudget = Math.max(1, dailyLimit * probeFraction);
   const side = hypothesis.expectedExpression.includes('down') ? 'sell' : 'buy';
   const confidence = Math.min(1, Math.max(0, cluster.confidence));
   const reflex = cluster.signals.find((s) => s.kind === 'reflexivity_fragility');
