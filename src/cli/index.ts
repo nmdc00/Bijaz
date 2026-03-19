@@ -2101,7 +2101,7 @@ auto
       confirmationThreshold: config.wallet?.limits?.confirmationThreshold ?? 10,
     });
 
-    const autonomous = new AutonomousManager(llm, markets, executor, limiter, config);
+    const autonomous = new AutonomousManager(llm, llm, markets, executor, limiter, config);
     const status = autonomous.getStatus();
     const pnl = autonomous.getDailyPnL();
 
@@ -2159,7 +2159,7 @@ auto
         confirmationThreshold: config.wallet?.limits?.confirmationThreshold ?? 10,
       });
 
-      const autonomous = new AutonomousManager(llm, markets, executor, limiter, config);
+      const autonomous = new AutonomousManager(llm, llm, markets, executor, limiter, config);
       const report = await autonomous.generateDailyPnLReport();
       spinner.stop();
       console.log(report);

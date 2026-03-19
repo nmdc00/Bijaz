@@ -100,14 +100,36 @@ vi.mock('../../src/memory/db.js', () => ({
   }),
 }));
 
+vi.mock('../../src/memory/paper_perps.js', () => ({
+  listPaperPerpPositions: () => [],
+  listPaperPerpPositionsWithMark: () => [],
+  getPaperPerpBookSummary: () => ({ cashBalanceUsdc: 200 }),
+}));
+
+vi.mock('../../src/memory/position_exit_policy.js', () => ({
+  getPositionExitPolicy: () => null,
+  upsertPositionExitPolicy: vi.fn(),
+}));
+
+vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
+  recordEntryGateDecision: vi.fn(),
+}));
+
 async function createManager(limiter: any, executor: any) {
   const { AutonomousManager } = await import('../../src/core/autonomous.js');
   const marketClient = {
     getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
   } as any;
+  const gateLlm = {
+    complete: vi.fn(async () => ({
+      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+      model: 'test',
+    })),
+  } as any;
 
   return new AutonomousManager(
-    {} as any,
+    gateLlm,
+    gateLlm,
     marketClient,
     executor,
     limiter,

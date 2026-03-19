@@ -28,6 +28,7 @@ vi.mock('../../src/memory/paper_perps.js', () => ({
     feeUsd: 0,
     message: 'ok',
   }),
+  listPaperPerpPositions: () => [],
 }));
 
 const mockGetPolicy = vi.fn();

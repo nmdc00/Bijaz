@@ -268,7 +268,7 @@ describe('v1.91 efficiency integration acceptance', () => {
       release: () => {},
     } as any;
 
-    const manager = new AutonomousManager(llm, marketClient, executor, limiter, config);
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, config);
     await manager.runScan();
 
     // Zero LLM calls: discovery/filter/evaluate is all deterministic code
