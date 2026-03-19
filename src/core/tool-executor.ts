@@ -324,8 +324,14 @@ function buildPaperPerpSnapshot(initialCashUsdc: number, mids: Record<string, nu
       unrealized_pnl: markPrice != null
         ? (markPrice - position.entryPrice) * position.size * direction
         : null,
-      return_on_equity: null,
-      liquidation_price: null,
+      return_on_equity: markPrice != null && position.entryPrice > 0
+        ? ((markPrice - position.entryPrice) * direction / position.entryPrice) * 100
+        : null,
+      liquidation_price: leverage != null && leverage > 1
+        ? position.side === 'long'
+          ? position.entryPrice * (1 - 1 / leverage)
+          : position.entryPrice * (1 + 1 / leverage)
+        : null,
       margin_used: null,
       leverage_type: null,
       max_leverage: null,
