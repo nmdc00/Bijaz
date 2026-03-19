@@ -2,9 +2,23 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { Logger } from '../../src/core/logger.js';
 import { PositionHeartbeatService } from '../../src/core/position_heartbeat.js';
+import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
 
 vi.mock('../../src/memory/position_heartbeat_journal.js', () => ({
   recordPositionHeartbeatDecision: () => {},
+}));
+
+vi.mock('../../src/memory/paper_perps.js', () => ({
+  placePaperPerpOrder: vi.fn().mockReturnValue({
+    orderId: 'paper-liq-test',
+    filled: true,
+    fillPrice: 50,
+    markPrice: 50,
+    slippageBps: 0,
+    realizedPnlUsd: -100,
+    feeUsd: 0.025,
+    message: 'Paper liquidation fill',
+  }),
 }));
 
 function makeConfig(triggerOverrides: Record<string, unknown> = {}) {
@@ -325,6 +339,61 @@ describe('position heartbeat — autonomous actions', () => {
     service.stop();
 
     expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(true);
+  });
+
+  it('[Paper] simulates liquidation at liq price when mark crosses it', async () => {
+    // long ETH: entry=100, lev=5x → liqPrice = 100 * (1 - 1/5) = 80
+    // mid=75 → liqDistPct = (75 - 80) / 75 * 100 = -6.67% → ≤ 0 → liquidate
+    const config = {
+      execution: { mode: 'paper', provider: 'hyperliquid' },
+      heartbeat: { enabled: true, tickIntervalSeconds: 1, rollingBufferSize: 10, triggers: {} },
+    } as any;
+    const notified: string[] = [];
+    const calls: Array<{ tool: string }> = [];
+    const toolExec = async (toolName: string, _input: Record<string, unknown>) => {
+      calls.push({ tool: toolName });
+      if (toolName === 'get_positions') {
+        return {
+          success: true as const,
+          data: {
+            positions: [{
+              symbol: 'ETH',
+              side: 'long',
+              size: 1,
+              unrealized_pnl: -25,
+              return_on_equity: -25,
+              liquidation_price: 80, // liq price set explicitly
+            }],
+          },
+        };
+      }
+      return { success: true as const, data: {} };
+    };
+    const client = { getAllMids: async () => ({ ETH: 75 }) } as any; // mid=75 < liqPrice=80
+
+    const service = new PositionHeartbeatService(config, { config } as any, new Logger('error'), {
+      client,
+      toolExec: toolExec as any,
+      notify: async (msg) => { notified.push(msg); },
+    });
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    // placePaperPerpOrder should have been called directly at liq price, not via toolExec
+    expect(vi.mocked(placePaperPerpOrder)).toHaveBeenCalledOnce();
+    const callArg = vi.mocked(placePaperPerpOrder).mock.calls[0]![0];
+    expect(callArg.markPrice).toBe(80); // filled at liq price, not mid
+    expect(callArg.side).toBe('sell');  // close long → sell
+    expect(callArg.reduceOnly).toBe(true);
+    // perp_place_order toolExec should NOT have been called (bypassed for liquidation)
+    expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
+    // 💀 notification sent
+    expect(notified.length).toBe(1);
+    expect(notified[0]).toContain('💀');
+    expect(notified[0]).toContain('ETH');
+    expect(notified[0]).toContain('Liquidated');
   });
 
   it('liquidation_proximity does not fire for paper positions with null liqDistPct', async () => {

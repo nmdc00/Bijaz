@@ -39,6 +39,9 @@ import { SchedulerControlPlane } from './scheduler_control_plane.js';
 import { resolveSessionWeightContext } from './session-weight.js';
 import { AutonomousScanTelemetry } from './performance_metrics.js';
 import { withExecutionContext } from './llm_infra.js';
+import { getPaperPerpBookSummary, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
+import { upsertPositionExitPolicy } from '../memory/position_exit_policy.js';
+import { getCashBalance } from '../memory/portfolio.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -538,7 +541,26 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         typeof (this.thufirConfig as any)?.hyperliquid?.minOrderNotionalUsd === 'number'
           ? Number((this.thufirConfig as any).hyperliquid.minOrderNotionalUsd)
           : 10;
-      const remainingDaily = this.limiter.getRemainingDaily();
+      const remainingDaily = (() => {
+        const limiterRemaining = this.limiter.getRemainingDaily();
+        const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+        try {
+          if (executionMode === 'paper') {
+            const paperInitialCash = this.thufirConfig.paper?.initialCashUsdc ?? 200;
+            const paperPositions = listPaperPerpPositionsWithMark(paperInitialCash);
+            const unrealizedPnl = paperPositions.reduce((sum, p) => sum + p.unrealizedPnlUsd, 0);
+            const equity = getPaperPerpBookSummary(paperInitialCash).cashBalanceUsdc + unrealizedPnl;
+            return Math.min(limiterRemaining, Math.max(0, equity));
+          } else {
+            // Live mode: cap by actual account balance so Thufir can't spend more than he has.
+            const cashBalance = getCashBalance();
+            if (cashBalance != null && Number.isFinite(cashBalance)) {
+              return Math.min(limiterRemaining, Math.max(0, cashBalance));
+            }
+          }
+        } catch { /* fallback to limiter value */ }
+        return limiterRemaining;
+      })();
       const desiredUsd = Number.isFinite(expr.probeSizeUsd) ? expr.probeSizeUsd : 0;
       const perf = summarizeSignalPerformance(listPerpTradeJournals({ limit: 200 }), signalClass);
       const kellyFraction = computeFractionalKellyFraction({
@@ -631,6 +653,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       if (tradeResult.executed) {
         executedCount += 1;
         this.limiter.confirm(probeUsd);
+        // Write per-position exit policy so the heartbeat knows when to close.
+        const defaultThesisTtlMs =
+          ((this.thufirConfig.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120) * 60_000;
+        const timeStopAtMs = expr.newsTrigger?.expiresAtMs ?? Date.now() + defaultThesisTtlMs;
+        try {
+          upsertPositionExitPolicy(symbol, expr.side === 'buy' ? 'long' : 'short', timeStopAtMs, null);
+        } catch { }
       } else {
         this.limiter.release(probeUsd);
       }

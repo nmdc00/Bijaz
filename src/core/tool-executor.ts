@@ -48,6 +48,10 @@ import {
   validateEntryTradeContract,
   validateReduceOnlyExitFsm,
 } from './trade_contract.js';
+import {
+  clearPositionExitPolicy,
+  upsertPositionExitPolicy,
+} from '../memory/position_exit_policy.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -57,7 +61,7 @@ export interface ToolSpendingLimiter {
   getState?(): { todaySpent: number; reserved: number } & Record<string, unknown>;
 }
 import { getCashBalance } from '../memory/portfolio.js';
-import { getPaperPerpBookSummary, listPaperPerpFills, listPaperPerpPositions } from '../memory/paper_perps.js';
+import { getPaperPerpBookSummary, listPaperPerpFills, listPaperPerpPositions, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
 import { getWalletBalances } from '../execution/wallet/balances.js';
 import { loadWallet } from '../execution/wallet/manager.js';
 import { loadKeystore } from '../execution/wallet/keystore.js';
@@ -1768,6 +1772,26 @@ export async function executeToolCall(
         // Reduce-only orders are strictly risk-reducing; do not block them on spending limits.
         // This is critical for safety loops (heartbeat/trade-management) that must be able to flatten.
         if (!reduceOnly) {
+          // Paper mode equity guard: block new entries when account is already bankrupt.
+          // Liquidation simulation handles positions-going-underwater; this guard prevents
+          // opening new positions after the account equity has reached zero or below.
+          if (bookMode === 'paper') {
+            try {
+              const paperInitialCash = ctx.config.paper?.initialCashUsdc ?? 200;
+              const paperSummary = getPaperPerpBookSummary(paperInitialCash);
+              const paperPositions = listPaperPerpPositionsWithMark(paperInitialCash);
+              const unrealizedPnl = paperPositions.reduce((sum, p) => sum + p.unrealizedPnlUsd, 0);
+              const paperEquity = paperSummary.cashBalanceUsdc + unrealizedPnl;
+              if (paperEquity <= 0) {
+                return {
+                  success: false,
+                  error: `[Paper] Account bankrupt: equity=$${paperEquity.toFixed(2)}. Reset paper account to trade again.`,
+                };
+              }
+            } catch {
+              // Best-effort: don't block on equity check failure.
+            }
+          }
           const limitCheck = await ctx.limiter.checkAndReserve(size);
           if (!limitCheck.allowed) {
             try {
@@ -2076,6 +2100,23 @@ export async function executeToolCall(
           });
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
+        }
+        // Maintain per-position exit policy for heartbeat.
+        if (!reduceOnly) {
+          // New entry: write time-stop from thesis_expires_at_ms if provided.
+          if (thesisExpiresAtMs != null) {
+            try {
+              upsertPositionExitPolicy(
+                symbol,
+                (side as string) === 'buy' ? 'long' : 'short',
+                thesisExpiresAtMs,
+                null
+              );
+            } catch { }
+          }
+        } else if (positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0)) {
+          // Reduce-only that fully closed the position: clear the policy.
+          try { clearPositionExitPolicy(symbol); } catch { }
         }
         return {
           success: true,
