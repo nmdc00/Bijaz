@@ -406,12 +406,20 @@ export function buildConversationThreadResponse(
 
   return {
     sessionId,
-    messages: rows.map((row) => ({
-      id: String(row.id),
-      role: row.role === 'assistant' ? 'assistant' : 'user',
-      content: String(row.content ?? ''),
-      createdAt: String(row.createdAt),
-    })),
+    messages: rows.map((row) => {
+      let content = String(row.content ?? '');
+      if (row.role === 'assistant') {
+        content = content
+          .replace(/^\s*(I['']m|I am)\s+Thufir\s+Hawat\.\s*(\r?\n)+/i, '')
+          .replace(/^\s*(I['']m|I am)\s+Thufir\s+Hawat\.\s*/i, '');
+      }
+      return {
+        id: String(row.id),
+        role: row.role === 'assistant' ? 'assistant' : 'user',
+        content,
+        createdAt: String(row.createdAt),
+      };
+    }),
   };
 }
 
