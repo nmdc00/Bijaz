@@ -2,7 +2,6 @@ import type { ThufirConfig } from './config.js';
 import type { Logger } from './logger.js';
 import type { ToolExecutorContext, ToolResult } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
-import type { LlmClient } from './llm.js';
 
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import {
@@ -37,7 +36,6 @@ export class PositionHeartbeatService {
 
   private client: HyperliquidClient;
   private toolExec: ToolExecutorFn;
-  private infoLlm?: LlmClient;
   private notify?: (message: string) => Promise<void>;
 
   constructor(
@@ -47,13 +45,11 @@ export class PositionHeartbeatService {
     options?: {
       client?: HyperliquidClient;
       toolExec?: ToolExecutorFn;
-      infoLlm?: LlmClient;
       notify?: (message: string) => Promise<void>;
     }
   ) {
     this.client = options?.client ?? new HyperliquidClient(config);
     this.toolExec = options?.toolExec ?? executeToolCall;
-    this.infoLlm = options?.infoLlm;
     this.notify = options?.notify;
   }
 
@@ -142,11 +138,11 @@ export class PositionHeartbeatService {
         lastFiredByTrigger: triggerState,
       });
 
-      // Hard circuit breakers (no LLM).
+      // Hard circuit breaker — bypass trigger logic, close immediately.
       const emergency = liqDistPct != null && liqDistPct < 2;
       if (!emergency) {
         if (fired.length > 0) {
-          await this.alertOnTriggers(pos, fired, liqDistPct, nowIso);
+          await this.executeOnTriggers(pos, fired, liqDistPct, nowIso);
         } else {
           this.recordInfo(pos.symbol, nowIso, fired, null);
         }
@@ -173,12 +169,23 @@ export class PositionHeartbeatService {
         snapshot: { liqDistPct, tool },
         error: tool.success ? null : tool.error,
       });
+
+      if (this.notify) {
+        const liqStr = liqDistPct != null ? `${liqDistPct.toFixed(2)}%` : 'n/a';
+        try {
+          await this.notify(
+            `🚨 [Heartbeat] Emergency close: ${pos.symbol} (${pos.side}). Liq dist: ${liqStr}.`
+          );
+        } catch (err) {
+          this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+        }
+      }
     }
 
     this.scheduleNext(this.computeActiveIntervalMs());
   }
 
-  private async alertOnTriggers(
+  private async executeOnTriggers(
     pos: PositionSnapshot,
     fired: HeartbeatTriggerName[],
     liqDistPct: number | null,
@@ -186,30 +193,50 @@ export class PositionHeartbeatService {
   ): Promise<void> {
     this.recordInfo(pos.symbol, timestamp, fired, null);
 
-    if (!this.infoLlm || !this.notify) return;
+    const action = resolveAction(fired, pos.roePct);
+    const side = pos.side === 'long' ? 'sell' : 'buy';
 
-    const prompt = [
-      `Position risk triggers fired for ${pos.symbol} (${pos.side}).`,
-      `Triggers: ${fired.join(', ')}.`,
-      `ROE: ${pos.roePct != null ? `${pos.roePct.toFixed(2)}%` : 'n/a'}.`,
-      `Liq distance: ${liqDistPct != null ? `${liqDistPct.toFixed(2)}%` : 'n/a'}.`,
-      `Unrealized PnL: ${pos.unrealizedPnl != null ? pos.unrealizedPnl.toFixed(4) : 'n/a'}.`,
-      `Write one concise alert sentence for the trader. No preamble.`,
-    ].join(' ');
+    let orderSize: number;
+    let decisionAction: 'close_entirely' | 'take_partial_profit';
+    let notifyMsg: string;
 
-    let alertText: string;
-    try {
-      const response = await this.infoLlm.complete([{ role: 'user', content: prompt }]);
-      alertText = response.content?.trim() || `[Heartbeat] ${pos.symbol} triggers: ${fired.join(', ')}`;
-    } catch (err) {
-      alertText = `[Heartbeat] ${pos.symbol} (${pos.side}) triggers: ${fired.join(', ')}. Liq dist: ${liqDistPct != null ? `${liqDistPct.toFixed(2)}%` : 'n/a'}.`;
-      this.logger.warn(`PositionHeartbeat: infoLlm failed, using fallback alert: ${stringifyError(err)}`);
+    if (action === 'close') {
+      orderSize = pos.size;
+      decisionAction = 'close_entirely';
+      const roe = pos.roePct != null ? `${pos.roePct.toFixed(2)}%` : 'n/a';
+      notifyMsg = `⛔ [Heartbeat] Closed ${pos.symbol} (${pos.side}) — trigger: ${fired.join(', ')}. ROE: ${roe}.`;
+    } else {
+      orderSize = pos.size * 0.5;
+      decisionAction = 'take_partial_profit';
+      notifyMsg = `⚠️ [Heartbeat] Reduced ${pos.symbol} (${pos.side}) by 50% — trigger: ${fired.join(', ')}.`;
     }
 
-    try {
-      await this.notify(alertText);
-    } catch (err) {
-      this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+    const tool = await this.toolExec(
+      'perp_place_order',
+      { symbol: pos.symbol, side, size: orderSize, reduce_only: true, order_type: 'market' },
+      this.toolContext
+    );
+
+    recordPositionHeartbeatDecision({
+      kind: 'position_heartbeat_journal',
+      symbol: pos.symbol,
+      timestamp,
+      triggers: fired,
+      decision: {
+        action: decisionAction,
+        reason: `Trigger action (${action}): ${fired.join(', ')}`,
+      },
+      outcome: tool.success ? 'ok' : 'failed',
+      snapshot: { liqDistPct, action, tool },
+      error: tool.success ? null : tool.error,
+    });
+
+    if (this.notify) {
+      try {
+        await this.notify(notifyMsg);
+      } catch (err) {
+        this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+      }
     }
   }
 
@@ -313,6 +340,22 @@ function normalizeTriggerConfig(config: ThufirConfig): HeartbeatTriggerConfig {
     timeCeilingMinutes: Number(raw.timeCeilingMinutes ?? 15) || 15,
     triggerCooldownSeconds: Number(raw.triggerCooldownSeconds ?? 180) || 180,
   };
+}
+
+function resolveAction(
+  fired: HeartbeatTriggerName[],
+  roePct: number | null
+): 'close' | 'reduce' {
+  // Any of these always warrant a full close.
+  if (
+    fired.includes('time_ceiling') ||
+    fired.includes('liquidation_proximity') ||
+    (fired.includes('pnl_shift') && (roePct == null || roePct <= 0))
+  ) {
+    return 'close';
+  }
+  // Positive PnL shift or volatility spike → reduce by half.
+  return 'reduce';
 }
 
 async function retryWithBackoff<T>(fn: () => Promise<T>, attempts: number): Promise<T> {
