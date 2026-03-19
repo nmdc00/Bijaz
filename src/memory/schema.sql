@@ -741,6 +741,25 @@ CREATE INDEX IF NOT EXISTS idx_event_outcomes_event_id ON event_outcomes(event_i
 CREATE INDEX IF NOT EXISTS idx_event_outcomes_resolution ON event_outcomes(resolution_status);
 
 -- ============================================================================
+-- LLM Exit Consult Log (v1.97)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS llm_exit_consult_log (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  symbol                 TEXT NOT NULL,
+  side                   TEXT NOT NULL,
+  roe_at_consult         REAL NOT NULL,
+  time_held_ms           INTEGER NOT NULL,
+  action                 TEXT NOT NULL,
+  reasoning              TEXT NOT NULL,
+  new_time_stop_at_ms    INTEGER,
+  new_invalidation_price REAL,
+  reduce_to_fraction     REAL,
+  used_fallback          INTEGER NOT NULL DEFAULT 0
+);
+
+-- ============================================================================
 -- Views
 -- ============================================================================
 
