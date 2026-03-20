@@ -78,4 +78,24 @@ describe('HyperliquidMarketClient cache', () => {
       markPrice: 72.15,
     });
   });
+
+  it('blends main and HIP-3 dex markets into low-limit listings', async () => {
+    listPerpMarketsMock.mockResolvedValue([
+      { symbol: 'BTC', assetId: 0, maxLeverage: 10, szDecimals: 3, dex: null },
+      { symbol: 'ETH', assetId: 1, maxLeverage: 10, szDecimals: 3, dex: null },
+      { symbol: 'SOL', assetId: 2, maxLeverage: 10, szDecimals: 3, dex: null },
+      { symbol: 'xyz:CL', assetId: 3, maxLeverage: 5, szDecimals: 2, dex: 'xyz' },
+      { symbol: 'xyz:TSLA', assetId: 4, maxLeverage: 5, szDecimals: 2, dex: 'xyz' },
+    ]);
+    getAllMidsMock.mockResolvedValue({ BTC: 100000, ETH: 3000, SOL: 150, 'xyz:CL': 72.15, 'xyz:TSLA': 280 });
+    const { HyperliquidMarketClient } = await import('../../src/execution/hyperliquid/markets.js');
+    const client = new HyperliquidMarketClient({ hyperliquid: { enabled: true } } as any);
+
+    await expect(client.listMarkets(4)).resolves.toMatchObject([
+      { symbol: 'BTC', metadata: { dex: null } },
+      { symbol: 'xyz:CL', metadata: { dex: 'xyz' } },
+      { symbol: 'ETH', metadata: { dex: null } },
+      { symbol: 'xyz:TSLA', metadata: { dex: 'xyz' } },
+    ]);
+  });
 });

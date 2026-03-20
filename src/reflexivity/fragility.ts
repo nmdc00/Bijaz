@@ -195,7 +195,7 @@ export async function buildReflexivitySetup(params: {
   const timeHorizon = pickTimeHorizon(horizonSeconds);
 
   const client = new HyperliquidClient(params.config);
-  const [meta, assetCtxs] = await client.getMetaAndAssetCtxs();
+  const [meta, assetCtxs] = await client.getMergedMetaAndAssetCtxs();
   const idx = (meta as any)?.universe?.findIndex((item: any) => item?.name === baseSymbol) ?? -1;
   if (idx < 0 || idx >= (assetCtxs as any[]).length) return null;
 
