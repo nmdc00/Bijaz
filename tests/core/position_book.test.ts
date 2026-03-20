@@ -183,6 +183,35 @@ describe('PositionBook', () => {
       expect(book.get('BTC')!.thesisExpiresAtMs).toBe(futureMs);
     });
 
+    it('parses exit contract notes into the book entry summary', async () => {
+      mockListPaperPerpPositions.mockReturnValue([
+        { symbol: 'BTC', side: 'long', size: 0.1, entryPrice: 50000 },
+      ]);
+      mockGetPositionExitPolicy.mockReturnValue({
+        symbol: 'BTC',
+        side: 'long',
+        timeStopAtMs: null,
+        invalidationPrice: null,
+        notes: JSON.stringify({
+          thesis: 'BTC continuation',
+          hardRules: [
+            { metric: 'mark_price', op: '<=', value: 49000, action: 'close', reason: 'support lost' },
+          ],
+          reviewGuidance: ['Reduce if momentum stalls.'],
+        }),
+      });
+
+      const book = PositionBook.getInstance();
+      await book.refresh();
+
+      expect(book.get('BTC')!.exitContract).toEqual(
+        expect.objectContaining({
+          thesis: 'BTC continuation',
+        })
+      );
+      expect(book.get('BTC')!.exitContractSummary).toContain('support lost');
+    });
+
     it('preserves lastConsultAtMs and lastConsultDecision across refresh', async () => {
       mockListPaperPerpPositions.mockReturnValue([
         { symbol: 'BTC', side: 'long', size: 0.1, entryPrice: 50000 },

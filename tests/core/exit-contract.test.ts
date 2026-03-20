@@ -57,4 +57,27 @@ describe('exit_contract', () => {
     ]);
     expect(summarizeExitContract(contract)).toContain('ETH breakout continuation');
   });
+
+  it('returns null for malformed contracts instead of throwing', () => {
+    expect(parseExitContract('{not json')).toBeNull();
+    expect(parseExitContract({ thesis: '', hardRules: [] })).toBeNull();
+  });
+
+  it('skips rules whose metric is unavailable and evaluates later rules', () => {
+    const contract = parseExitContract({
+      thesis: 'Manage BTC trend',
+      hardRules: [
+        { metric: 'liq_dist_pct', op: '<', value: 2, action: 'close', reason: 'too close to liq' },
+        { metric: 'roe_pct', op: '>=', value: 8, action: 'close', reason: 'take the win' },
+      ],
+      reviewGuidance: [],
+    });
+    const decision = evaluateExitContract(contract, { markPrice: 92000, roePct: 8.2, liqDistPct: null });
+    expect(decision).toEqual(
+      expect.objectContaining({
+        action: 'close',
+        reason: 'take the win',
+      })
+    );
+  });
 });
