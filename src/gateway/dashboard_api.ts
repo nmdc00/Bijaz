@@ -1153,6 +1153,10 @@ function listTradeLogRows(
     if (outcomeRaw === 'blocked') {
       continue;
     }
+    const reduceOnly = payload.reduceOnly === true || payload.reduce_only === true;
+    if (!reduceOnly) {
+      continue;
+    }
 
     const directionScore = toOptionalScore(payload.directionScore ?? payload.direction_score);
     const timingScore = toOptionalScore(payload.timingScore ?? payload.timing_score);
@@ -1886,10 +1890,7 @@ export function buildDashboardApiPayload(params?: {
     (sum, row) => sum + row.unrealizedPnlUsd,
     0
   );
-  let tradeLogRows = listTradeLogRows(db, filters, 30);
-  if (tradeLogRows.length === 0) {
-    tradeLogRows = listTradeLogRowsFromPerpTrades(db, filters, 30);
-  }
+  const tradeLogRows = listTradeLogRows(db, filters, 30);
   const promotionGateRows = listPromotionGateRows(db, filters);
   const policyState = buildPolicyStateSection(db);
   const performanceBreakdown = listPerformanceBreakdown(db, filters);
