@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
 import type { BookEntry } from './position_book.js';
+import { Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -32,6 +33,7 @@ const ExitConsultResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 const ROE_THRESHOLDS = [0.03, 0.07, 0.15];        // 3%, 7%, 15%
+const logger = new Logger('info');
 
 function normalizeOptionalFieldPseudoJson(raw: string, optionalFields: string[]): string {
   let normalized = raw;
@@ -77,6 +79,20 @@ function resolveRoeThresholds(config: ThufirConfig): number[] {
     .filter((value) => Number.isFinite(value) && value > 0)
     .map((value) => (value > 1 ? value / 100 : value))
     .sort((a, b) => a - b);
+}
+
+function summarizeLlmError(error: unknown): { type: string; message: string } {
+  if (error instanceof SyntaxError) {
+    return { type: 'json_parse', message: error.message };
+  }
+  if (error instanceof z.ZodError) {
+    return {
+      type: 'schema_validation',
+      message: error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; '),
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { type: 'llm_call', message };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +199,16 @@ export class LlmExitConsultant {
       );
       await this.logDecision({ position, roe, nowMs, decision, usedFallback: false });
       return decision;
-    } catch {
+    } catch (error) {
+      const summary = summarizeLlmError(error);
+      logger.warn('Exit consultant main LLM failed; falling back', {
+        provider: this.mainLlm.meta?.provider ?? 'unknown',
+        model: this.mainLlm.meta?.model ?? 'unknown',
+        symbol: position.symbol,
+        side: position.side,
+        failureType: summary.type,
+        reason: summary.message,
+      });
       // Fall through to fallback
     }
 
@@ -202,7 +227,16 @@ export class LlmExitConsultant {
       );
       await this.logDecision({ position, roe, nowMs, decision, usedFallback: true });
       return decision;
-    } catch {
+    } catch (fallbackError) {
+      const summary = summarizeLlmError(fallbackError);
+      logger.warn('Exit consultant fallback LLM failed; using safe default', {
+        provider: this.fallbackLlm.meta?.provider ?? 'unknown',
+        model: this.fallbackLlm.meta?.model ?? 'unknown',
+        symbol: position.symbol,
+        side: position.side,
+        failureType: summary.type,
+        reason: summary.message,
+      });
       // Fall through to safe default
     }
 
