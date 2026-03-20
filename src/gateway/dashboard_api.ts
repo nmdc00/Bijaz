@@ -687,7 +687,8 @@ function computeUnrealizedPnl(
 
 function buildPaperEquitySeries(
   db: Database.Database,
-  filters: DashboardFilters
+  filters: DashboardFilters,
+  mids: Record<string, number>
 ): EquityCurveSection {
   const startingCash = safeCount(
     db,
@@ -729,6 +730,37 @@ function buildPaperEquitySeries(
         cumulativeFees,
       });
     }
+  }
+
+  // Re-mark surviving open positions to the current dashboard mids so the ending
+  // paper equity matches the open-positions table's mark-to-market view.
+  for (const [symbol, position] of positions.entries()) {
+    const currentMid = resolveMidForDashboard(symbol, mids);
+    if (typeof currentMid === 'number' && Number.isFinite(currentMid) && currentMid > 0) {
+      lastMarkBySymbol.set(symbol, currentMid);
+    } else if (!lastMarkBySymbol.has(symbol)) {
+      lastMarkBySymbol.set(symbol, position.entryPrice);
+    }
+  }
+
+  const finalUnrealizedPnl = computeUnrealizedPnl(positions, lastMarkBySymbol);
+  const finalEquity = cashBalance + finalUnrealizedPnl;
+  const lastPoint = points[points.length - 1];
+  const shouldAppendFinalPoint =
+    positions.size > 0 &&
+    (!lastPoint ||
+      Math.abs((lastPoint.unrealizedPnl ?? 0) - finalUnrealizedPnl) > 1e-9 ||
+      Math.abs((lastPoint.equity ?? 0) - finalEquity) > 1e-9);
+
+  if (shouldAppendFinalPoint) {
+    points.push({
+      timestamp: new Date().toISOString(),
+      cashBalance,
+      unrealizedPnl: finalUnrealizedPnl,
+      equity: finalEquity,
+      cumulativeRealizedPnl: cumulativeRealized,
+      cumulativeFees,
+    });
   }
 
   if (points.length === 0) {
@@ -1845,7 +1877,7 @@ export function buildDashboardApiPayload(params?: {
     ? safeCount(db, 'SELECT COUNT(*) AS c FROM paper_perp_positions')
     : 0;
   const equityCurve = isPaperMode(filters) || filters.mode === 'combined'
-    ? buildPaperEquitySeries(db, filters)
+    ? buildPaperEquitySeries(db, filters, mids)
     : buildEmptyEquitySeries();
   const openPositionRows = isLiveMode(filters) ? [] : listPaperOpenPositionRows(db, mids);
   const longCount = openPositionRows.filter((row) => row.side === 'long').length;
