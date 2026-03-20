@@ -1539,6 +1539,70 @@ function countTradeJournalRows(
   return count;
 }
 
+function countFilteredPerpTradeRows(
+  db: Database.Database,
+  filters: DashboardFilters
+): number {
+  if (!tableExists(db, 'perp_trades')) {
+    return 0;
+  }
+  const hasExecutionMode = tableHasColumn(db, 'perp_trades', 'execution_mode');
+  if (filters.mode === 'combined' || !hasExecutionMode) {
+    return safeCount(db, 'SELECT COUNT(*) AS c FROM perp_trades');
+  }
+  return safeCount(
+    db,
+    `
+      SELECT COUNT(*) AS c
+      FROM perp_trades
+      WHERE execution_mode = ?
+    `,
+    filters.mode
+  );
+}
+
+function countDistinctTradeRecords(
+  db: Database.Database,
+  filters: DashboardFilters
+): number {
+  if (!tableExists(db, 'decision_artifacts')) {
+    return countFilteredPerpTradeRows(db, filters);
+  }
+
+  const rows = db
+    .prepare(
+      `
+        SELECT payload
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+      `
+    )
+    .all() as Array<{ payload?: string }>;
+
+  const tradeIds = new Set<number>();
+  let journalRowsWithoutTradeId = 0;
+  for (const row of rows) {
+    if (!row.payload) continue;
+    try {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      if (!journalModeMatches(payload, filters)) {
+        continue;
+      }
+      const tradeId = Number(payload.tradeId ?? NaN);
+      if (Number.isFinite(tradeId) && tradeId > 0) {
+        tradeIds.add(tradeId);
+        continue;
+      }
+      journalRowsWithoutTradeId += 1;
+    } catch {
+      // ignore unparseable payloads
+    }
+  }
+
+  const count = tradeIds.size + journalRowsWithoutTradeId;
+  return count > 0 ? count : countFilteredPerpTradeRows(db, filters);
+}
+
 function buildPolicyStateSection(db: Database.Database): {
   observationMode: boolean;
   leverageCap: number | null;
@@ -1774,7 +1838,7 @@ export function buildDashboardApiPayload(params?: {
   };
   const mids = params?.mids ?? {};
 
-  const perpTrades = safeCount(db, 'SELECT COUNT(*) AS c FROM perp_trades');
+  const perpTrades = countDistinctTradeRecords(db, filters);
   const journals = countTradeJournalRows(db, filters);
   const alerts = safeCount(db, 'SELECT COUNT(*) AS c FROM alerts');
   const openPaperPositions = !isLiveMode(filters) && tableExists(db, 'paper_perp_positions')

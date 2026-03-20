@@ -296,6 +296,53 @@ describe('dashboard api payload', () => {
     expect(row?.gates.minTrades.missing).toBe(23);
   });
 
+  it('counts one trade per unique tradeId even when multiple journals exist for the lifecycle', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-unique-trade-count-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      tradeId: 42,
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'buy',
+      outcome: 'executed',
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      tradeId: 42,
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'buy',
+      outcome: 'executed',
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      tradeId: 42,
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'sell',
+      outcome: 'executed',
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.meta.recordCounts.journals).toBe(3);
+    expect(payload.meta.recordCounts.perpTrades).toBe(1);
+  });
+
   it('separates paper and live slices across sections when mode filter changes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-mode-split-'));
     dbDir = dir;
