@@ -53,6 +53,29 @@ function normalizeExitConsultOptionalFields(parsed: Record<string, unknown>): Re
   return parsed;
 }
 
+function normalizeOptionalFieldPseudoJson(
+  raw: string,
+  optionalFields: string[]
+): string {
+  let normalized = raw;
+  for (const field of optionalFields) {
+    const pattern = new RegExp(`("${field}"\\s*:)\\s*undefined(?=\\s*[,}])`, 'g');
+    normalized = normalized.replace(pattern, '$1 null');
+  }
+  return normalized;
+}
+
+function normalizeExitConsultOptionalFields(
+  parsed: Record<string, unknown>
+): Record<string, unknown> {
+  for (const field of ['newTimeStopAtMs', 'newInvalidationPrice', 'reduceToFraction']) {
+    if (parsed[field] === null) {
+      delete parsed[field];
+    }
+  }
+  return parsed;
+}
+
 function resolveFirstConsultMs(config: ThufirConfig): number {
   return Math.max(1, Number(config.heartbeat?.llmExitConsult?.firstConsultMinutes ?? 20)) * 60_000;
 }
@@ -189,13 +212,12 @@ export class LlmExitConsultant {
       Math.floor((this.config.agent?.promptBudget?.trivial ?? 10000) / 4)
     );
 
-    // Try main LLM
+    // Try main LLM — no maxTokens cap, matching AgenticOpenAiClient behaviour
     try {
       const decision = await callWithTimeout(
         this.mainLlm,
         messages,
         resolveTimeoutMs(this.config),
-        maxTokens
       );
       await this.logDecision({ position, roe, nowMs, decision, usedFallback: false });
       return decision;
@@ -323,10 +345,10 @@ async function callWithTimeout(
   llm: LlmClient,
   messages: import('./llm.js').ChatMessage[],
   timeoutMs: number,
-  maxTokens: number,
+  maxTokens?: number,
 ): Promise<ExitConsultDecision> {
   const response = await Promise.race([
-    llm.complete(messages, { maxTokens }),
+    llm.complete(messages, maxTokens !== undefined ? { maxTokens } : {}),
     new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error(`exit consultant timed out after ${timeoutMs}ms`)), timeoutMs)
     ),
