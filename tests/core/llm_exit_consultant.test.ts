@@ -418,7 +418,7 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
 
     const { calls } = await runTick([makePosition()], consultant);
 
-    expect(mockUpsertPolicyInteg).toHaveBeenCalledWith('BTC', 'long', newStop, null);
+    expect(mockUpsertPolicyInteg).toHaveBeenCalledWith('BTC', 'long', newStop, null, null);
     expect(calls.some(c => c.tool === 'perp_place_order')).toBe(false);
   });
 

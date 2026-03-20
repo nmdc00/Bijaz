@@ -806,6 +806,11 @@ export const THUFIR_TOOLS: Tool[] = [
           enum: ['none', 'atr', 'structure'],
           description: 'Trailing mode for contract-based management',
         },
+        exit_contract: {
+          type: 'object',
+          additionalProperties: true,
+          description: 'Optional structured exit contract with deterministic hard rules and heartbeat review guidance',
+        },
         emergency_override: {
           type: 'boolean',
           description: 'Allow manual/unknown reduce-only exit only when true under FSM enforcement',

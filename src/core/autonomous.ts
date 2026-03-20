@@ -44,6 +44,7 @@ import { upsertPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { getCashBalance } from '../memory/portfolio.js';
 import { PositionBook } from './position_book.js';
 import { LlmEntryGate } from './llm_entry_gate.js';
+import { buildLegacyExitContract, serializeExitContract } from './exit_contract.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -706,7 +707,18 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           ((this.thufirConfig.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120) * 60_000;
         const timeStopAtMs = expr.newsTrigger?.expiresAtMs ?? Date.now() + defaultThesisTtlMs;
         try {
-          upsertPositionExitPolicy(symbol, expr.side === 'buy' ? 'long' : 'short', timeStopAtMs, null);
+          const side = expr.side === 'buy' ? 'long' : 'short';
+          const exitContract = buildLegacyExitContract({
+            thesis: decision.reasoning ?? `${symbol} ${side} thesis`,
+            side,
+          });
+          upsertPositionExitPolicy(
+            symbol,
+            side,
+            timeStopAtMs,
+            null,
+            serializeExitContract(exitContract)
+          );
         } catch { }
         // Notify on position open.
         if (this.notify) {

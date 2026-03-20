@@ -863,7 +863,7 @@ const ConfigSchema = z.object({
           liquidationProximityPct: z.number().default(5.0),
           volatilitySpikePct: z.number().default(2.0),
           volatilitySpikeWindowTicks: z.number().default(10),
-          timeCeilingMinutes: z.number().default(15),
+          timeCeilingMinutes: z.number().default(0),
           triggerCooldownSeconds: z.number().default(180),
         })
         .default({}),

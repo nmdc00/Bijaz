@@ -271,7 +271,7 @@ heartbeat:
     liquidationProximityPct: 5.0
     volatilitySpikePct: 2.0
     volatilitySpikeWindowTicks: 10
-    timeCeilingMinutes: 15
+    timeCeilingMinutes: 0
     triggerCooldownSeconds: 180
   llmExitConsult:
     enabled: true

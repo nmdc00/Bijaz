@@ -49,6 +49,11 @@ import {
   validateReduceOnlyExitFsm,
 } from './trade_contract.js';
 import {
+  buildLegacyExitContract,
+  parseExitContract,
+  serializeExitContract,
+} from './exit_contract.js';
+import {
   clearPositionExitPolicy,
   upsertPositionExitPolicy,
 } from '../memory/position_exit_policy.js';
@@ -1495,6 +1500,7 @@ export async function executeToolCall(
           toolInput.time_stop_at_ms != null && Number.isFinite(Number(toolInput.time_stop_at_ms))
             ? Number(toolInput.time_stop_at_ms)
             : null;
+        const rawExitContract = (toolInput as Record<string, unknown>).exit_contract;
         const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
         const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
         const emergencyOverride = Boolean(toolInput.emergency_override ?? false);
@@ -1637,6 +1643,21 @@ export async function executeToolCall(
           tradeContractJournalFields.takeProfitR = resolvedContract.takeProfitR;
           tradeContractJournalFields.trailMode = resolvedContract.trailMode;
         }
+        const thesisText =
+          typeof toolInput.reasoning === 'string' && toolInput.reasoning.trim().length > 0
+            ? toolInput.reasoning.trim()
+            : `Manage ${symbol} ${side} position based on thesis invalidation and heartbeat review.`;
+        const parsedExitContract = parseExitContract(rawExitContract);
+        const persistedExitContract =
+          !reduceOnly
+            ? parsedExitContract ??
+              buildLegacyExitContract({
+                thesis: thesisText,
+                invalidationPrice: resolvedContract?.invalidationPrice ?? invalidationPrice,
+                side: (side as string) === 'buy' ? 'long' : 'short',
+              })
+            : null;
+        const policyNotes = persistedExitContract ? serializeExitContract(persistedExitContract) : null;
         const feeEstimate = await estimatePerpOrderFee(ctx, {
           orderType,
           size: requestedSize,
@@ -2103,14 +2124,16 @@ export async function executeToolCall(
         }
         // Maintain per-position exit policy for heartbeat.
         if (!reduceOnly) {
-          // New entry: write time-stop from thesis_expires_at_ms if provided.
-          if (thesisExpiresAtMs != null) {
+          const effectiveTimeStopAtMs = resolvedContract?.timeStopAtMs ?? thesisExpiresAtMs ?? timeStopAtMs;
+          const effectiveInvalidationPrice = resolvedContract?.invalidationPrice ?? invalidationPrice;
+          if (effectiveTimeStopAtMs != null || effectiveInvalidationPrice != null || policyNotes != null) {
             try {
               upsertPositionExitPolicy(
                 symbol,
                 (side as string) === 'buy' ? 'long' : 'short',
-                thesisExpiresAtMs,
-                null
+                effectiveTimeStopAtMs ?? null,
+                effectiveInvalidationPrice ?? null,
+                policyNotes
               );
             } catch { }
           }

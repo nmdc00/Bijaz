@@ -118,6 +118,21 @@ describe('heartbeat triggers', () => {
     expect(fired).toContain('time_ceiling');
   });
 
+  it('does not fire time_ceiling when disabled with 0 minutes', () => {
+    const now = BASE_TS;
+    const points: HeartbeatPoint[] = [
+      { ts: now - 3_600_000, mid: 100, roePct: 0, liqDistPct: 10 },
+      { ts: now - 1_000, mid: 100, roePct: 0, liqDistPct: 10 },
+    ];
+    const fired = evaluateHeartbeatTriggers({
+      points,
+      cfg: { ...baseCfg, timeCeilingMinutes: 0 },
+      nowMs: now,
+      lastFiredByTrigger: new Map(),
+    });
+    expect(fired).not.toContain('time_ceiling');
+  });
+
   it('resets and re-arms each trigger class after safe state and cooldown expiry', () => {
     const now = BASE_TS;
     const cfg: HeartbeatTriggerConfig = { ...baseCfg, triggerCooldownSeconds: 30 };
