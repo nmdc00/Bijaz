@@ -22,6 +22,14 @@ vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
   recordEntryGateDecision: (...args: unknown[]) => mockRecordEntryGateDecision(...args),
 }));
 
+const mockLoggerWarn = vi.fn();
+
+vi.mock('../../src/core/logger.js', () => ({
+  Logger: vi.fn().mockImplementation(() => ({
+    warn: (...args: unknown[]) => mockLoggerWarn(...args),
+  })),
+}));
+
 // ── Import after mocks ────────────────────────────────────────────────────────
 
 import { LlmEntryGate, type EntryGateCandidate } from '../../src/core/llm_entry_gate.js';
@@ -260,6 +268,22 @@ describe('LlmEntryGate', () => {
       expect(mockRecordEntryGateDecision).toHaveBeenCalled();
     });
 
+    it('calls main LLM without timeoutMs option (avoids proxy rejection)', async () => {
+      const book = makeBook();
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(completeFn).toHaveBeenCalledOnce();
+      const options = completeFn.mock.calls[0][1] as Record<string, unknown>;
+      expect(options).not.toHaveProperty('timeoutMs');
+    });
+
     it('uses fallback when main LLM returns invalid JSON', async () => {
       const book = makeBook();
       const mainLlm: LlmClient = {
@@ -273,6 +297,66 @@ describe('LlmEntryGate', () => {
       expect(result.verdict).toBe('reject');
       expect((fallbackLlm.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
       expect(notify).toHaveBeenCalled();
+    });
+
+    it('accepts adjustedSizeUsd null from the LLM as omitted', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({
+        verdict: 'reject',
+        reasoning: 'fallback-shaped reject',
+        adjustedSizeUsd: null,
+      });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result).toEqual({
+        verdict: 'reject',
+        reasoning: 'fallback-shaped reject',
+      });
+    });
+
+    it('accepts adjustedSizeUsd undefined pseudo-json from the LLM as omitted', async () => {
+      const book = makeBook();
+      const mainLlm: LlmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: '{"verdict":"reject","reasoning":"pseudo-json reject","adjustedSizeUsd":undefined}',
+          model: 'test-main',
+        }),
+      } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result).toEqual({
+        verdict: 'reject',
+        reasoning: 'pseudo-json reject',
+      });
+    });
+
+    it('logs the failure type when the main LLM returns schema-invalid JSON', async () => {
+      const book = makeBook();
+      const mainLlm: LlmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: JSON.stringify({ verdict: 'reject', reasoning: 'bad', adjustedSizeUsd: 'nope' }),
+          model: 'test-main',
+        }),
+        meta: { provider: 'openai', model: 'test-main' },
+      } as unknown as LlmClient;
+      const fallbackLlm = makeLlmClient({ verdict: 'approve', reasoning: 'fallback ok' });
+      const gate = new LlmEntryGate(mainLlm, fallbackLlm, notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.verdict).toBe('approve');
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        'Entry gate main LLM failed; falling back',
+        expect.objectContaining({
+          failureType: 'schema_validation',
+          provider: 'openai',
+          model: 'test-main',
+        })
+      );
     });
 
     it('does not throw when both fail and records DB log with safe reject', async () => {

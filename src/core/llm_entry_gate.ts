@@ -3,6 +3,7 @@ import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
 import type { PositionBook } from './position_book.js';
 import { recordEntryGateDecision } from '../memory/llm_entry_gate_log.js';
+import { Logger } from './logger.js';
 
 export interface EntryGateCandidate {
   symbol: string;
@@ -28,6 +29,20 @@ const DecisionSchema = z.object({
   reasoning: z.string(),
   adjustedSizeUsd: z.number().optional(),
 });
+
+const logger = new Logger('info');
+
+function normalizeOptionalFieldPseudoJson(
+  raw: string,
+  optionalFields: string[]
+): string {
+  let normalized = raw;
+  for (const field of optionalFields) {
+    const pattern = new RegExp(`("${field}"\\s*:)\\s*undefined(?=\\s*[,}])`, 'g');
+    normalized = normalized.replace(pattern, '$1 null');
+  }
+  return normalized;
+}
 
 function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
   if (entries.length === 0) return '(no open positions)';
@@ -97,7 +112,7 @@ async function callLlm(
   client: LlmClient,
   candidate: EntryGateCandidate,
   bookEntries: ReturnType<PositionBook['getAll']>,
-  timeoutMs: number
+  timeoutMs?: number
 ): Promise<EntryGateDecision> {
   const { system, user } = buildPrompt(candidate, bookEntries);
   const response = await client.complete(
@@ -105,16 +120,37 @@ async function callLlm(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { timeoutMs }
+    timeoutMs !== undefined ? { timeoutMs } : {}
   );
 
-  const parsed = JSON.parse(response.content.trim()) as unknown;
+  const normalized = normalizeOptionalFieldPseudoJson(
+    response.content.trim(),
+    ['adjustedSizeUsd']
+  );
+  const parsed = JSON.parse(normalized) as Record<string, unknown>;
+  if (parsed.adjustedSizeUsd === null) {
+    delete parsed.adjustedSizeUsd;
+  }
   const validated = DecisionSchema.parse(parsed);
   return {
     verdict: validated.verdict,
     reasoning: validated.reasoning,
     ...(validated.adjustedSizeUsd !== undefined ? { adjustedSizeUsd: validated.adjustedSizeUsd } : {}),
   };
+}
+
+function summarizeLlmError(error: unknown): { type: string; message: string } {
+  if (error instanceof SyntaxError) {
+    return { type: 'json_parse', message: error.message };
+  }
+  if (error instanceof z.ZodError) {
+    return {
+      type: 'schema_validation',
+      message: error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; '),
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { type: 'llm_call', message };
 }
 
 export class LlmEntryGate {
@@ -157,16 +193,35 @@ export class LlmEntryGate {
     let usedFallback = false;
     let decision: EntryGateDecision;
 
+    // Try main LLM — no timeoutMs cap, matching AgenticOpenAiClient behaviour
     try {
-      decision = await callLlm(this.mainLlm, candidate, bookEntries, timeoutMs);
-    } catch {
+      decision = await callLlm(this.mainLlm, candidate, bookEntries);
+    } catch (error) {
+      const summary = summarizeLlmError(error);
+      logger.warn('Entry gate main LLM failed; falling back', {
+        provider: this.mainLlm.meta?.provider ?? 'unknown',
+        model: this.mainLlm.meta?.model ?? 'unknown',
+        symbol: candidate.symbol,
+        side: candidate.side,
+        failureType: summary.type,
+        reason: summary.message,
+      });
       usedFallback = true;
       try {
         await this.notify('⚠️ Entry gate: using fallback LLM — decision quality may be lower');
       } catch { /* best-effort */ }
       try {
         decision = await callLlm(this.fallbackLlm, candidate, bookEntries, timeoutMs);
-      } catch {
+      } catch (fallbackError) {
+        const summary = summarizeLlmError(fallbackError);
+        logger.warn('Entry gate fallback LLM failed; using safe default', {
+          provider: this.fallbackLlm.meta?.provider ?? 'unknown',
+          model: this.fallbackLlm.meta?.model ?? 'unknown',
+          symbol: candidate.symbol,
+          side: candidate.side,
+          failureType: summary.type,
+          reason: summary.message,
+        });
         decision = shouldRejectOnBothFail(this.config)
           ? {
               verdict: 'reject',
