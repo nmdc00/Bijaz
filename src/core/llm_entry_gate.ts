@@ -32,6 +32,15 @@ const DecisionSchema = z.object({
 
 const logger = new Logger('info');
 
+function normalizeOptionalFieldPseudoJson(raw: string, optionalFields: string[]): string {
+  let normalized = raw;
+  for (const field of optionalFields) {
+    const pattern = new RegExp(`("${field}"\\s*:)\\s*undefined(?=\\s*[,}])`, 'g');
+    normalized = normalized.replace(pattern, '$1 null');
+  }
+  return normalized;
+}
+
 function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
   if (entries.length === 0) return '(no open positions)';
   const header = 'symbol | side  | size     | entry price | thesis expires';
@@ -111,7 +120,8 @@ async function callLlm(
     { timeoutMs }
   );
 
-  const parsed = JSON.parse(response.content.trim()) as Record<string, unknown>;
+  const normalized = normalizeOptionalFieldPseudoJson(response.content.trim(), ['adjustedSizeUsd']);
+  const parsed = JSON.parse(normalized) as Record<string, unknown>;
   if (parsed.adjustedSizeUsd === null) {
     delete parsed.adjustedSizeUsd;
   }

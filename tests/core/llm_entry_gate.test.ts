@@ -300,6 +300,24 @@ describe('LlmEntryGate', () => {
       });
     });
 
+    it('accepts adjustedSizeUsd undefined pseudo-json from the LLM as omitted', async () => {
+      const book = makeBook();
+      const mainLlm: LlmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: '{"verdict":"reject","reasoning":"pseudo-json reject","adjustedSizeUsd":undefined}',
+          model: 'test-main',
+        }),
+      } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result).toEqual({
+        verdict: 'reject',
+        reasoning: 'pseudo-json reject',
+      });
+    });
+
     it('logs the failure type when the main LLM returns schema-invalid JSON', async () => {
       const book = makeBook();
       const mainLlm: LlmClient = {

@@ -223,6 +223,27 @@ describe('LlmExitConsultant.consult', () => {
     expect(decision.reduceToFraction).toBe(0.5);
   });
 
+  it('accepts undefined pseudo-json optional fields from exit consultant output', async () => {
+    const main = {
+      complete: vi.fn().mockResolvedValue({
+        content:
+          '{"action":"hold","reasoning":"stay in","newTimeStopAtMs":undefined,"newInvalidationPrice":undefined,"reduceToFraction":undefined}',
+        model: 'mock',
+      }),
+    };
+    const fallback = makeLlm({ action: 'hold', reasoning: 'fb' });
+    const consultant = makeConsultant(main, fallback);
+    const entry = makeBookEntry();
+
+    const decision = await consultant.consult(entry, 50000, 0.02, 'context');
+
+    expect(decision).toEqual({
+      action: 'hold',
+      reasoning: 'stay in',
+    });
+    expect(fallback.complete).not.toHaveBeenCalled();
+  });
+
   it('fires fallback on main LLM timeout and calls notify', async () => {
     const main = makeTimeoutLlm();
     const fallback = makeLlm({ action: 'hold', reasoning: 'fb hold' });
