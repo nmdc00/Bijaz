@@ -268,6 +268,22 @@ describe('LlmEntryGate', () => {
       expect(mockRecordEntryGateDecision).toHaveBeenCalled();
     });
 
+    it('calls main LLM without timeoutMs option (avoids proxy rejection)', async () => {
+      const book = makeBook();
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(completeFn).toHaveBeenCalledOnce();
+      const options = completeFn.mock.calls[0][1] as Record<string, unknown>;
+      expect(options).not.toHaveProperty('timeoutMs');
+    });
+
     it('uses fallback when main LLM returns invalid JSON', async () => {
       const book = makeBook();
       const mainLlm: LlmClient = {

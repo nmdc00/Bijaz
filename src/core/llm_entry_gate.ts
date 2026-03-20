@@ -32,7 +32,10 @@ const DecisionSchema = z.object({
 
 const logger = new Logger('info');
 
-function normalizeOptionalFieldPseudoJson(raw: string, optionalFields: string[]): string {
+function normalizeOptionalFieldPseudoJson(
+  raw: string,
+  optionalFields: string[]
+): string {
   let normalized = raw;
   for (const field of optionalFields) {
     const pattern = new RegExp(`("${field}"\\s*:)\\s*undefined(?=\\s*[,}])`, 'g');
@@ -109,7 +112,7 @@ async function callLlm(
   client: LlmClient,
   candidate: EntryGateCandidate,
   bookEntries: ReturnType<PositionBook['getAll']>,
-  timeoutMs: number
+  timeoutMs?: number
 ): Promise<EntryGateDecision> {
   const { system, user } = buildPrompt(candidate, bookEntries);
   const response = await client.complete(
@@ -117,10 +120,13 @@ async function callLlm(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { timeoutMs }
+    timeoutMs !== undefined ? { timeoutMs } : {}
   );
 
-  const normalized = normalizeOptionalFieldPseudoJson(response.content.trim(), ['adjustedSizeUsd']);
+  const normalized = normalizeOptionalFieldPseudoJson(
+    response.content.trim(),
+    ['adjustedSizeUsd']
+  );
   const parsed = JSON.parse(normalized) as Record<string, unknown>;
   if (parsed.adjustedSizeUsd === null) {
     delete parsed.adjustedSizeUsd;
@@ -187,8 +193,9 @@ export class LlmEntryGate {
     let usedFallback = false;
     let decision: EntryGateDecision;
 
+    // Try main LLM — no timeoutMs cap, matching AgenticOpenAiClient behaviour
     try {
-      decision = await callLlm(this.mainLlm, candidate, bookEntries, timeoutMs);
+      decision = await callLlm(this.mainLlm, candidate, bookEntries);
     } catch (error) {
       const summary = summarizeLlmError(error);
       logger.warn('Entry gate main LLM failed; falling back', {
