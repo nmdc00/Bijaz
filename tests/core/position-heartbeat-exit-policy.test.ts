@@ -233,6 +233,36 @@ describe('position heartbeat — per-position exit policy', () => {
     expect(mockClearPolicy).toHaveBeenCalledWith('ETH');
   });
 
+  it('executes deterministic exit_contract hard-rule close', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: null,
+      invalidationPrice: null,
+      notes: JSON.stringify({
+        thesis: 'Hold while ETH stays above support',
+        hardRules: [
+          { metric: 'mark_price', op: '<=', value: 95, action: 'close', reason: 'support lost' },
+        ],
+        reviewGuidance: ['If momentum stalls, ask Thufir whether to keep holding.'],
+      }),
+    });
+
+    const config = makeSafeConfig();
+    const notified: string[] = [];
+    const { service, calls } = makeService(config, [makePosition()], 94, notified);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    const orders = calls.filter((c) => c.tool === 'perp_place_order');
+    expect(orders.length).toBe(1);
+    expect(notified[0]).toContain('exit_contract');
+    expect(notified[0]).toContain('support lost');
+    expect(mockClearPolicy).toHaveBeenCalledWith('ETH');
+  });
+
   it('suppresses generic time_ceiling when explicit time stop is set (future)', async () => {
     // time_ceiling would fire at 0.0001 min ≈ 6ms, but policy has a future time stop → suppressed
     mockGetPolicy.mockReturnValue({

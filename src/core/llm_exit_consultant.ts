@@ -255,6 +255,7 @@ function buildMessages(
     `time held: ${timeHeldMin} minutes\n` +
     `time remaining on thesis: ${remainingMin} minutes\n\n` +
     `## Original entry reasoning\n${position.entryReasoningText || '(none recorded)'}\n\n` +
+    `## Exit contract\n${position.exitContractSummary || '(none recorded)'}\n\n` +
     `## Current market context\n${freshContext || '(none)'}\n\n` +
     `## Instruction\n` +
     `Respond ONLY with valid JSON matching this schema:\n` +

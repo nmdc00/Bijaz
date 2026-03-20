@@ -1,6 +1,7 @@
 import { listPaperPerpPositions } from '../memory/paper_perps.js';
 import { getPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { openDatabase } from '../memory/db.js';
+import { parseExitContract, summarizeExitContract, type ExitContract } from './exit_contract.js';
 
 export interface BookEntry {
   symbol: string;
@@ -9,6 +10,8 @@ export interface BookEntry {
   entryPrice: number;
   entryReasoningText: string;
   thesisExpiresAtMs: number;
+  exitContract: ExitContract | null;
+  exitContractSummary: string | null;
   lastConsultAtMs: number | null;
   lastConsultDecision: string | null;
 }
@@ -60,6 +63,7 @@ export class PositionBook {
         try { return getPositionExitPolicy(symbol); } catch { return null; }
       })();
       const reasoning = lookupReasoningForSymbol(symbol);
+      const exitContract = parseExitContract(policy?.notes ?? null);
 
       const defaultTtlMs = 2 * 60 * 60 * 1000; // 2-hour fallback
       next.set(symbol, {
@@ -69,6 +73,8 @@ export class PositionBook {
         entryPrice: pos.entryPrice,
         entryReasoningText: reasoning,
         thesisExpiresAtMs: policy?.timeStopAtMs ?? Date.now() + defaultTtlMs,
+        exitContract,
+        exitContractSummary: summarizeExitContract(exitContract),
         lastConsultAtMs: existing?.lastConsultAtMs ?? null,
         lastConsultDecision: existing?.lastConsultDecision ?? null,
       });
