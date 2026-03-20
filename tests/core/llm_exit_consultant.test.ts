@@ -41,6 +41,8 @@ function makeBookEntry(overrides: Partial<BookEntry> = {}): BookEntry {
     entryPrice: 50000,
     entryReasoningText: 'Strong breakout on news',
     thesisExpiresAtMs: THESIS_EXPIRES,
+    exitContract: null,
+    exitContractSummary: null,
     lastConsultAtMs: null,
     lastConsultDecision: null,
     ...overrides,
@@ -268,6 +270,21 @@ describe('LlmExitConsultant.consult', () => {
     });
   });
 
+  it('includes exit contract summary in the LLM prompt', async () => {
+    const main = makeLlm({ action: 'hold', reasoning: 'ok' });
+    const fallback = makeLlm({ action: 'hold', reasoning: 'fb' });
+    const consultant = makeConsultant(main, fallback);
+    const entry = makeBookEntry({
+      exitContractSummary: 'thesis=BTC trend; hard_rules=close when mark_price <= 49000 (support lost)',
+    });
+
+    await consultant.consult(entry, 50000, 0.02, 'BTC momentum continues');
+
+    const [messages] = main.complete.mock.calls[0]!;
+    expect(JSON.stringify(messages)).toContain('## Exit contract');
+    expect(JSON.stringify(messages)).toContain('support lost');
+  });
+
   it('records DB log with usedFallback=1 when fallback is used', async () => {
     const main = makeErrorLlm();
     const fallback = makeLlm({ action: 'hold', reasoning: 'fb hold' });
@@ -377,6 +394,8 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
       entryPrice: 50000,
       entryReasoningText: 'test',
       thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
+      exitContract: null,
+      exitContractSummary: null,
       lastConsultAtMs: null,
       lastConsultDecision: null,
       ...bookEntryOverrides,
@@ -495,6 +514,8 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
         entryPrice: 50000,
         entryReasoningText: 'test',
         thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
+        exitContract: null,
+        exitContractSummary: null,
         lastConsultAtMs: null,
         lastConsultDecision: null,
       }),
