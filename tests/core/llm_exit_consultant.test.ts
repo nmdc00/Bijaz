@@ -23,6 +23,17 @@ vi.mock('../../src/memory/llm_exit_consult_log.js', () => ({
   recordExitConsultDecision: (...args: unknown[]) => recordExitConsultDecisionMock(...args),
 }));
 
+const mockLoggerWarn = vi.fn();
+vi.mock('../../src/core/logger.js', () => ({
+  Logger: class {
+    info(): void {}
+    warn(...args: unknown[]): void {
+      mockLoggerWarn(...args);
+    }
+    error(): void {}
+  },
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -170,6 +181,7 @@ describe('LlmExitConsultant.shouldConsult', () => {
 describe('LlmExitConsultant.consult', () => {
   beforeEach(() => {
     recordExitConsultDecisionMock.mockClear();
+    mockLoggerWarn.mockClear();
   });
 
   it('returns hold decision from mock LLM', async () => {
@@ -318,6 +330,56 @@ describe('LlmExitConsultant.consult', () => {
     expect(recordExitConsultDecisionMock).toHaveBeenCalledOnce();
     const logArg = recordExitConsultDecisionMock.mock.calls[0]?.[0];
     expect(logArg.usedFallback).toBe(1);
+  });
+
+  it('logs the failure type when the main LLM returns schema-invalid JSON', async () => {
+    const main = {
+      complete: vi.fn().mockResolvedValue({
+        content: JSON.stringify({ action: 'hold', reasoning: 'bad', reduceToFraction: 'nope' }),
+        model: 'main-model',
+      }),
+      meta: { provider: 'openai', model: 'main-model' },
+    };
+    const fallback = makeLlm({ action: 'hold', reasoning: 'fb hold' });
+    const consultant = makeConsultant(main, fallback);
+    const entry = makeBookEntry();
+
+    const decision = await consultant.consult(entry, 50000, 0.01, '');
+
+    expect(decision.action).toBe('hold');
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      'Exit consultant main LLM failed; falling back',
+      expect.objectContaining({
+        failureType: 'schema_validation',
+        provider: 'openai',
+        model: 'main-model',
+      })
+    );
+  });
+
+  it('logs the fallback failure type before using the safe default', async () => {
+    const main = makeErrorLlm();
+    const fallback = {
+      complete: vi.fn().mockResolvedValue({
+        content: '{"action":"hold","reasoning":"bad","reduceToFraction":"nope"}',
+        model: 'fallback-model',
+      }),
+      meta: { provider: 'openai', model: 'fallback-model' },
+    };
+    const consultant = makeConsultant(main, fallback as any);
+    const entry = makeBookEntry();
+
+    const decision = await consultant.consult(entry, 50000, 0.01, '');
+
+    expect(decision.reasoning).toContain('LLM unavailable');
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      'Exit consultant fallback LLM failed; using safe default',
+      expect.objectContaining({
+        failureType: 'schema_validation',
+        provider: 'openai',
+        model: 'fallback-model',
+      })
+    );
   });
 });
 
