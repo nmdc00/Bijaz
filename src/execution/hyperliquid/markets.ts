@@ -96,12 +96,47 @@ export class HyperliquidMarketClient {
     return this.config.hyperliquid?.enabled !== false;
   }
 
+  private blendMarkets(markets: Awaited<ReturnType<HyperliquidClient['listPerpMarkets']>>, limit: number) {
+    if (limit <= 0 || markets.length <= limit) return markets;
+
+    const grouped = new Map<string, typeof markets>();
+    for (const market of markets) {
+      const key = market.dex ?? '__main__';
+      const bucket = grouped.get(key);
+      if (bucket) {
+        bucket.push(market);
+      } else {
+        grouped.set(key, [market]);
+      }
+    }
+
+    const groupOrder = Array.from(grouped.keys()).sort((a, b) => {
+      if (a === '__main__') return -1;
+      if (b === '__main__') return 1;
+      return a.localeCompare(b);
+    });
+
+    const out: typeof markets = [];
+    while (out.length < limit) {
+      let progressed = false;
+      for (const key of groupOrder) {
+        const bucket = grouped.get(key);
+        if (!bucket || bucket.length === 0) continue;
+        out.push(bucket.shift()!);
+        progressed = true;
+        if (out.length >= limit) break;
+      }
+      if (!progressed) break;
+    }
+    return out;
+  }
+
   async listMarkets(limit = 50): Promise<Market[]> {
     const [markets, mids] = await Promise.all([this.getCachedMarketMeta(), this.getCachedMids()]);
     const filtered = this.symbols.length
       ? markets.filter((m) => this.symbols.some((symbol) => matchesMarketSymbol(m.symbol, symbol)))
       : markets;
-    return filtered.slice(0, limit).map((m) => ({
+    return this.blendMarkets(filtered, limit).map((m) => ({
       id: m.symbol,
       question: `Perp: ${m.symbol}`,
       outcomes: ['LONG', 'SHORT'],
@@ -112,6 +147,7 @@ export class HyperliquidMarketClient {
       markPrice: mids[m.symbol],
       metadata: {
         assetId: m.assetId,
+        dex: m.dex ?? null,
         maxLeverage: m.maxLeverage,
         szDecimals: m.szDecimals,
       },

@@ -131,7 +131,7 @@ export async function selectDiscoveryMarkets(
   let assetCtxs: unknown[];
   try {
     const client = new HyperliquidClient(config);
-    [meta, assetCtxs] = await client.getMetaAndAssetCtxs();
+    [meta, assetCtxs] = await client.getMergedMetaAndAssetCtxs();
   } catch {
     return {
       source: 'configured',

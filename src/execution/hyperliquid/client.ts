@@ -26,6 +26,11 @@ export type HyperliquidMarket = {
   szDecimals?: number;
 };
 
+export type HyperliquidMergedMetaAndAssetCtxsResponse = [
+  { universe: HyperliquidMetaUniverse },
+  unknown[],
+];
+
 type HyperliquidPerpAssetCtx = {
   markPx?: string | number | null;
 };
@@ -143,6 +148,28 @@ export class HyperliquidClient {
 
   async getMetaAndAssetCtxs(): Promise<MetaAndAssetCtxsResponse> {
     return this.info.metaAndAssetCtxs();
+  }
+
+  async getMergedMetaAndAssetCtxs(): Promise<HyperliquidMergedMetaAndAssetCtxsResponse> {
+    const dexs = await this.listPerpDexs();
+    const responses = await Promise.all([
+      this.info.metaAndAssetCtxs(),
+      ...dexs.map((dex) => this.info.metaAndAssetCtxs({ dex })),
+    ]);
+
+    const universe: HyperliquidMetaUniverse = [];
+    const assetCtxs: unknown[] = [];
+    for (const response of responses) {
+      const [meta, contexts] = response as MetaAndAssetCtxsResponse;
+      const scopedUniverse = (meta as { universe?: HyperliquidMetaUniverse }).universe ?? [];
+      const scopedCtxs = Array.isArray(contexts) ? contexts : [];
+      for (const [idx, market] of scopedUniverse.entries()) {
+        universe.push(market);
+        assetCtxs.push(scopedCtxs[idx] ?? {});
+      }
+    }
+
+    return [{ universe }, assetCtxs];
   }
 
   async getFundingHistory(

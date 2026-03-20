@@ -51,4 +51,33 @@ describe('HyperliquidClient HIP-3 discovery', () => {
       'xyz:CL': 72.15,
     });
   });
+
+  it('merges meta/asset contexts across main and HIP-3 dexes', async () => {
+    perpDexsMock.mockResolvedValue([null, { name: 'xyz' }]);
+    metaAndAssetCtxsMock.mockImplementation(async (params?: { dex?: string }) => {
+      if (params?.dex === 'xyz') {
+        return [
+          { universe: [{ name: 'xyz:CL', szDecimals: 2, maxLeverage: 10 }] },
+          [{ markPx: '72.15', openInterest: '5000' }],
+        ];
+      }
+      return [
+        { universe: [{ name: 'BTC', szDecimals: 5, maxLeverage: 40 }] },
+        [{ markPx: '70000.5', openInterest: '25000' }],
+      ];
+    });
+
+    const { HyperliquidClient } = await import('../../src/execution/hyperliquid/client.js');
+    const client = new HyperliquidClient({ hyperliquid: { enabled: true } } as any);
+
+    await expect(client.getMergedMetaAndAssetCtxs()).resolves.toEqual([
+      {
+        universe: [
+          { name: 'BTC', szDecimals: 5, maxLeverage: 40 },
+          { name: 'xyz:CL', szDecimals: 2, maxLeverage: 10 },
+        ],
+      },
+      [{ markPx: '70000.5', openInterest: '25000' }, { markPx: '72.15', openInterest: '5000' }],
+    ]);
+  });
 });
