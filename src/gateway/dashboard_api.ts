@@ -1589,7 +1589,7 @@ function countFilteredPerpTradeRows(
       FROM perp_trades
       WHERE execution_mode = ?
     `,
-    filters.mode
+    [filters.mode]
   );
 }
 
