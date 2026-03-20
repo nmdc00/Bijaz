@@ -33,6 +33,24 @@ const ExitConsultResponseSchema = z.object({
 
 const ROE_THRESHOLDS = [0.03, 0.07, 0.15];        // 3%, 7%, 15%
 
+function normalizeOptionalFieldPseudoJson(raw: string, optionalFields: string[]): string {
+  let normalized = raw;
+  for (const field of optionalFields) {
+    const pattern = new RegExp(`("${field}"\\s*:)\\s*undefined(?=\\s*[,}])`, 'g');
+    normalized = normalized.replace(pattern, '$1 null');
+  }
+  return normalized;
+}
+
+function normalizeExitConsultOptionalFields(parsed: Record<string, unknown>): Record<string, unknown> {
+  for (const field of ['newTimeStopAtMs', 'newInvalidationPrice', 'reduceToFraction']) {
+    if (parsed[field] === null) {
+      delete parsed[field];
+    }
+  }
+  return parsed;
+}
+
 function resolveFirstConsultMs(config: ThufirConfig): number {
   return Math.max(1, Number(config.heartbeat?.llmExitConsult?.firstConsultMinutes ?? 20)) * 60_000;
 }
@@ -284,6 +302,12 @@ async function callWithTimeout(
   // Extract JSON from response (may be wrapped in markdown fences)
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('No JSON found in LLM response');
-  const parsed = JSON.parse(jsonMatch[0]);
+  const normalized = normalizeOptionalFieldPseudoJson(
+    jsonMatch[0],
+    ['newTimeStopAtMs', 'newInvalidationPrice', 'reduceToFraction']
+  );
+  const parsed = normalizeExitConsultOptionalFields(
+    JSON.parse(normalized) as Record<string, unknown>
+  );
   return ExitConsultResponseSchema.parse(parsed);
 }
