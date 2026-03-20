@@ -3,6 +3,7 @@ import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
 import type { PositionBook } from './position_book.js';
 import { recordEntryGateDecision } from '../memory/llm_entry_gate_log.js';
+import { Logger } from './logger.js';
 
 export interface EntryGateCandidate {
   symbol: string;
@@ -28,6 +29,8 @@ const DecisionSchema = z.object({
   reasoning: z.string(),
   adjustedSizeUsd: z.number().optional(),
 });
+
+const logger = new Logger('info');
 
 function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
   if (entries.length === 0) return '(no open positions)';
@@ -108,13 +111,30 @@ async function callLlm(
     { timeoutMs }
   );
 
-  const parsed = JSON.parse(response.content.trim()) as unknown;
+  const parsed = JSON.parse(response.content.trim()) as Record<string, unknown>;
+  if (parsed.adjustedSizeUsd === null) {
+    delete parsed.adjustedSizeUsd;
+  }
   const validated = DecisionSchema.parse(parsed);
   return {
     verdict: validated.verdict,
     reasoning: validated.reasoning,
     ...(validated.adjustedSizeUsd !== undefined ? { adjustedSizeUsd: validated.adjustedSizeUsd } : {}),
   };
+}
+
+function summarizeLlmError(error: unknown): { type: string; message: string } {
+  if (error instanceof SyntaxError) {
+    return { type: 'json_parse', message: error.message };
+  }
+  if (error instanceof z.ZodError) {
+    return {
+      type: 'schema_validation',
+      message: error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; '),
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { type: 'llm_call', message };
 }
 
 export class LlmEntryGate {
@@ -159,14 +179,32 @@ export class LlmEntryGate {
 
     try {
       decision = await callLlm(this.mainLlm, candidate, bookEntries, timeoutMs);
-    } catch {
+    } catch (error) {
+      const summary = summarizeLlmError(error);
+      logger.warn('Entry gate main LLM failed; falling back', {
+        provider: this.mainLlm.meta?.provider ?? 'unknown',
+        model: this.mainLlm.meta?.model ?? 'unknown',
+        symbol: candidate.symbol,
+        side: candidate.side,
+        failureType: summary.type,
+        reason: summary.message,
+      });
       usedFallback = true;
       try {
         await this.notify('⚠️ Entry gate: using fallback LLM — decision quality may be lower');
       } catch { /* best-effort */ }
       try {
         decision = await callLlm(this.fallbackLlm, candidate, bookEntries, timeoutMs);
-      } catch {
+      } catch (fallbackError) {
+        const summary = summarizeLlmError(fallbackError);
+        logger.warn('Entry gate fallback LLM failed; using safe default', {
+          provider: this.fallbackLlm.meta?.provider ?? 'unknown',
+          model: this.fallbackLlm.meta?.model ?? 'unknown',
+          symbol: candidate.symbol,
+          side: candidate.side,
+          failureType: summary.type,
+          reason: summary.message,
+        });
         decision = shouldRejectOnBothFail(this.config)
           ? {
               verdict: 'reject',
