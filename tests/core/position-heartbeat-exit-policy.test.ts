@@ -28,15 +28,17 @@ vi.mock('../../src/memory/paper_perps.js', () => ({
     feeUsd: 0,
     message: 'ok',
   }),
+  listPaperPerpPositions: () => [],
 }));
 
 const mockGetPolicy = vi.fn();
 const mockClearPolicy = vi.fn();
+const mockUpsertPolicy = vi.fn();
 
 vi.mock('../../src/memory/position_exit_policy.js', () => ({
   getPositionExitPolicy: (...args: unknown[]) => mockGetPolicy(...args),
   clearPositionExitPolicy: (...args: unknown[]) => mockClearPolicy(...args),
-  upsertPositionExitPolicy: vi.fn(),
+  upsertPositionExitPolicy: (...args: unknown[]) => mockUpsertPolicy(...args),
 }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -230,6 +232,89 @@ describe('position heartbeat — per-position exit policy', () => {
     expect(orders[0]!.input.side).toBe('buy'); // close short → buy
     expect(notified[0]).toContain('🎯');
     expect(mockClearPolicy).toHaveBeenCalledWith('ETH');
+  });
+
+  it('executes deterministic exit_contract hard-rule close', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: null,
+      invalidationPrice: null,
+      notes: JSON.stringify({
+        thesis: 'Hold while ETH stays above support',
+        hardRules: [
+          { metric: 'mark_price', op: '<=', value: 95, action: 'close', reason: 'support lost' },
+        ],
+        reviewGuidance: ['If momentum stalls, ask Thufir whether to keep holding.'],
+      }),
+    });
+
+    const config = makeSafeConfig();
+    const notified: string[] = [];
+    const { service, calls } = makeService(config, [makePosition()], 94, notified);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    const orders = calls.filter((c) => c.tool === 'perp_place_order');
+    expect(orders.length).toBe(1);
+    expect(notified[0]).toContain('exit_contract');
+    expect(notified[0]).toContain('support lost');
+    expect(mockClearPolicy).toHaveBeenCalledWith('ETH');
+  });
+
+  it('executes deterministic exit_contract hard-rule reduce without clearing policy', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: null,
+      invalidationPrice: null,
+      notes: JSON.stringify({
+        thesis: 'Hold while ETH trend stays healthy',
+        hardRules: [
+          { metric: 'roe_pct', op: '>=', value: 4, action: 'reduce', reason: 'de-risk into strength', reduceToFraction: 0.4 },
+        ],
+        reviewGuidance: [],
+      }),
+    });
+
+    const config = makeSafeConfig();
+    const notified: string[] = [];
+    const { service, calls } = makeService(config, [makePosition({ size: 2, return_on_equity: 5 })], 100, notified);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    const orders = calls.filter((c) => c.tool === 'perp_place_order');
+    expect(orders.length).toBe(1);
+    expect(orders[0]!.input.side).toBe('sell');
+    expect(orders[0]!.input.size).toBeCloseTo(1.2);
+    expect(notified[0]).toContain('exit_contract');
+    expect(notified[0]).toContain('de-risk into strength');
+    expect(mockClearPolicy).not.toHaveBeenCalled();
+  });
+
+  it('ignores malformed exit_contract notes and does not close', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: null,
+      invalidationPrice: null,
+      notes: '{bad-json',
+    });
+
+    const config = makeSafeConfig();
+    const notified: string[] = [];
+    const { service, calls } = makeService(config, [makePosition()], 100, notified);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
+    expect(notified).toHaveLength(0);
   });
 
   it('suppresses generic time_ceiling when explicit time stop is set (future)', async () => {

@@ -100,6 +100,7 @@ const mockPaperPositions = vi.fn();
 vi.mock('../../src/memory/paper_perps.js', () => ({
   getPaperPerpBookSummary: (...args: unknown[]) => mockPaperSummary(...args),
   listPaperPerpPositionsWithMark: (...args: unknown[]) => mockPaperPositions(...args),
+  listPaperPerpPositions: () => [],
 }));
 
 const mockCashBalance = vi.fn();
@@ -107,7 +108,20 @@ vi.mock('../../src/memory/portfolio.js', () => ({
   getCashBalance: () => mockCashBalance(),
 }));
 
+vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
+  recordEntryGateDecision: vi.fn(),
+}));
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function makeApproveLlm() {
+  return {
+    complete: vi.fn(async () => ({
+      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+      model: 'test',
+    })),
+  } as any;
+}
 
 function makeLimiter(remaining = 1000) {
   return {
@@ -151,7 +165,8 @@ describe('autonomous exit policy — writes exit policy after execution', () => 
       getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
     } as any;
 
-    const manager = new AutonomousManager(makeLimiter(), marketClient, executor, makeLimiter(), baseConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, makeLimiter(), baseConfig);
     await manager.runScan();
 
     expect(upsertExitPolicy).toHaveBeenCalledOnce();
@@ -179,7 +194,8 @@ describe('autonomous exit policy — writes exit policy after execution', () => 
       getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
     } as any;
 
-    const manager = new AutonomousManager(makeLimiter(), marketClient, executor, makeLimiter(), baseConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, makeLimiter(), baseConfig);
     await manager.runScan();
 
     expect(upsertExitPolicy).toHaveBeenCalledOnce();
@@ -201,7 +217,8 @@ describe('autonomous exit policy — writes exit policy after execution', () => 
       getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
     } as any;
 
-    const manager = new AutonomousManager(makeLimiter(), marketClient, executor, makeLimiter(), baseConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, makeLimiter(), baseConfig);
     await manager.runScan();
 
     expect(upsertExitPolicy).not.toHaveBeenCalled();
@@ -229,7 +246,8 @@ describe('autonomous dynamic daily limit — paper mode capped by equity', () =>
     } as any;
     const limiter = makeLimiter(1000); // plenty of budget in limiter
 
-    const manager = new AutonomousManager(limiter, marketClient, executor, limiter, baseConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
     await manager.runScan();
 
     // Trade was attempted — confirm or release should have been called
@@ -257,7 +275,8 @@ describe('autonomous dynamic daily limit — paper mode capped by equity', () =>
     } as any;
     const limiter = makeLimiter(20); // limiter is the binding constraint
 
-    const manager = new AutonomousManager(limiter, marketClient, executor, limiter, baseConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
     await manager.runScan();
 
     const reserveCalls = limiter.checkAndReserve.mock.calls;
@@ -280,7 +299,8 @@ describe('autonomous dynamic daily limit — paper mode capped by equity', () =>
     } as any;
     const limiter = makeLimiter(1000);
 
-    const manager = new AutonomousManager(limiter, marketClient, executor, limiter, baseConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
     const result = await manager.runScan();
 
     // With $0 equity → remainingDaily = 0 → probe = 0 → skipped
@@ -309,7 +329,8 @@ describe('autonomous dynamic daily limit — live mode capped by getCashBalance'
     const liveConfig = { ...baseConfig, execution: { mode: 'live' } };
     const limiter = makeLimiter(1000);
 
-    const manager = new AutonomousManager(limiter, marketClient, executor, limiter, liveConfig);
+    const llm = makeApproveLlm();
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, liveConfig);
     await manager.runScan();
 
     const reserveCalls = limiter.checkAndReserve.mock.calls;

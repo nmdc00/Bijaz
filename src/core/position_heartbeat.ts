@@ -2,6 +2,7 @@ import type { ThufirConfig } from './config.js';
 import type { Logger } from './logger.js';
 import type { ToolExecutorContext, ToolResult } from './tool-executor.js';
 import { executeToolCall } from './tool-executor.js';
+import { gatherMarketContext } from '../markets/context.js';
 
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import {
@@ -15,7 +16,11 @@ import { placePaperPerpOrder } from '../memory/paper_perps.js';
 import {
   clearPositionExitPolicy,
   getPositionExitPolicy,
+  upsertPositionExitPolicy,
 } from '../memory/position_exit_policy.js';
+import type { LlmExitConsultant } from './llm_exit_consultant.js';
+import { PositionBook, type BookEntry } from './position_book.js';
+import { evaluateExitContract, parseExitContract } from './exit_contract.js';
 
 type ToolExecutorFn = (
   toolName: string,
@@ -32,6 +37,20 @@ type PositionSnapshot = {
   liquidationPrice: number | null;
 };
 
+function summarizeMarketContext(snapshot: Awaited<ReturnType<typeof gatherMarketContext>>): string {
+  const successful = snapshot.results.filter((item) => item.success);
+  if (successful.length === 0) {
+    return '';
+  }
+  return successful
+    .map((item) => {
+      const payload = typeof item.data === 'string' ? item.data : JSON.stringify(item.data);
+      return `### ${item.label}\n${payload}`;
+    })
+    .join('\n\n')
+    .slice(0, 4000);
+}
+
 export class PositionHeartbeatService {
   private timer: NodeJS.Timeout | null = null;
   private stopped = true;
@@ -42,6 +61,8 @@ export class PositionHeartbeatService {
   private client: HyperliquidClient;
   private toolExec: ToolExecutorFn;
   private notify?: (message: string) => Promise<void>;
+  private exitConsultant?: LlmExitConsultant;
+  private getBookEntry: (symbol: string) => BookEntry | undefined;
 
   constructor(
     private config: ThufirConfig,
@@ -51,11 +72,16 @@ export class PositionHeartbeatService {
       client?: HyperliquidClient;
       toolExec?: ToolExecutorFn;
       notify?: (message: string) => Promise<void>;
+      exitConsultant?: LlmExitConsultant;
+      /** Override for testing — defaults to PositionBook.getInstance().get */
+      getBookEntry?: (symbol: string) => BookEntry | undefined;
     }
   ) {
     this.client = options?.client ?? new HyperliquidClient(config);
     this.toolExec = options?.toolExec ?? executeToolCall;
     this.notify = options?.notify;
+    this.exitConsultant = options?.exitConsultant;
+    this.getBookEntry = options?.getBookEntry ?? ((sym) => PositionBook.getInstance().get(sym));
   }
 
   start(): void {
@@ -87,6 +113,8 @@ export class PositionHeartbeatService {
 
   async tickOnce(): Promise<void> {
     if (this.stopped) return;
+
+    await PositionBook.getInstance().refresh();
 
     const hb = this.config.heartbeat;
     if (!hb?.enabled) return;
@@ -137,6 +165,7 @@ export class PositionHeartbeatService {
       const policy = (() => {
         try { return getPositionExitPolicy(pos.symbol); } catch { return null; }
       })();
+      const exitContract = parseExitContract(policy?.notes ?? null);
 
       // Thesis time stop: absolute timestamp set at entry.
       if (policy?.timeStopAtMs != null && nowMs >= policy.timeStopAtMs) {
@@ -160,6 +189,77 @@ export class PositionHeartbeatService {
           );
           try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
           continue;
+        }
+      }
+
+      const exitContractDecision = evaluateExitContract(exitContract, {
+        markPrice: mid,
+        roePct: pos.roePct,
+        liqDistPct,
+      });
+      if (exitContractDecision?.action === 'close') {
+        await this.executePolicyClose(pos, `exit_contract (${exitContractDecision.reason})`, liqDistPct, nowIso);
+        try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+        continue;
+      }
+      if (exitContractDecision?.action === 'reduce') {
+        await this.executeContractReduce(pos, exitContractDecision.reduceToFraction, exitContractDecision.reason, liqDistPct, nowIso);
+        continue;
+      }
+
+      // LLM exit consultant: check whether to consult, and act on the decision.
+      if (this.exitConsultant && this.config.heartbeat?.llmExitConsult?.enabled !== false) {
+        const bookEntry = this.getBookEntry(pos.symbol);
+        const roe = (pos.roePct ?? 0) / 100; // convert pct → decimal
+        if (bookEntry && this.exitConsultant.shouldConsult(bookEntry, mid ?? pos.roePct ?? 0, roe, nowMs)) {
+          try {
+            const freshContextSnapshot = await gatherMarketContext(
+              { message: `${pos.symbol} perpetual market context`, signalSymbols: [pos.symbol], marketLimit: 20 },
+              (toolName, toolInput) => this.toolExec(toolName, toolInput, this.toolContext)
+            );
+            const freshContext = summarizeMarketContext(freshContextSnapshot);
+            const decision = await this.exitConsultant.consult(bookEntry, mid ?? 0, roe, freshContext);
+            bookEntry.lastConsultAtMs = nowMs;
+            bookEntry.lastConsultDecision = JSON.stringify({ ...decision, roeAtConsult: roe });
+
+            if (decision.action === 'close') {
+              await this.executePolicyClose(pos, 'llm_exit_consultant', liqDistPct, nowIso);
+              try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+              continue;
+            } else if (decision.action === 'reduce' && decision.reduceToFraction != null) {
+              const side = pos.side === 'long' ? 'sell' : 'buy';
+              const reduceSize = pos.size * (1 - decision.reduceToFraction);
+              if (reduceSize > 0) {
+                await this.toolExec(
+                  'perp_place_order',
+                  { symbol: pos.symbol, side, size: reduceSize, reduce_only: true, order_type: 'market' },
+                  this.toolContext
+                );
+                this.logger.info(
+                  `PositionHeartbeat: llm_exit_consultant reduce ${pos.symbol} by fraction=${1 - decision.reduceToFraction}`
+                );
+              }
+            } else if (decision.action === 'extend_ttl' && decision.newTimeStopAtMs != null) {
+              upsertPositionExitPolicy(
+                pos.symbol,
+                pos.side,
+                decision.newTimeStopAtMs,
+                policy?.invalidationPrice ?? null,
+                policy?.notes ?? null
+              );
+            } else if (decision.action === 'update_invalidation' && decision.newInvalidationPrice != null) {
+              upsertPositionExitPolicy(
+                pos.symbol,
+                pos.side,
+                bookEntry.thesisExpiresAtMs,
+                decision.newInvalidationPrice,
+                policy?.notes ?? null
+              );
+            }
+            // 'hold' → do nothing
+          } catch (err) {
+            this.logger.warn(`PositionHeartbeat: exit consultant error: ${stringifyError(err)}`);
+          }
         }
       }
 
@@ -368,6 +468,49 @@ export class PositionHeartbeatService {
     }
   }
 
+  private async executeContractReduce(
+    pos: PositionSnapshot,
+    reduceToFraction: number,
+    reason: string,
+    liqDistPct: number | null,
+    timestamp: string
+  ): Promise<void> {
+    const boundedFraction = Math.max(0, Math.min(1, reduceToFraction));
+    const reduceSize = pos.size * (1 - boundedFraction);
+    if (reduceSize <= 0) return;
+
+    const side = pos.side === 'long' ? 'sell' : 'buy';
+    const tool = await this.toolExec(
+      'perp_place_order',
+      { symbol: pos.symbol, side, size: reduceSize, reduce_only: true, order_type: 'market' },
+      this.toolContext
+    );
+
+    this.logger.info(
+      `PositionHeartbeat: exit_contract reduce ${pos.symbol} (${pos.side}) size=${reduceSize} ` +
+      `reason="${reason}" outcome=${tool.success ? 'ok' : 'failed'}`
+    );
+    recordPositionHeartbeatDecision({
+      kind: 'position_heartbeat_journal',
+      symbol: pos.symbol,
+      timestamp,
+      triggers: [],
+      decision: { action: 'take_partial_profit', reason: `exit_contract (${reason})` },
+      outcome: tool.success ? 'ok' : 'failed',
+      snapshot: { liqDistPct, reduceToFraction: boundedFraction },
+      error: tool.success ? null : tool.error,
+    });
+    if (this.notify) {
+      try {
+        await this.notify(
+          `⚠️ [Heartbeat] Reduced ${pos.symbol} (${pos.side}) to ${(boundedFraction * 100).toFixed(0)}% — exit_contract: ${reason}.`
+        );
+      } catch (err) {
+        this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
+      }
+    }
+  }
+
   private parsePositions(raw: unknown): PositionSnapshot[] {
     const positionsRaw = (raw as any)?.positions;
     const positions = Array.isArray(positionsRaw) ? positionsRaw : [];
@@ -475,13 +618,17 @@ function computeLiqDistancePct(params: {
 
 function normalizeTriggerConfig(config: ThufirConfig): HeartbeatTriggerConfig {
   const raw = config.heartbeat?.triggers ?? ({} as any);
+  const toNumberOr = (value: unknown, fallback: number): number => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
   return {
-    pnlShiftPct: Number(raw.pnlShiftPct ?? 1.5) || 1.5,
-    liquidationProximityPct: Number(raw.liquidationProximityPct ?? 5) || 5,
-    volatilitySpikePct: Number(raw.volatilitySpikePct ?? 2) || 2,
-    volatilitySpikeWindowTicks: Number(raw.volatilitySpikeWindowTicks ?? 10) || 10,
-    timeCeilingMinutes: Number(raw.timeCeilingMinutes ?? 15) || 15,
-    triggerCooldownSeconds: Number(raw.triggerCooldownSeconds ?? 180) || 180,
+    pnlShiftPct: toNumberOr(raw.pnlShiftPct, 1.5),
+    liquidationProximityPct: toNumberOr(raw.liquidationProximityPct, 5),
+    volatilitySpikePct: toNumberOr(raw.volatilitySpikePct, 2),
+    volatilitySpikeWindowTicks: toNumberOr(raw.volatilitySpikeWindowTicks, 10),
+    timeCeilingMinutes: toNumberOr(raw.timeCeilingMinutes, 0),
+    triggerCooldownSeconds: toNumberOr(raw.triggerCooldownSeconds, 180),
   };
 }
 

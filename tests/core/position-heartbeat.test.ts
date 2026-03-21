@@ -19,6 +19,7 @@ vi.mock('../../src/memory/paper_perps.js', () => ({
     feeUsd: 0.025,
     message: 'Paper liquidation fill',
   }),
+  listPaperPerpPositions: () => [],
 }));
 
 function makeConfig(triggerOverrides: Record<string, unknown> = {}) {

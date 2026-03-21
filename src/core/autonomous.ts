@@ -39,9 +39,12 @@ import { SchedulerControlPlane } from './scheduler_control_plane.js';
 import { resolveSessionWeightContext } from './session-weight.js';
 import { AutonomousScanTelemetry } from './performance_metrics.js';
 import { withExecutionContext } from './llm_infra.js';
-import { getPaperPerpBookSummary, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
+import { getPaperPerpBookSummary } from '../memory/paper_perps.js';
 import { upsertPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { getCashBalance } from '../memory/portfolio.js';
+import { PositionBook } from './position_book.js';
+import { LlmEntryGate } from './llm_entry_gate.js';
+import { buildLegacyExitContract, serializeExitContract } from './exit_contract.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -149,6 +152,7 @@ export interface AutonomousEvents {
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
   private llm: LlmClient;
+  private fallbackLlm: LlmClient;
   private marketClient: MarketClient;
   private executor: ExecutionAdapter;
   private limiter: DbSpendingLimitEnforcer;
@@ -157,6 +161,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private readonly schedulerNamespace: string;
   private readonly startedAtMs: number;
   private notify?: (message: string) => Promise<void>;
+  private entryGate: LlmEntryGate;
 
   private isPaused = false;
   private pauseReason = '';
@@ -165,6 +170,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
   constructor(
     llm: LlmClient,
+    fallbackLlm: LlmClient,
     marketClient: MarketClient,
     executor: ExecutionAdapter,
     limiter: DbSpendingLimitEnforcer,
@@ -174,6 +180,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   ) {
     super();
     this.llm = llm;
+    this.fallbackLlm = fallbackLlm;
     this.marketClient = marketClient;
     this.executor = executor;
     this.limiter = limiter;
@@ -182,6 +189,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.notify = notify;
     this.schedulerNamespace = this.buildSchedulerNamespace();
     this.startedAtMs = Date.now();
+    this.entryGate = new LlmEntryGate(
+      this.llm,
+      this.fallbackLlm,
+      async (msg) => { if (this.notify) await this.notify(msg); },
+      PositionBook.getInstance(),
+      this.thufirConfig,
+    );
 
     // Load autonomous config with defaults
     this.config = {
@@ -338,6 +352,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     maxTrades?: number;
     ignoreThresholds?: boolean;
   }): Promise<string> {
+    await PositionBook.getInstance().refresh();
     const telemetry = new AutonomousScanTelemetry();
     const recentJournal = listPerpTradeJournals({ limit: 50 });
     const reflectionMutation = applyReflectionMutation(this.thufirConfig, recentJournal);
@@ -554,10 +569,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         try {
           if (executionMode === 'paper') {
             const paperInitialCash = this.thufirConfig.paper?.initialCashUsdc ?? 200;
-            const paperPositions = listPaperPerpPositionsWithMark(paperInitialCash);
-            const unrealizedPnl = paperPositions.reduce((sum, p) => sum + p.unrealizedPnlUsd, 0);
-            const equity = getPaperPerpBookSummary(paperInitialCash).cashBalanceUsdc + unrealizedPnl;
-            return Math.min(limiterRemaining, Math.max(0, equity));
+            // Cap by free cash only — not equity (cash + unrealized). Unrealized PnL is not
+            // spendable until closed; including it caused the equity guard to under-report
+            // risk while positions were winning, allowing dangerous concentration to build.
+            const freeCash = getPaperPerpBookSummary(paperInitialCash).cashBalanceUsdc;
+            return Math.min(limiterRemaining, Math.max(0, freeCash));
           } else {
             // Live mode: cap by actual account balance so Thufir can't spend more than he has.
             const cashBalance = getCashBalance();
@@ -583,7 +599,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         expr.newsTrigger?.enabled === true
           ? Math.min(signalAdjustedUsd, remainingDaily * clamp01(newsSizeCapFraction))
           : signalAdjustedUsd;
-      const probeUsd = Math.min(Math.max(minOrderUsd, cappedForNews), remainingDaily);
+      let probeUsd = Math.min(Math.max(minOrderUsd, cappedForNews), remainingDaily);
       this.logger.info('Session weighting applied to autonomous decision inputs', {
         symbol,
         session: sessionContext.session,
@@ -602,7 +618,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         outputs.push(`${symbol}: Skipped (remaining daily budget $${remainingDaily.toFixed(2)} below min order $${minOrderUsd.toFixed(2)})`);
         continue;
       }
-      const size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+      let size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
       const targetLeverage = Math.min(expr.leverage, adaptiveLeverageCap);
 
       const riskCheck = await checkPerpRiskLimits({
@@ -629,6 +645,33 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         outputs.push(`${symbol}: Blocked (${limitCheck.reason})`);
         continue;
       }
+
+      // LLM entry gate — reviews candidate before execution
+      const gateCandidate = {
+        symbol,
+        side: expr.side,
+        notionalUsd: probeUsd,
+        leverage: targetLeverage,
+        edge: expr.expectedEdge,
+        confidence: confidenceWeighted,
+        signalClass,
+        regime,
+        session: sessionContext.session,
+        entryReasoning: expr.expectedMove ?? '',
+      };
+      if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
+        const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
+        if (gateDecision.verdict === 'reject') {
+          outputs.push(`${symbol}: Rejected by LLM entry gate — ${gateDecision.reasoning}`);
+          this.limiter.release(probeUsd);
+          continue;
+        }
+        if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
+          probeUsd = gateDecision.adjustedSizeUsd;
+          size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+        }
+      }
+      // gate approved or was disabled; fall through to executor.execute()
 
       const decision: TradeDecision = {
         action: expr.side,
@@ -665,7 +708,18 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           ((this.thufirConfig.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120) * 60_000;
         const timeStopAtMs = expr.newsTrigger?.expiresAtMs ?? Date.now() + defaultThesisTtlMs;
         try {
-          upsertPositionExitPolicy(symbol, expr.side === 'buy' ? 'long' : 'short', timeStopAtMs, null);
+          const side = expr.side === 'buy' ? 'long' : 'short';
+          const exitContract = buildLegacyExitContract({
+            thesis: decision.reasoning ?? `${symbol} ${side} thesis`,
+            side,
+          });
+          upsertPositionExitPolicy(
+            symbol,
+            side,
+            timeStopAtMs,
+            null,
+            serializeExitContract(exitContract)
+          );
         } catch { }
         // Notify on position open.
         if (this.notify) {

@@ -90,14 +90,15 @@ describe('tool-executor — exit policy write on perp_place_order', () => {
 
     expect(res.success).toBe(true);
     expect(upsertExitPolicy).toHaveBeenCalledOnce();
-    const [symbol, side, timeStop, invalidation] = upsertExitPolicy.mock.calls[0]!;
+    const [symbol, side, timeStop, invalidation, notes] = upsertExitPolicy.mock.calls[0]!;
     expect(symbol).toBe('BTC');
     expect(side).toBe('long');           // buy → long
     expect(timeStop).toBe(thesisExpiresAtMs);
     expect(invalidation).toBeNull();
+    expect(typeof notes).toBe('string');
   });
 
-  it('does NOT write exit policy when thesis_expires_at_ms is absent', async () => {
+  it('writes a notes-only exit policy when thesis_expires_at_ms is absent', async () => {
     const executor = new PaperExecutor({ initialCashUsdc: 200 });
 
     const res = await executeToolCall(
@@ -112,7 +113,13 @@ describe('tool-executor — exit policy write on perp_place_order', () => {
     );
 
     expect(res.success).toBe(true);
-    expect(upsertExitPolicy).not.toHaveBeenCalled();
+    expect(upsertExitPolicy).toHaveBeenCalledOnce();
+    const [symbol, side, timeStop, invalidation, notes] = upsertExitPolicy.mock.calls[0]!;
+    expect(symbol).toBe('BTC');
+    expect(side).toBe('long');
+    expect(timeStop).toBeNull();
+    expect(invalidation).toBeNull();
+    expect(typeof notes).toBe('string');
   });
 
   it('clears exit policy when reduce-only fully closes a paper position', async () => {
@@ -216,5 +223,40 @@ describe('tool-executor — exit policy write on perp_place_order', () => {
     const [symbol, side] = upsertExitPolicy.mock.calls[0]!;
     expect(symbol).toBe('ETH');
     expect(side).toBe('short'); // sell → short
+  });
+
+  it('persists explicit exit_contract notes for heartbeat consumption', async () => {
+    const thesisExpiresAtMs = Date.now() + 60 * 60_000;
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+
+    const res = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTC',
+        side: 'buy',
+        size: 0.001,
+        mode: 'paper',
+        thesis_expires_at_ms: thesisExpiresAtMs,
+        exit_contract: {
+          thesis: 'Hold while BTC structure remains intact',
+          hardRules: [
+            { metric: 'mark_price', op: '<=', value: 49000, action: 'close', reason: 'structure lost' },
+          ],
+          reviewGuidance: ['If momentum stalls after breakout, reduce risk.'],
+        },
+      },
+      {
+        config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+
+    expect(res.success).toBe(true);
+    const [, , , , notes] = upsertExitPolicy.mock.calls[0]!;
+    expect(typeof notes).toBe('string');
+    expect(String(notes)).toContain('Hold while BTC structure remains intact');
+    expect(String(notes)).toContain('structure lost');
   });
 });

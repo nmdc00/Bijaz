@@ -132,6 +132,7 @@ export async function startWorkerAlertsService(options?: {
     ((resolvedConfig, signals, runtimeLogger) =>
       new AutonomousManager(
         signals.llm,
+        signals.llm,
         signals.marketClient,
         signals.executor,
         signals.limiter,

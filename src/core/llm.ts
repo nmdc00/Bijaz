@@ -829,10 +829,13 @@ class TrivialTaskClient implements LlmClient {
   private inner: LlmClient;
 
   complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
+    const resolvedMaxTokens = options?.maxTokens ?? this.defaults.maxTokens;
     return this.inner.complete(messages, {
       temperature: options?.temperature ?? this.defaults.temperature,
       timeoutMs: options?.timeoutMs ?? this.defaults.timeoutMs,
-      maxTokens: options?.maxTokens ?? this.defaults.maxTokens,
+      ...(this.meta?.provider !== 'openai' && typeof resolvedMaxTokens === 'number'
+        ? { maxTokens: resolvedMaxTokens }
+        : {}),
     });
   }
 }
