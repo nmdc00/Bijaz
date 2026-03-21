@@ -295,7 +295,7 @@ describe('position heartbeat — autonomous actions', () => {
     service.stop();
   });
 
-  it('still notifies even when order fails', async () => {
+  it('sends failure notification when order fails', async () => {
     const config = makeConfig();
     const notified: string[] = [];
     const { service } = makeService(
@@ -312,8 +312,9 @@ describe('position heartbeat — autonomous actions', () => {
     await service.tickOnce();
     service.stop();
 
-    // Action was attempted; notify should still fire
+    // Failure notification is sent; message must indicate failure, not success
     expect(notified.length).toBe(1);
+    expect(notified[0]).toMatch(/FAILED/);
   });
 
   it('runs in paper mode and still executes close', async () => {
