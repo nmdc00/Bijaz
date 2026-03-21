@@ -6,8 +6,8 @@
  *   Section 2: LlmTradeOriginator null discipline
  *   Section 3: LlmTradeOriginator → EntryGate handoff shape
  *   Section 4: Exit policy write from LLM proposal
- *   Section 5: Symbol cooldown (pending — depends on Task 4 autonomous.ts wiring)
- *   Section 6: Quant fallback gating (pending — depends on Task 4)
+ *   Section 5: Symbol cooldown — see tests/core/autonomous-wiring.test.ts (test 4)
+ *   Section 6: Quant fallback gating — see tests/core/autonomous-wiring.test.ts (tests 2, 3, 7)
  *   Section 7: DB logging
  *   Section 8: Regression — v1.97 components
  */
@@ -460,59 +460,14 @@ describe('Section 4: Exit policy from LLM proposal', () => {
   });
 });
 
-// ── Section 5: Symbol cooldown ────────────────────────────────────────────────
-
-describe('Section 5: Symbol cooldown', () => {
-  /**
-   * These tests depend on Task 4 (autonomous.ts wiring) which may not be merged yet.
-   * They test that the cooldown state in the scan loop prevents re-proposing a symbol
-   * within cooldownMinutes after a trade proposal was made for it.
-   *
-   * To activate: implement in autonomous.ts and remove the .skip modifier.
-   */
-
-  it.skip('symbol is not re-proposed within cooldownMinutes after a recent proposal', () => {
-    // TODO: When Task 4 (autonomous.ts wiring) is merged, test that:
-    // 1. After a proposal for 'BTC' is returned by LlmTradeOriginator,
-    //    the cooldown map is updated: cooldownMap.set('BTC', Date.now())
-    // 2. On next scan iteration (within cooldownMinutes), 'BTC' is excluded from
-    //    the candidates passed to LlmTradeOriginator
-    // 3. After cooldownMinutes has elapsed, 'BTC' is once again eligible
-  });
-
-  it.skip('cooldown is per-symbol: proposing BTC does not suppress ETH', () => {
-    // TODO: When Task 4 is merged, verify that the cooldown map is symbol-keyed
-    // and that a cooldown for 'BTC' does not affect eligibility of 'ETH'.
-  });
-});
-
-// ── Section 6: Quant fallback gating ─────────────────────────────────────────
-
-describe('Section 6: Quant fallback gating', () => {
-  /**
-   * These tests depend on Task 4 (autonomous.ts wiring) and the quantFallbackEnabled
-   * config flag. They verify that when LLM origination returns null, the system
-   * can optionally fall back to the quant-based opportunity scanner.
-   *
-   * To activate: implement in autonomous.ts and remove the .skip modifier.
-   */
-
-  it.skip('when LLM returns null and quantFallbackEnabled=true, quant scanner is called', () => {
-    // TODO: When Task 4 is merged, test that:
-    // 1. LlmTradeOriginator.propose() returns null
-    // 2. config.autonomy.origination.quantFallbackEnabled === true
-    // 3. The quant opportunity scanner (runDiscoveryScan / selectDiscoveryMarkets) is invoked
-  });
-
-  it.skip('when quantFallbackEnabled=false, quant scanner is NOT called after null proposal', () => {
-    // TODO: When Task 4 is merged, verify no quant scan call when flag is false.
-  });
-
-  it.skip('quant fallback result goes through EntryGate before execution', () => {
-    // TODO: When Task 4 is merged, verify that quant-originated candidates
-    // also pass through LlmEntryGate.evaluate() before reaching the executor.
-  });
-});
+// ── Sections 5 & 6: covered by tests/core/autonomous-wiring.test.ts ──────────
+//
+// Symbol cooldown (Section 5) and quant fallback gating (Section 6) are
+// AutonomousManager-level concerns tested in autonomous-wiring.test.ts:
+//   - Cooldown: test 4 (BTC filtered from next scan after proposal)
+//   - Quant fallback on cadence: test 2
+//   - No quant fallback on ta_alert: test 3
+//   - LLM down → quant fallback: test 7
 
 // ── Section 7: DB logging ─────────────────────────────────────────────────────
 

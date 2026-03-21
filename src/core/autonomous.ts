@@ -587,7 +587,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     // LLM entry gate
     const gateCandidate = {
       symbol,
-      side,
+      side: side as 'buy' | 'sell',
       notionalUsd: probeUsd,
       leverage: targetLeverage,
       edge: 0.1,
