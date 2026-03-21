@@ -39,7 +39,7 @@ import { SchedulerControlPlane } from './scheduler_control_plane.js';
 import { resolveSessionWeightContext } from './session-weight.js';
 import { AutonomousScanTelemetry } from './performance_metrics.js';
 import { withExecutionContext } from './llm_infra.js';
-import { getPaperPerpBookSummary, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
+import { getPaperPerpBookSummary } from '../memory/paper_perps.js';
 import { upsertPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { getCashBalance } from '../memory/portfolio.js';
 import { PositionBook } from './position_book.js';
@@ -569,10 +569,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         try {
           if (executionMode === 'paper') {
             const paperInitialCash = this.thufirConfig.paper?.initialCashUsdc ?? 200;
-            const paperPositions = listPaperPerpPositionsWithMark(paperInitialCash);
-            const unrealizedPnl = paperPositions.reduce((sum, p) => sum + p.unrealizedPnlUsd, 0);
-            const equity = getPaperPerpBookSummary(paperInitialCash).cashBalanceUsdc + unrealizedPnl;
-            return Math.min(limiterRemaining, Math.max(0, equity));
+            // Cap by free cash only — not equity (cash + unrealized). Unrealized PnL is not
+            // spendable until closed; including it caused the equity guard to under-report
+            // risk while positions were winning, allowing dangerous concentration to build.
+            const freeCash = getPaperPerpBookSummary(paperInitialCash).cashBalanceUsdc;
+            return Math.min(limiterRemaining, Math.max(0, freeCash));
           } else {
             // Live mode: cap by actual account balance so Thufir can't spend more than he has.
             const cashBalance = getCashBalance();

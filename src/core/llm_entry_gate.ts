@@ -46,14 +46,18 @@ function normalizeOptionalFieldPseudoJson(
 
 function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
   if (entries.length === 0) return '(no open positions)';
-  const header = 'symbol | side  | size     | entry price | thesis expires';
-  const divider = '-------|-------|----------|-------------|----------------';
+  const totalNotional = entries.reduce((sum, e) => sum + e.size * e.entryPrice, 0);
+  const header = 'symbol | side  | notional  | conc% | thesis expires';
+  const divider = '-------|-------|-----------|-------|----------------';
   const rows = entries.map((e) => {
+    const notional = e.size * e.entryPrice;
+    const concPct = totalNotional > 0 ? ((notional / totalNotional) * 100).toFixed(0) : '0';
     const ttlMin = Math.round((e.thesisExpiresAtMs - Date.now()) / 60_000);
     const ttlStr = ttlMin > 0 ? `${ttlMin}min` : 'EXPIRED';
-    return `${e.symbol.padEnd(6)} | ${e.side.padEnd(5)} | ${e.size.toPrecision(5).padEnd(8)} | ${e.entryPrice.toFixed(4).padEnd(11)} | ${ttlStr}`;
+    return `${e.symbol.padEnd(6)} | ${e.side.padEnd(5)} | $${notional.toFixed(0).padEnd(8)} | ${concPct.padEnd(5)} | ${ttlStr}`;
   });
-  return [header, divider, ...rows].join('\n');
+  const summary = `Total notional: $${totalNotional.toFixed(0)} across ${entries.length} position(s)`;
+  return [summary, '', header, divider, ...rows].join('\n');
 }
 
 function resolveTimeoutMs(config: ThufirConfig): number {
@@ -66,7 +70,8 @@ function shouldRejectOnBothFail(config: ThufirConfig): boolean {
 
 function buildPrompt(
   candidate: EntryGateCandidate,
-  bookEntries: ReturnType<PositionBook['getAll']>
+  bookEntries: ReturnType<PositionBook['getAll']>,
+  sameSideWarning: string | null,
 ): { system: string; user: string } {
   const system = `You are Thufir, an LLM-primary trading agent. Your job is to decide whether to approve, reject, or resize a trade candidate.
 
@@ -79,10 +84,14 @@ Respond ONLY with valid JSON matching this schema:
 
   const bookTable = formatBookTable(bookEntries);
 
+  const warningBlock = sameSideWarning
+    ? `\n## ⚠️ Concentration Warning\n\n${sameSideWarning}\n`
+    : '';
+
   const user = `## Current Open Book
 
 ${bookTable}
-
+${warningBlock}
 ## Trade Candidate
 
 - Symbol: ${candidate.symbol}
@@ -112,9 +121,10 @@ async function callLlm(
   client: LlmClient,
   candidate: EntryGateCandidate,
   bookEntries: ReturnType<PositionBook['getAll']>,
+  sameSideWarning: string | null,
   timeoutMs?: number
 ): Promise<EntryGateDecision> {
-  const { system, user } = buildPrompt(candidate, bookEntries);
+  const { system, user } = buildPrompt(candidate, bookEntries, sameSideWarning);
   const response = await client.complete(
     [
       { role: 'system', content: system },
@@ -193,9 +203,17 @@ export class LlmEntryGate {
     let usedFallback = false;
     let decision: EntryGateDecision;
 
+    // Build same-side concentration warning if a position in this symbol/side already exists
+    const sameSideWarning = this.book.hasPosition(candidate.symbol, candidate.side)
+      ? `A ${candidate.side} position in ${candidate.symbol} is ALREADY OPEN in the book. ` +
+        `Approving this candidate would stack concentration in the same symbol and direction. ` +
+        `Reject unless you can name a specific, concrete reason to increase exposure here right now — ` +
+        `not just because the signal fired again.`
+      : null;
+
     // Try main LLM — no timeoutMs cap, matching AgenticOpenAiClient behaviour
     try {
-      decision = await callLlm(this.mainLlm, candidate, bookEntries);
+      decision = await callLlm(this.mainLlm, candidate, bookEntries, sameSideWarning);
     } catch (error) {
       const summary = summarizeLlmError(error);
       logger.warn('Entry gate main LLM failed; falling back', {
@@ -211,7 +229,7 @@ export class LlmEntryGate {
         await this.notify('⚠️ Entry gate: using fallback LLM — decision quality may be lower');
       } catch { /* best-effort */ }
       try {
-        decision = await callLlm(this.fallbackLlm, candidate, bookEntries, timeoutMs);
+        decision = await callLlm(this.fallbackLlm, candidate, bookEntries, sameSideWarning, timeoutMs);
       } catch (fallbackError) {
         const summary = summarizeLlmError(fallbackError);
         logger.warn('Entry gate fallback LLM failed; using safe default', {

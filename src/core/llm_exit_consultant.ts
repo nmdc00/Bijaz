@@ -35,24 +35,6 @@ const ExitConsultResponseSchema = z.object({
 const ROE_THRESHOLDS = [0.03, 0.07, 0.15];        // 3%, 7%, 15%
 const logger = new Logger('info');
 
-function normalizeOptionalFieldPseudoJson(raw: string, optionalFields: string[]): string {
-  let normalized = raw;
-  for (const field of optionalFields) {
-    const pattern = new RegExp(`("${field}"\\s*:)\\s*undefined(?=\\s*[,}])`, 'g');
-    normalized = normalized.replace(pattern, '$1 null');
-  }
-  return normalized;
-}
-
-function normalizeExitConsultOptionalFields(parsed: Record<string, unknown>): Record<string, unknown> {
-  for (const field of ['newTimeStopAtMs', 'newInvalidationPrice', 'reduceToFraction']) {
-    if (parsed[field] === null) {
-      delete parsed[field];
-    }
-  }
-  return parsed;
-}
-
 function normalizeOptionalFieldPseudoJson(
   raw: string,
   optionalFields: string[]
