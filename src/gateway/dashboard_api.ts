@@ -1499,6 +1499,9 @@ function listPerformanceBreakdown(
       continue;
     }
     if (!journalModeMatches(payload, filters)) continue;
+    // Skip exit/close journals — they don't have a signal class and shouldn't
+    // influence signal-class or regime performance stats.
+    if (payload.reduceOnly === true) continue;
     const outcome = resolveJournalOutcome(payload);
     if (outcome !== 'executed' && outcome !== 'failed') continue;
     const closedAtMs = resolveJournalClosedAtMs(payload, row.createdAt);
