@@ -6,7 +6,7 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: class {
     constructor(_config: any) {}
 
-    async getMetaAndAssetCtxs(): Promise<any> {
+    async getMergedMetaAndAssetCtxs(): Promise<any> {
       return [
         { universe: [{ name: 'BTC' }, { name: 'ETH' }, { name: 'SOL' }] },
         [
