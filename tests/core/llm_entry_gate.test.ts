@@ -54,9 +54,14 @@ function makeCandidate(overrides?: Partial<EntryGateCandidate>): EntryGateCandid
   };
 }
 
-function makeBook(overrides?: { hasConflict?: boolean; entries?: ReturnType<PositionBook['getAll']> }): PositionBook {
+function makeBook(overrides?: {
+  hasConflict?: boolean;
+  hasPosition?: boolean;
+  entries?: ReturnType<PositionBook['getAll']>;
+}): PositionBook {
   return {
     hasConflict: vi.fn().mockReturnValue(overrides?.hasConflict ?? false),
+    hasPosition: vi.fn().mockReturnValue(overrides?.hasPosition ?? false),
     getAll: vi.fn().mockReturnValue(overrides?.entries ?? []),
     get: vi.fn(),
     refresh: vi.fn(),
@@ -401,6 +406,101 @@ describe('LlmEntryGate', () => {
       expect(call.session).toBe('asia');
       expect(call.edge).toBe(0.05);
       expect(call.usedFallback).toBe(false);
+    });
+  });
+
+  describe('same-side concentration warning', () => {
+    it('includes concentration warning in prompt when same-side position exists', async () => {
+      const book = makeBook({ hasPosition: true });
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'reject', reasoning: 'stacking risk' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate({ symbol: 'HYPE', side: 'sell' }), markPrice);
+
+      expect(completeFn).toHaveBeenCalledOnce();
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      expect(userContent).toContain('Concentration Warning');
+      expect(userContent).toContain('ALREADY OPEN');
+      expect(userContent).toContain('HYPE');
+    });
+
+    it('does not include concentration warning when no same-side position exists', async () => {
+      const book = makeBook({ hasPosition: false });
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'clean entry' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      expect(userContent).not.toContain('Concentration Warning');
+    });
+
+    it('still lets the LLM approve when same-side warning is present (no auto-reject)', async () => {
+      const book = makeBook({ hasPosition: true });
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'strong specific reason' });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.verdict).toBe('approve');
+    });
+  });
+
+  describe('book table concentration display', () => {
+    it('shows notional and concentration% in book table when positions exist', async () => {
+      const entries = [
+        {
+          symbol: 'HYPE',
+          side: 'short' as const,
+          size: 100,
+          entryPrice: 40,
+          entryReasoningText: '',
+          thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
+          exitContract: null,
+          exitContractSummary: null,
+          lastConsultAtMs: null,
+          lastConsultDecision: null,
+        },
+        {
+          symbol: 'TAO',
+          side: 'short' as const,
+          size: 1,
+          entryPrice: 500,
+          entryReasoningText: '',
+          thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
+          exitContract: null,
+          exitContractSummary: null,
+          lastConsultAtMs: null,
+          lastConsultDecision: null,
+        },
+      ];
+      const book = makeBook({ entries });
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'reject', reasoning: 'crowded' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      // HYPE: 100*40=$4000, TAO: 1*500=$500, total=$4500; HYPE=89%, TAO=11%
+      expect(userContent).toContain('Total notional');
+      expect(userContent).toContain('conc%');
+      expect(userContent).toContain('$4000');
+      expect(userContent).toContain('$500');
     });
   });
 });

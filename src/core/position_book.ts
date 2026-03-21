@@ -101,4 +101,15 @@ export class PositionBook {
     const normalized = normalizeSide(side);
     return entry.side !== normalized;
   }
+
+  /**
+   * Returns true if `symbol` already has an open position on the *same* side.
+   * Used to detect same-side stacking (concentration risk).
+   */
+  hasPosition(symbol: string, side: 'long' | 'short' | 'buy' | 'sell'): boolean {
+    const entry = this.entries.get(symbol);
+    if (!entry) return false;
+    const normalized = normalizeSide(side);
+    return entry.side === normalized;
+  }
 }

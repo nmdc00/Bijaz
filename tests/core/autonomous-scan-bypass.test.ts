@@ -105,7 +105,7 @@ vi.mock('../../src/memory/db.js', () => ({
 vi.mock('../../src/memory/paper_perps.js', () => ({
   listPaperPerpPositions: () => [],
   listPaperPerpPositionsWithMark: () => [],
-  getPaperPerpBookSummary: () => ({ cashBalanceUsdc: 200 }),
+  getPaperPerpBookSummary: vi.fn(() => ({ cashBalanceUsdc: 200 })),
 }));
 
 vi.mock('../../src/memory/position_exit_policy.js', () => ({
@@ -259,5 +259,39 @@ describe('autonomous scan bypass — LLM not called for discovery/filter/evaluat
 
     expect(llmComplete).not.toHaveBeenCalled();
     expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('equity guard: blocks new entries when free cash is zero (ignores unrealized PnL)', async () => {
+    // Previously the guard used cashBalanceUsdc + unrealizedPnl, allowing trades while
+    // unrealized gains masked exhausted free cash. Now it uses cashBalanceUsdc only.
+    const { getPaperPerpBookSummary } = await import('../../src/memory/paper_perps.js');
+    vi.mocked(getPaperPerpBookSummary).mockReturnValue({ cashBalanceUsdc: 0 } as any);
+
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'ok' })) } as any;
+    const llm = {
+      complete: vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        model: 'test',
+      }),
+    } as any;
+    const marketClient = {
+      getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
+    } as any;
+    const limiter = {
+      getRemainingDaily: () => 1000,
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: vi.fn(),
+      release: vi.fn(),
+    } as any;
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    await manager.runScan();
+
+    // Free cash = 0, so remaining = 0, so probeUsd < minOrder, so trade is skipped
+    expect(executor.execute).not.toHaveBeenCalled();
+
+    // Restore for other tests
+    vi.mocked(getPaperPerpBookSummary).mockReturnValue({ cashBalanceUsdc: 200 } as any);
   });
 });
