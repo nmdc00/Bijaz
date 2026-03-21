@@ -79,7 +79,9 @@ export class ThufirAgent {
     // Autonomous scan pipeline (discovery → filter → evaluate) is fully deterministic.
     // Only the optional async enrichment synthesis step needs an LLM call — use the
     // trivial/direct client to keep it to a single call instead of the full orchestrator.
+    // The entry gate uses the primary LLM as main and trivial/fallback for resilience.
     this.autonomous = new AutonomousManager(
+      this.llm,
       this.infoLlm ?? this.llm,
       this.marketClient,
       this.executor,
@@ -140,6 +142,11 @@ export class ThufirAgent {
   /** Expose the trivial/local LLM client for lightweight background tasks. */
   getInfoLlm(): LlmClient | undefined {
     return this.infoLlm;
+  }
+
+  /** Expose the primary LLM client for background services that need full-quality reasoning. */
+  getLlm(): LlmClient {
+    return this.llm;
   }
 
   private async getLiveStatusSnapshot() {

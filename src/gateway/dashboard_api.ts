@@ -687,7 +687,8 @@ function computeUnrealizedPnl(
 
 function buildPaperEquitySeries(
   db: Database.Database,
-  filters: DashboardFilters
+  filters: DashboardFilters,
+  mids: Record<string, number>
 ): EquityCurveSection {
   const startingCash = safeCount(
     db,
@@ -729,6 +730,37 @@ function buildPaperEquitySeries(
         cumulativeFees,
       });
     }
+  }
+
+  // Re-mark surviving open positions to the current dashboard mids so the ending
+  // paper equity matches the open-positions table's mark-to-market view.
+  for (const [symbol, position] of positions.entries()) {
+    const currentMid = resolveMidForDashboard(symbol, mids);
+    if (typeof currentMid === 'number' && Number.isFinite(currentMid) && currentMid > 0) {
+      lastMarkBySymbol.set(symbol, currentMid);
+    } else if (!lastMarkBySymbol.has(symbol)) {
+      lastMarkBySymbol.set(symbol, position.entryPrice);
+    }
+  }
+
+  const finalUnrealizedPnl = computeUnrealizedPnl(positions, lastMarkBySymbol);
+  const finalEquity = cashBalance + finalUnrealizedPnl;
+  const lastPoint = points[points.length - 1];
+  const shouldAppendFinalPoint =
+    positions.size > 0 &&
+    (!lastPoint ||
+      Math.abs((lastPoint.unrealizedPnl ?? 0) - finalUnrealizedPnl) > 1e-9 ||
+      Math.abs((lastPoint.equity ?? 0) - finalEquity) > 1e-9);
+
+  if (shouldAppendFinalPoint) {
+    points.push({
+      timestamp: new Date().toISOString(),
+      cashBalance,
+      unrealizedPnl: finalUnrealizedPnl,
+      equity: finalEquity,
+      cumulativeRealizedPnl: cumulativeRealized,
+      cumulativeFees,
+    });
   }
 
   if (points.length === 0) {
@@ -1539,6 +1571,70 @@ function countTradeJournalRows(
   return count;
 }
 
+function countFilteredPerpTradeRows(
+  db: Database.Database,
+  filters: DashboardFilters
+): number {
+  if (!tableExists(db, 'perp_trades')) {
+    return 0;
+  }
+  const hasExecutionMode = tableHasColumn(db, 'perp_trades', 'execution_mode');
+  if (filters.mode === 'combined' || !hasExecutionMode) {
+    return safeCount(db, 'SELECT COUNT(*) AS c FROM perp_trades');
+  }
+  return safeCount(
+    db,
+    `
+      SELECT COUNT(*) AS c
+      FROM perp_trades
+      WHERE execution_mode = ?
+    `,
+    [filters.mode]
+  );
+}
+
+function countDistinctTradeRecords(
+  db: Database.Database,
+  filters: DashboardFilters
+): number {
+  if (!tableExists(db, 'decision_artifacts')) {
+    return countFilteredPerpTradeRows(db, filters);
+  }
+
+  const rows = db
+    .prepare(
+      `
+        SELECT payload
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+      `
+    )
+    .all() as Array<{ payload?: string }>;
+
+  const tradeIds = new Set<number>();
+  let journalRowsWithoutTradeId = 0;
+  for (const row of rows) {
+    if (!row.payload) continue;
+    try {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      if (!journalModeMatches(payload, filters)) {
+        continue;
+      }
+      const tradeId = Number(payload.tradeId ?? NaN);
+      if (Number.isFinite(tradeId) && tradeId > 0) {
+        tradeIds.add(tradeId);
+        continue;
+      }
+      journalRowsWithoutTradeId += 1;
+    } catch {
+      // ignore unparseable payloads
+    }
+  }
+
+  const count = tradeIds.size + journalRowsWithoutTradeId;
+  return count > 0 ? count : countFilteredPerpTradeRows(db, filters);
+}
+
 function buildPolicyStateSection(db: Database.Database): {
   observationMode: boolean;
   leverageCap: number | null;
@@ -1774,14 +1870,14 @@ export function buildDashboardApiPayload(params?: {
   };
   const mids = params?.mids ?? {};
 
-  const perpTrades = safeCount(db, 'SELECT COUNT(*) AS c FROM perp_trades');
+  const perpTrades = countDistinctTradeRecords(db, filters);
   const journals = countTradeJournalRows(db, filters);
   const alerts = safeCount(db, 'SELECT COUNT(*) AS c FROM alerts');
   const openPaperPositions = !isLiveMode(filters) && tableExists(db, 'paper_perp_positions')
     ? safeCount(db, 'SELECT COUNT(*) AS c FROM paper_perp_positions')
     : 0;
   const equityCurve = isPaperMode(filters) || filters.mode === 'combined'
-    ? buildPaperEquitySeries(db, filters)
+    ? buildPaperEquitySeries(db, filters, mids)
     : buildEmptyEquitySeries();
   const openPositionRows = isLiveMode(filters) ? [] : listPaperOpenPositionRows(db, mids);
   const longCount = openPositionRows.filter((row) => row.side === 'long').length;

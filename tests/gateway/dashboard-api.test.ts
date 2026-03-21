@@ -155,6 +155,41 @@ describe('dashboard api payload', () => {
     expect(payload.sections.openPositions.summary.totalUnrealizedPnlUsd).toBeCloseTo(9.95, 6);
   });
 
+  it('marks paper equity to the same current mids as open positions', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-paper-equity-mark-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    placePaperPerpOrder(
+      { symbol: 'BTC', side: 'buy', size: 2, orderType: 'market', markPrice: 100 },
+      { initialCashUsdc: 200 }
+    );
+    placePaperPerpOrder(
+      { symbol: 'BTC', side: 'sell', size: 1, orderType: 'market', markPrice: 110, reduceOnly: true },
+      { initialCashUsdc: 200 }
+    );
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+      mids: { BTC: 120 },
+    });
+
+    const endPoint = payload.sections.equityCurve.points[payload.sections.equityCurve.points.length - 1]!;
+    expect(payload.sections.openPositions.rows[0]?.currentPrice).toBe(120);
+    expect(payload.sections.openPositions.summary.totalUnrealizedPnlUsd).toBeCloseTo(19.95, 6);
+    expect(endPoint.unrealizedPnl).toBeCloseTo(19.95, 6);
+    expect(payload.sections.equityCurve.summary.endEquity).toBeCloseTo(endPoint.cashBalance + 19.95, 6);
+  });
+
   it('returns recent trade-log rows with component quality bands', () => {
     const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-trade-log-'));
     dbDir = dir;
@@ -294,6 +329,53 @@ describe('dashboard api payload', () => {
     expect(row?.sampleCount).toBe(2);
     expect(row?.gates.minTrades.pass).toBe(false);
     expect(row?.gates.minTrades.missing).toBe(23);
+  });
+
+  it('counts one trade per unique tradeId even when multiple journals exist for the lifecycle', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-unique-trade-count-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      tradeId: 42,
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'buy',
+      outcome: 'executed',
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      tradeId: 42,
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'buy',
+      outcome: 'executed',
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      tradeId: 42,
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'sell',
+      outcome: 'executed',
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.meta.recordCounts.journals).toBe(3);
+    expect(payload.meta.recordCounts.perpTrades).toBe(1);
   });
 
   it('separates paper and live slices across sections when mode filter changes', () => {

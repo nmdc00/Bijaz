@@ -54,6 +54,7 @@ import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
 import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
+import { LlmExitConsultant } from '../core/llm_exit_consultant.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import type { ScheduleDefinition } from '../core/scheduler_control_plane.js';
 import { EscalationPolicyEngine } from './escalation.js';
@@ -166,9 +167,19 @@ if (positionHeartbeatConfig?.enabled) {
           }
         }
       : undefined;
+    const exitConsultant =
+      config.heartbeat?.llmExitConsult?.enabled !== false
+        ? new LlmExitConsultant(
+            primaryAgent.getLlm(),
+            primaryAgent.getInfoLlm() ?? primaryAgent.getLlm(),
+            heartbeatNotify ?? (async () => {}),
+            config
+          )
+        : undefined;
 
     const service = new PositionHeartbeatService(config, primaryAgent.getToolContext(), logger, {
       notify: heartbeatNotify,
+      exitConsultant,
     });
     service.start();
   } catch (error) {

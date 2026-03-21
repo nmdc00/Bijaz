@@ -228,7 +228,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
 
     // Fallback: impact prices from metaAndAssetCtxs (also tick-aligned).
     try {
-      const [meta, assetCtxs] = await this.client.getMetaAndAssetCtxs();
+      const [meta, assetCtxs] = await this.client.getMergedMetaAndAssetCtxs();
       const universe = (meta as { universe?: Array<{ name?: string }> }).universe ?? [];
       const idx = universe.findIndex((u) => u?.name === symbol);
       const ctx = Array.isArray(assetCtxs) ? (assetCtxs as any[])[idx] : null;

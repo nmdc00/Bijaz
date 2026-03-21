@@ -172,14 +172,15 @@ export async function signalHyperliquidFundingOISkew(
   if (cached !== undefined) return cached;
 
   const client = new HyperliquidClient(config);
-  const [meta, assetCtxs] = await client.getMetaAndAssetCtxs();
+  const [meta, assetCtxs] = await client.getMergedMetaAndAssetCtxs();
+  const contexts = Array.isArray(assetCtxs) ? (assetCtxs as Array<Record<string, unknown>>) : [];
   const idx = meta.universe.findIndex((item) => item.name === coin);
-  if (idx < 0 || idx >= assetCtxs.length) return null;
+  if (idx < 0 || idx >= contexts.length) return null;
 
-  const ctx = assetCtxs[idx]!;
+  const ctx = contexts[idx] ?? {};
   const fundingRate = toNumber(ctx.funding);
   const openInterest = toNumber(ctx.openInterest);
-  const openInterests = assetCtxs.map((item) => toNumber(item.openInterest));
+  const openInterests = contexts.map((item) => toNumber(item.openInterest));
   const meanOpenInterest = mean(openInterests);
   const totalOpenInterest = sum(openInterests);
   const oiZ = meanOpenInterest > 0 ? (openInterest - meanOpenInterest) / meanOpenInterest : 0;
