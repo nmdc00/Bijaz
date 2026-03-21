@@ -832,7 +832,8 @@ export class ConversationHandler {
     const wantsMarket = /\b(price|odds|market|markets|ticker|tickers|probability|volume|liquidity|bid|ask)\b/.test(text);
     const wantsTrade = /\b(perp|perps|trade|trades|buy|sell|long|short|leverage|funding|position|positions)\b/.test(text);
     const wantsTime = /\b(time|date|day)\b/.test(text);
-    const wantsCommodityDiscovery = /\b(commodit(?:y|ies)|oil|gold|silver|xau|xag|wti|brent|natgas|copper)\b/.test(text);
+    const wantsCommodityDiscovery = /\b(commodit(?:y|ies)|oil|gold|silver|xau|xag|wti|brent|natgas|copper|hip.?3?)\b/.test(text);
+    const wantsFullMarketList = /\b(list all|all markets|what markets|every market|see.*markets|markets.*see|full.*market|market.*list)\b/.test(text);
     const inferredDomain = classifyMarketContextDomain(message);
     const wantsDomainContext =
       inferredDomain !== 'crypto' &&
@@ -891,7 +892,7 @@ export class ConversationHandler {
         }
       }
 
-      const marketListLimit = wantsCommodityDiscovery ? 200 : 20;
+      const marketListLimit = (wantsCommodityDiscovery || wantsFullMarketList) ? 200 : 50;
       const marketResult = await executeToolCall('perp_market_list', { limit: marketListLimit }, this.toolContext);
       if (marketResult.success) {
         sections.push(`### perp_market_list\n${JSON.stringify(marketResult.data, null, 2)}`);
