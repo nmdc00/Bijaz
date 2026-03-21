@@ -502,7 +502,7 @@ intel:
         enabled: true
         apiKey: ${SERPAPI_KEY}
       duckduckgo:
-        enabled: true
+        enabled: false
     cache:
       enabled: true
       ttlSeconds: 900

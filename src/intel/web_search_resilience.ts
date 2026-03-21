@@ -539,9 +539,9 @@ async function searchViaTavily(
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
+        api_key: apiKey,
         query,
         max_results: limit,
         search_depth: 'basic',
