@@ -258,9 +258,11 @@ describe('web search provider resilience', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.tavily.com/search');
     expect(init.method).toBe('POST');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer tvly-test-key');
     const body = JSON.parse(init.body as string);
     expect(body.query).toBe('btc news');
-    expect(body.api_key).toBe('tvly-test-key');
+    expect(body.api_key).toBeUndefined();
   });
 
   it('tavily is skipped when API key is missing and falls back to next provider', async () => {
