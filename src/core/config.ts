@@ -850,6 +850,24 @@ const ConfigSchema = z.object({
           rejectOnBothFail: z.boolean().default(true),
         })
         .default({}),
+      ta: z
+        .object({
+          oiSpikePct: z.number().default(8),
+          fundingExtremeAnnual: z.number().default(50),
+          volumeSpikePct: z.number().default(150),
+        })
+        .default({}),
+      origination: z
+        .object({
+          enabled: z.boolean().default(true),
+          cadenceMinutes: z.number().default(15),
+          topMarketsCount: z.number().default(20),
+          quantFallbackEnabled: z.boolean().default(true),
+          timeoutMs: z.number().default(10000),
+          minConfidence: z.number().default(0.55),
+          cooldownMinutes: z.number().default(30),
+        })
+        .default({}),
     })
     .default({}),
   heartbeat: z

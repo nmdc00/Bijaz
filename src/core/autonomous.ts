@@ -15,6 +15,7 @@ import type { MarketClient } from '../execution/market-client.js';
 import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
+import { selectDiscoveryMarkets } from '../discovery/market_selector.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
 import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -45,6 +46,10 @@ import { getCashBalance } from '../memory/portfolio.js';
 import { PositionBook } from './position_book.js';
 import { LlmEntryGate } from './llm_entry_gate.js';
 import { buildLegacyExitContract, serializeExitContract } from './exit_contract.js';
+import { TaSurface } from './ta_surface.js';
+import { OriginationTrigger } from './origination_trigger.js';
+import { LlmTradeOriginator } from './llm_trade_originator.js';
+import { listEvents } from '../memory/events.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -168,6 +173,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private consecutiveLosses = 0;
   private scheduler: SchedulerControlPlane | null = null;
 
+  // LLM origination pipeline (v1.98)
+  private taSurface: TaSurface;
+  private originationTrigger: OriginationTrigger;
+  private originator: LlmTradeOriginator;
+  private lastFiredMs = 0;
+  private symbolCooldownMap = new Map<string, number>();
+  private marketContextCache: { value: string; expiresAt: number } | null = null;
+
   constructor(
     llm: LlmClient,
     fallbackLlm: LlmClient,
@@ -196,6 +209,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       PositionBook.getInstance(),
       this.thufirConfig,
     );
+
+    this.taSurface = new TaSurface(this.thufirConfig);
+    this.originationTrigger = new OriginationTrigger(this.thufirConfig);
+    this.originator = new LlmTradeOriginator(this.llm, this.fallbackLlm, this.thufirConfig);
 
     // Load autonomous config with defaults
     this.config = {
@@ -344,7 +361,303 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     const forceExecute = Boolean(options?.forceExecute);
     const executeTrades = forceExecute || this.config.fullAuto;
     const maxTrades = options?.maxTrades;
-    return this.runDiscoveryScan({ executeTrades, maxTrades, ignoreThresholds: forceExecute });
+    const scanInput = { executeTrades, maxTrades, ignoreThresholds: forceExecute };
+
+    // Try LLM originator path first; null means "use quant fallback"
+    try {
+      const originatorResult = await this.runOriginatorScan(scanInput);
+      if (originatorResult !== null) {
+        return originatorResult;
+      }
+    } catch (error) {
+      this.logger.warn('Originator scan failed, falling through to quant path', {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return this.runDiscoveryScan(scanInput);
+  }
+
+  private async getMarketContextCached(): Promise<string> {
+    const now = Date.now();
+    if (this.marketContextCache && this.marketContextCache.expiresAt > now) {
+      return this.marketContextCache.value;
+    }
+    try {
+      const { gatherMarketContext } = await import('../markets/context.js');
+      const snapshot = await gatherMarketContext(
+        { message: 'crypto perpetual markets overview', domain: 'crypto', marketLimit: 20 },
+        async () => ({ success: false as const, error: 'no tool executor' })
+      );
+      const successful = snapshot.results.filter((r: any) => r.success);
+      const value = successful
+        .map((r: any) => {
+          const payload = typeof r.data === 'string' ? r.data : JSON.stringify(r.data);
+          return `${r.label}: ${payload}`;
+        })
+        .join('\n')
+        .slice(0, 1000);
+      this.marketContextCache = { value, expiresAt: now + 10 * 60 * 1000 };
+      return value;
+    } catch {
+      return '';
+    }
+  }
+
+  private async runOriginatorScan(input: {
+    executeTrades: boolean;
+    maxTrades?: number;
+    ignoreThresholds?: boolean;
+  }): Promise<string | null> {
+    // Only run when origination is explicitly configured (Zod default sets this; raw test configs won't have it)
+    if (this.thufirConfig.autonomy?.origination == null) {
+      return null;
+    }
+
+    const book = PositionBook.getInstance();
+    const topMarketsCount = this.thufirConfig.autonomy?.origination?.topMarketsCount ?? 20;
+    const cooldownMs = (this.thufirConfig.autonomy?.origination?.cooldownMinutes ?? 30) * 60 * 1000;
+    const quantFallbackEnabled = this.thufirConfig.autonomy?.origination?.quantFallbackEnabled !== false;
+
+    // Get top markets
+    let topMarkets: string[];
+    try {
+      const selected = await selectDiscoveryMarkets(this.thufirConfig, { limit: topMarketsCount });
+      topMarkets = selected.candidates.map((c) => c.symbol);
+    } catch {
+      topMarkets = this.thufirConfig.hyperliquid?.symbols?.length
+        ? (this.thufirConfig.hyperliquid.symbols as string[])
+        : ['BTC', 'ETH'];
+    }
+
+    // Compute TA surface for all top markets
+    const allSnapshots = await this.taSurface.computeAll(topMarkets);
+
+    // Filter out symbols already in the book or on cooldown
+    const now = Date.now();
+    const taSnapshots = allSnapshots.filter((snap) => {
+      if (book.hasPosition(snap.symbol, 'long') || book.hasPosition(snap.symbol, 'short')) {
+        return false;
+      }
+      const lastCooldown = this.symbolCooldownMap.get(snap.symbol);
+      if (lastCooldown !== undefined && now - lastCooldown < cooldownMs) {
+        return false;
+      }
+      return true;
+    });
+
+    // Get pending events for trigger
+    const pendingEvents = listEvents({ limit: 10 });
+
+    // Check if trigger fires
+    const triggerResult = this.originationTrigger.shouldFire(
+      this.lastFiredMs,
+      taSnapshots,
+      pendingEvents
+    );
+
+    if (!triggerResult.fire) {
+      return null; // no-op — return null to fall through to quant path if desired
+    }
+
+    // Assemble recent events text
+    const twoHoursAgo = new Date(now - 2 * 60 * 60 * 1000).toISOString();
+    const recentRaw = listEvents({ limit: 20 });
+    const recent = recentRaw.filter((e) => e.createdAt > twoHoursAgo);
+    const recentEvents =
+      recent.length === 0
+        ? '(none)'
+        : recent
+            .map((e) => `[${e.domain}] ${e.title}`)
+            .join('\n')
+            .slice(0, 500);
+
+    // Fetch market context (10-min cached)
+    const marketContext = await this.getMarketContextCached();
+
+    // Assemble bundle and propose
+    const bundle = {
+      book: book.getAll(),
+      taSnapshots,
+      marketContext,
+      recentEvents,
+      alertedSymbols: triggerResult.alertedSymbols,
+      triggerReason: triggerResult.reason,
+    };
+
+    const proposal = await this.originator.propose(bundle);
+
+    // Track cooldown for proposed symbol regardless of outcome
+    if (proposal !== null) {
+      this.symbolCooldownMap.set(proposal.symbol, now);
+    }
+
+    // Update lastFiredMs
+    this.lastFiredMs = now;
+
+    if (proposal === null) {
+      // Quant fallback only on cadence trigger
+      if (triggerResult.reason === 'cadence' && quantFallbackEnabled) {
+        return null; // signal caller to run quant path
+      }
+      return `Originator returned null (trigger=${triggerResult.reason}). No trade.`;
+    }
+
+    // Proposal is non-null — run through entry gate and execute
+    if (!input.executeTrades) {
+      return `Originator proposed ${proposal.symbol} ${proposal.side} (confidence=${proposal.confidence.toFixed(2)}) but execute=false.`;
+    }
+
+    // Size the trade using existing Kelly logic (simplified for originator proposals)
+    const symbol = proposal.symbol;
+    const side = proposal.side === 'long' ? 'buy' : 'sell';
+    const market = await this.marketClient.getMarket(symbol);
+    const markPrice = market.markPrice ?? 0;
+
+    const minOrderUsd =
+      typeof (this.thufirConfig as any)?.hyperliquid?.minOrderNotionalUsd === 'number'
+        ? Number((this.thufirConfig as any).hyperliquid.minOrderNotionalUsd)
+        : 10;
+
+    const remainingDaily = (() => {
+      const limiterRemaining = this.limiter.getRemainingDaily();
+      const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+      try {
+        if (executionMode === 'paper') {
+          const paperInitialCash = this.thufirConfig.paper?.initialCashUsdc ?? 200;
+          const freeCash = getPaperPerpBookSummary(paperInitialCash).cashBalanceUsdc;
+          return Math.min(limiterRemaining, Math.max(0, freeCash));
+        } else {
+          const cashBalance = getCashBalance();
+          if (cashBalance != null && Number.isFinite(cashBalance)) {
+            return Math.min(limiterRemaining, Math.max(0, cashBalance));
+          }
+        }
+      } catch { /* fallback */ }
+      return limiterRemaining;
+    })();
+
+    const sessionContext = resolveSessionWeightContext(new Date());
+    const recentJournals = listPerpTradeJournals({ limit: 200 });
+    const perf = summarizeSignalPerformance(recentJournals, 'llm_originator');
+    const kellyFraction = computeFractionalKellyFraction({
+      expectedEdge: 0.1,
+      signalExpectancy: Math.max(0.01, perf.expectancy + 0.5),
+      signalVariance: Math.max(0.1, perf.variance),
+      sampleCount: perf.sampleCount,
+      maxFraction: Number((this.thufirConfig.autonomy as any)?.newsEntry?.maxKellyFraction ?? 0.25),
+    });
+    const baseSizeUsd = minOrderUsd * 2; // modest base for LLM originator
+    const signalAdjustedUsd = baseSizeUsd * Math.max(0.25, kellyFraction * 4) * sessionContext.sessionWeight;
+    let probeUsd = Math.min(Math.max(minOrderUsd, signalAdjustedUsd), remainingDaily);
+
+    if (probeUsd <= 0 || probeUsd < minOrderUsd) {
+      return `${symbol}: Skipped originator proposal (insufficient daily budget $${remainingDaily.toFixed(2)})`;
+    }
+
+    const adaptiveLeverageCap =
+      (getAutonomyPolicyState().leverageCapOverride) ??
+      Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
+    const targetLeverage = Math.min(3, adaptiveLeverageCap);
+
+    const riskCheck = await checkPerpRiskLimits({
+      config: this.thufirConfig,
+      symbol,
+      side,
+      size: markPrice > 0 ? probeUsd / markPrice : probeUsd,
+      leverage: targetLeverage,
+      reduceOnly: false,
+      markPrice: markPrice || null,
+      notionalUsd: probeUsd,
+      marketMaxLeverage:
+        typeof market.metadata?.maxLeverage === 'number'
+          ? (market.metadata.maxLeverage as number)
+          : null,
+    });
+
+    if (!riskCheck.allowed) {
+      return `${symbol}: Originator proposal blocked (${riskCheck.reason ?? 'perp risk limits exceeded'})`;
+    }
+
+    const limitCheck = await this.limiter.checkAndReserve(probeUsd);
+    if (!limitCheck.allowed) {
+      return `${symbol}: Originator proposal blocked (${limitCheck.reason})`;
+    }
+
+    // LLM entry gate
+    const gateCandidate = {
+      symbol,
+      side: side as 'buy' | 'sell',
+      notionalUsd: probeUsd,
+      leverage: targetLeverage,
+      edge: 0.1,
+      confidence: proposal.confidence,
+      signalClass: 'llm_originator',
+      regime: 'unknown',
+      session: sessionContext.session,
+      entryReasoning: proposal.thesisText,
+    };
+
+    if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
+      const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
+      if (gateDecision.verdict === 'reject') {
+        this.limiter.release(probeUsd);
+        return `${symbol}: Originator proposal rejected by LLM entry gate — ${gateDecision.reasoning}`;
+      }
+      if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
+        probeUsd = gateDecision.adjustedSizeUsd;
+      }
+    }
+
+    let size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+
+    const decision: TradeDecision = {
+      action: side,
+      side,
+      symbol,
+      size,
+      orderType: 'market',
+      leverage: targetLeverage,
+      reasoning: `LLM originator: ${proposal.thesisText} | confidence=${proposal.confidence.toFixed(2)} invalidation=${proposal.invalidationCondition} ttl=${proposal.suggestedTtlMinutes}min`,
+    };
+
+    const tradeResult = await this.executor.execute(market, decision);
+    if (tradeResult.executed) {
+      this.limiter.confirm(probeUsd);
+
+      // Write exit policy using proposal TTL and invalidation price
+      const ttlMs = proposal.suggestedTtlMinutes * 60_000;
+      const timeStopAtMs = now + ttlMs;
+      try {
+        const positionSide = proposal.side === 'long' ? 'long' : 'short';
+        const exitContract = buildLegacyExitContract({
+          thesis: decision.reasoning ?? `${symbol} ${positionSide} thesis`,
+          side: positionSide,
+        });
+        upsertPositionExitPolicy(
+          symbol,
+          positionSide,
+          timeStopAtMs,
+          proposal.invalidationPrice,
+          serializeExitContract(exitContract)
+        );
+      } catch { }
+
+      if (this.notify) {
+        const sideEmoji = side === 'buy' ? '📈' : '📉';
+        const mode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+        this.notify(
+          `${sideEmoji} [LLM-ORIG] ${side === 'buy' ? 'LONG' : 'SHORT'} ${symbol}` +
+          ` @ $${markPrice > 0 ? markPrice.toFixed(2) : '?'}` +
+          ` | notional=$${probeUsd.toFixed(2)} lev=${targetLeverage}x` +
+          ` | ttl=${proposal.suggestedTtlMinutes}min conf=${(proposal.confidence * 100).toFixed(0)}% mode=${mode}`
+        ).catch(() => {});
+      }
+    } else {
+      this.limiter.release(probeUsd);
+    }
+
+    return tradeResult.message;
   }
 
   private async runDiscoveryScan(input: {
