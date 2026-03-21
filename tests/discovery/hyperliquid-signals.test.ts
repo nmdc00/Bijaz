@@ -4,7 +4,7 @@ import type { ThufirConfig } from '../../src/core/config.js';
 
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: class {
-    async getMetaAndAssetCtxs() {
+    async getMergedMetaAndAssetCtxs() {
       return [
         { universe: [{ name: 'BTC' }, { name: 'ETH' }] },
         [

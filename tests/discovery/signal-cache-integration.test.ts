@@ -55,7 +55,7 @@ vi.mock('../../src/technical/prices.js', () => ({
 
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: vi.fn(() => ({
-    getMetaAndAssetCtxs: mockGetMetaAndAssetCtxs,
+    getMergedMetaAndAssetCtxs: mockGetMetaAndAssetCtxs,
     getFundingHistory: mockGetFundingHistory,
     getRecentTrades: mockGetRecentTrades,
   })),
