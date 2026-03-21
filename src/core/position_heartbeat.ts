@@ -382,17 +382,20 @@ export class PositionHeartbeatService {
 
     let orderSize: number;
     let decisionAction: 'close_entirely' | 'take_partial_profit';
-    let notifyMsg: string;
+    let successMsg: string;
+    let failMsg: string;
 
     if (action === 'close') {
       orderSize = pos.size;
       decisionAction = 'close_entirely';
       const roe = pos.roePct != null ? `${pos.roePct.toFixed(2)}%` : 'n/a';
-      notifyMsg = `⛔ [Heartbeat] Closed ${pos.symbol} (${pos.side}) — trigger: ${fired.join(', ')}. ROE: ${roe}.`;
+      successMsg = `⛔ [Heartbeat] Closed ${pos.symbol} (${pos.side}) — trigger: ${fired.join(', ')}. ROE: ${roe}.`;
+      failMsg = `❌ [Heartbeat] FAILED to close ${pos.symbol} (${pos.side}) — trigger: ${fired.join(', ')}.`;
     } else {
       orderSize = pos.size * 0.5;
       decisionAction = 'take_partial_profit';
-      notifyMsg = `⚠️ [Heartbeat] Reduced ${pos.symbol} (${pos.side}) by 50% — trigger: ${fired.join(', ')}.`;
+      successMsg = `⚠️ [Heartbeat] Reduced ${pos.symbol} (${pos.side}) by 50% — trigger: ${fired.join(', ')}.`;
+      failMsg = `❌ [Heartbeat] FAILED to reduce ${pos.symbol} (${pos.side}) — trigger: ${fired.join(', ')}.`;
     }
 
     const tool = await this.toolExec(
@@ -405,6 +408,12 @@ export class PositionHeartbeatService {
       `PositionHeartbeat: ${decisionAction} ${pos.symbol} (${pos.side}) size=${orderSize} ` +
       `triggers=[${fired.join(',')}] outcome=${tool.success ? 'ok' : 'failed'}`
     );
+
+    if (!tool.success) {
+      this.logger.warn(
+        `PositionHeartbeat: order failed for ${pos.symbol} — trigger: ${fired.join(',')}. Error: ${tool.error ?? 'unknown'}`
+      );
+    }
 
     recordPositionHeartbeatDecision({
       kind: 'position_heartbeat_journal',
@@ -422,6 +431,9 @@ export class PositionHeartbeatService {
 
     if (this.notify) {
       try {
+        const notifyMsg = tool.success
+          ? successMsg
+          : `${failMsg} Reason: ${tool.error ?? 'unknown'}`;
         await this.notify(notifyMsg);
       } catch (err) {
         this.logger.warn(`PositionHeartbeat: notify failed: ${stringifyError(err)}`);
