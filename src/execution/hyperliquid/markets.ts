@@ -67,6 +67,11 @@ export class HyperliquidMarketClient {
         this.marketMetaCache = { loadedAtMs: Date.now(), value };
         return value;
       })
+      .catch((err) => {
+        // Stale-if-error: if a refresh fails (e.g. rate-limit), return the last known data.
+        if (this.marketMetaCache) return this.marketMetaCache.value;
+        throw err;
+      })
       .finally(() => {
         this.inflightMarketMeta = null;
       });
@@ -85,6 +90,11 @@ export class HyperliquidMarketClient {
       .then((value) => {
         this.midsCache = { loadedAtMs: Date.now(), value };
         return value;
+      })
+      .catch((err) => {
+        // Stale-if-error: if a refresh fails (e.g. rate-limit), return the last known data.
+        if (this.midsCache) return this.midsCache.value;
+        throw err;
       })
       .finally(() => {
         this.inflightMids = null;

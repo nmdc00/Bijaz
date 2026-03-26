@@ -79,6 +79,27 @@ describe('HyperliquidMarketClient cache', () => {
     });
   });
 
+  it('returns stale data when refresh fails (stale-if-error)', async () => {
+    process.env.THUFIR_MARKET_MIDS_CACHE_TTL_MS = '1000';
+    process.env.THUFIR_MARKET_META_CACHE_TTL_MS = '1000';
+    const { HyperliquidMarketClient } = await import('../../src/execution/hyperliquid/markets.js');
+    const client = new HyperliquidMarketClient({ hyperliquid: { enabled: true } } as any);
+
+    // Warm the cache successfully
+    await client.getMarket('BTC');
+    expect(getAllMidsMock).toHaveBeenCalledTimes(1);
+
+    // Advance past TTL and simulate a rate-limit error
+    vi.setSystemTime(new Date('2026-02-17T00:00:02.000Z'));
+    getAllMidsMock.mockRejectedValue(new Error('429 Too Many Requests'));
+    listPerpMarketsMock.mockRejectedValue(new Error('429 Too Many Requests'));
+
+    // Should still resolve using stale cache, not throw
+    const market = await client.getMarket('BTC');
+    expect(market.symbol).toBe('BTC');
+    expect(market.markPrice).toBe(100000);
+  });
+
   it('blends main and HIP-3 dex markets into low-limit listings', async () => {
     listPerpMarketsMock.mockResolvedValue([
       { symbol: 'BTC', assetId: 0, maxLeverage: 10, szDecimals: 3, dex: null },
