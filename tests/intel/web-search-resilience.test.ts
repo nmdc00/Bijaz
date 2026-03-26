@@ -259,7 +259,8 @@ describe('web search provider resilience', () => {
     expect(url).toBe('https://api.tavily.com/search');
     expect(init.method).toBe('POST');
     const headers = init.headers as Record<string, string>;
-    expect(headers['Authorization']).toBeUndefined();
+    // Both auth methods sent for maximum Tavily API version compatibility
+    expect(headers['Authorization']).toBe('Bearer tvly-test-key');
     const body = JSON.parse(init.body as string);
     expect(body.query).toBe('btc news');
     expect(body.api_key).toBe('tvly-test-key');
