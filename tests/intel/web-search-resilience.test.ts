@@ -254,15 +254,15 @@ describe('web search provider resilience', () => {
     expect(result.data.results[0]?.url).toBe('https://example.com/btc');
     expect(result.data.results[0]?.snippet).toBe('Bitcoin update');
     expect(result.data.results[0]?.date).toBe('2024-01-01');
-    // Tavily uses POST
+    // Tavily uses POST with api_key in request body (not Authorization header)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.tavily.com/search');
     expect(init.method).toBe('POST');
     const headers = init.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer tvly-test-key');
+    expect(headers['Authorization']).toBeUndefined();
     const body = JSON.parse(init.body as string);
     expect(body.query).toBe('btc news');
-    expect(body.api_key).toBeUndefined();
+    expect(body.api_key).toBe('tvly-test-key');
   });
 
   it('tavily is skipped when API key is missing and falls back to next provider', async () => {
