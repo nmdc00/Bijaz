@@ -745,15 +745,6 @@ Just type naturally to chat about markets, risks, or positioning.
       /\b(find|look\s+for|scan|search|identify)\b.*\b(trade|trades|opportunit|edge)\b/i.test(message) ||
       /\b(start|begin|run|kick\s*off)\b.*\b(trading|auto|autonomous)\b/i.test(message);
 
-    // Require imperative phrasing — questions like "why did you open this position"
-    // must not trigger the trade-placement path.
-    const wantsPlaceTradeNow =
-      /\b(look\s+at\s+the\s+market|check\s+the\s+market)\b.*\b(place|execute|open|enter)\b.*\b(trade|order|position)\b/i.test(
-        message
-      ) ||
-      /\b(please\s+)?(place|execute|make)\b.*\b(a\s+)?(trade|order|position)\b/i.test(message) ||
-      /\b(open|enter)\b\s+(a\s+|me\s+a\s+|us\s+a\s+)?(trade|order|long|short|position)\b/i.test(message);
-
     if (wantsAutoScan) {
       if (!autoEnabled) {
         return 'Autonomous trading is disabled. Enable with /fullauto on and ensure autonomy.enabled: true.';
@@ -763,23 +754,6 @@ Just type naturally to chat about markets, risks, or positioning.
       // so it can analyze the market with its tools and decide what to do.
       if (scanResult.includes('No expressions met') || scanResult.includes('No discovery expressions')) {
         this.logger.info('Autonomous scan found nothing above threshold; falling through to orchestrator');
-        return null;
-      }
-      return scanResult;
-    }
-
-    // Natural-language "place a trade" forces a one-shot scan + execution (best expression).
-    if (wantsPlaceTradeNow) {
-      if (!autonomyEnabled) {
-        return 'Autonomous trading is disabled in config. Set `autonomy.enabled: true`.';
-      }
-      if ((this.config.execution?.mode ?? 'paper') !== 'live') {
-        return 'Live execution is not enabled. Set `execution.mode: live`.';
-      }
-      const scanResult = await this.autonomous.runScan({ forceExecute: true, maxTrades: 1 });
-      // If nothing actionable even with forced execution, let the orchestrator handle it
-      if (scanResult.includes('No expressions met') || scanResult.includes('No discovery expressions')) {
-        this.logger.info('Forced scan found nothing; falling through to orchestrator');
         return null;
       }
       return scanResult;
