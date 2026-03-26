@@ -286,6 +286,7 @@ export class ConversationHandler {
   private orchestratorIdentity?: AgentIdentity;
   private liveAccountSnapshotCache = new Map<string, { ts: number; text: string }>();
   private proactiveSnapshotCache = new Map<string, CachedProactiveSnapshot>();
+  private proactiveFailureCache = new Map<string, number>(); // userId → last failure ts
 
   constructor(
     llm: LlmClient,
@@ -706,6 +707,15 @@ export class ConversationHandler {
     snapshot?: ProactiveRefreshSnapshot;
   }> {
     const settings = this.getProactiveRefreshSettings();
+    const now = Date.now();
+    const ttlMs = Math.max(0, settings.ttlSeconds) * 1000;
+
+    // If we failed recently, skip the refresh rather than retrying and spamming the user.
+    const lastFailure = this.proactiveFailureCache.get(userId);
+    if (lastFailure !== undefined && now - lastFailure < ttlMs) {
+      return { failClosed: false, contextText: '' };
+    }
+
     const cached = this.proactiveSnapshotCache.get(userId);
     const outcome = await runProactiveRefresh({
       message,
@@ -715,7 +725,10 @@ export class ConversationHandler {
     });
 
     if (outcome.snapshot) {
-      this.proactiveSnapshotCache.set(userId, { ts: Date.now(), snapshot: outcome.snapshot });
+      this.proactiveSnapshotCache.set(userId, { ts: now, snapshot: outcome.snapshot });
+    }
+    if (outcome.failClosed) {
+      this.proactiveFailureCache.set(userId, now);
     }
 
     return {
