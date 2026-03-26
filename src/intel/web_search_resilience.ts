@@ -539,6 +539,7 @@ async function searchViaTavily(
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         api_key: apiKey,
@@ -548,7 +549,13 @@ async function searchViaTavily(
       }),
     });
     if (!response.ok) {
-      const message = `Tavily: ${response.status}`;
+      let detail = '';
+      try {
+        detail = ` | ${await response.text()}`;
+      } catch {
+        // ignore
+      }
+      const message = `Tavily: ${response.status}${detail}`;
       return {
         ok: false,
         failure: {
