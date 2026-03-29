@@ -62,6 +62,18 @@ function normalizeHyperliquidSymbol(symbol: string): string {
   return base ?? stripped;
 }
 
+// HL candleSnapshot API requires lowercase prefix: "FLX:GOLD" → "flx:GOLD", "BTC/USDT" → "BTC"
+function toCandleSnapshotCoin(symbol: string): string {
+  if (!symbol) return symbol;
+  // Strip slash-quote suffix (e.g. "FLX:GOLD/USDC" → "FLX:GOLD", "BTC/USDT" → "BTC")
+  const [withoutQuote] = symbol.split('/');
+  const s = withoutQuote ?? symbol;
+  const colonIdx = s.indexOf(':');
+  if (colonIdx < 0) return s;
+  // Lowercase the provider prefix only (e.g. "FLX:GOLD" → "flx:GOLD")
+  return s.slice(0, colonIdx).toLowerCase() + ':' + s.slice(colonIdx + 1);
+}
+
 type OHLCVCandle = { timestamp: number; open: number; high: number; low: number; close: number; volume: number };
 
 async function fetchHlCandles(config: ThufirConfig, coin: string, limit: number): Promise<OHLCVCandle[]> {
@@ -86,7 +98,7 @@ export async function signalPriceVolRegime(
   const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
   if (cached !== undefined) return cached;
 
-  const coin = normalizeHyperliquidSymbol(symbol);
+  const coin = toCandleSnapshotCoin(symbol);
   let candles: OHLCVCandle[];
   try {
     candles = await fetchHlCandles(config, coin, 80);
@@ -140,7 +152,7 @@ export async function signalCrossAssetDivergence(
   const seriesRaw = await Promise.all(
     symbols.map(async (symbol) => {
       try {
-        const coin = normalizeHyperliquidSymbol(symbol);
+        const coin = toCandleSnapshotCoin(symbol);
         const candles = await fetchHlCandles(config, coin, 40);
         const closes = candles.map((c) => c.close);
         const trend = pctChange(closes[0]!, closes[closes.length - 1]!);
