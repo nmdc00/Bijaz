@@ -14,14 +14,25 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ---------------------------------------------------------------------------
 
 const {
-  mockGetCandles,
+  mockCandleSnapshot,
   mockGetMetaAndAssetCtxs,
   mockGetFundingHistory,
   mockGetRecentTrades,
   mockBuildReflexivitySetup,
 } = vi.hoisted(() => ({
-  mockGetCandles: vi.fn(async (symbol: string) =>
-    Array.from({ length: 80 }, (_, i) => ({ close: 40000 + i * 10 + symbol.length }))
+  mockCandleSnapshot: vi.fn(async ({ coin }: { coin: string }) =>
+    Array.from({ length: 80 }, (_, i) => ({
+      t: Date.now() - (80 - i) * 3_600_000,
+      T: Date.now() - (80 - i - 1) * 3_600_000,
+      s: coin,
+      i: '1h',
+      o: String(40000 + i * 10 + coin.length),
+      h: String(40010 + i * 10 + coin.length),
+      l: String(39990 + i * 10 + coin.length),
+      c: String(40000 + i * 10 + coin.length),
+      v: '100',
+      n: 10,
+    }))
   ),
   mockGetMetaAndAssetCtxs: vi.fn(async () => [
     { universe: [{ name: 'BTC' }, { name: 'ETH' }] },
@@ -49,12 +60,9 @@ const {
   })),
 }));
 
-vi.mock('../../src/technical/prices.js', () => ({
-  PriceService: vi.fn(() => ({ getCandles: mockGetCandles })),
-}));
-
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: vi.fn(() => ({
+    getInfoClient: () => ({ candleSnapshot: mockCandleSnapshot }),
     getMergedMetaAndAssetCtxs: mockGetMetaAndAssetCtxs,
     getFundingHistory: mockGetFundingHistory,
     getRecentTrades: mockGetRecentTrades,
@@ -86,7 +94,7 @@ const baseConfig = {} as any;
 // ---------------------------------------------------------------------------
 
 function resetMocks(): void {
-  mockGetCandles.mockClear();
+  mockCandleSnapshot.mockClear();
   mockGetMetaAndAssetCtxs.mockClear();
   mockGetFundingHistory.mockClear();
   mockGetRecentTrades.mockClear();
@@ -106,85 +114,96 @@ describe('signal cache integration — deduplication across calls', () => {
   // ─── signalPriceVolRegime ────────────────────────────────────────────────
 
   describe('signalPriceVolRegime', () => {
-    it('first call hits PriceService; second call returns cached result', async () => {
+    it('first call hits HL candleSnapshot; second call returns cached result', async () => {
       const first = await signalPriceVolRegime(baseConfig, 'BTC/USDT');
-      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
       expect(first).not.toBeNull();
 
       const second = await signalPriceVolRegime(baseConfig, 'BTC/USDT');
-      // Must NOT call getCandles again — cache hit
-      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+      // Must NOT call candleSnapshot again — cache hit
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
       expect(second).toEqual(first);
     });
 
     it('different symbols have independent cache entries', async () => {
       await signalPriceVolRegime(baseConfig, 'BTC/USDT');
       await signalPriceVolRegime(baseConfig, 'ETH/USDT');
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
 
       // Calling both again → still 2 total (both cached)
       await signalPriceVolRegime(baseConfig, 'BTC/USDT');
       await signalPriceVolRegime(baseConfig, 'ETH/USDT');
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
     });
 
     it('clearSignalCache() invalidates the entry so next call is a miss', async () => {
       await signalPriceVolRegime(baseConfig, 'BTC/USDT');
-      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
 
       clearSignalCache();
 
       await signalPriceVolRegime(baseConfig, 'BTC/USDT');
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
     });
 
     it('returns null and does NOT cache when candles are insufficient (<30)', async () => {
-      mockGetCandles.mockResolvedValueOnce(
-        Array.from({ length: 20 }, (_, i) => ({ close: 40000 + i }))
+      mockCandleSnapshot.mockResolvedValueOnce(
+        Array.from({ length: 20 }, (_, i) => ({
+          t: Date.now() - (20 - i) * 3_600_000,
+          T: Date.now() - (20 - i - 1) * 3_600_000,
+          s: 'THIN',
+          i: '1h',
+          o: String(100 + i),
+          h: String(101 + i),
+          l: String(99 + i),
+          c: String(100 + i),
+          v: '10',
+          n: 1,
+        }))
       );
       const result = await signalPriceVolRegime(baseConfig, 'THIN/USDT');
       expect(result).toBeNull();
 
       // Next call should NOT be from cache — client called again
       await signalPriceVolRegime(baseConfig, 'THIN/USDT');
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
     });
 
     it('returns null and caches it when candle fetch throws for an unsupported symbol', async () => {
-      mockGetCandles.mockRejectedValueOnce(new Error('BadSymbol: binance does not have market symbol HYPE/USDT'));
+      mockCandleSnapshot.mockRejectedValueOnce(new Error('unknown coin HYPE'));
 
       const first = await signalPriceVolRegime(baseConfig, 'HYPE/USDT');
       expect(first).toBeNull();
-      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
 
       const second = await signalPriceVolRegime(baseConfig, 'HYPE/USDT');
       expect(second).toBeNull();
-      expect(mockGetCandles).toHaveBeenCalledTimes(1);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 
   // ─── signalCrossAssetDivergence ─────────────────────────────────────────
 
   describe('signalCrossAssetDivergence', () => {
-    it('first call hits PriceService for each symbol; second call is cached', async () => {
+    it('first call hits HL candleSnapshot for each symbol; second call is cached', async () => {
       const symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'];
       const first = await signalCrossAssetDivergence(baseConfig, symbols);
-      expect(mockGetCandles).toHaveBeenCalledTimes(3);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(3);
       expect(Array.isArray(first)).toBe(true);
 
       const second = await signalCrossAssetDivergence(baseConfig, symbols);
       // No additional calls — cache hit
-      expect(mockGetCandles).toHaveBeenCalledTimes(3);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(3);
       expect(second).toEqual(first);
     });
 
     it('cache key is order-independent (sorted symbols)', async () => {
       await signalCrossAssetDivergence(baseConfig, ['ETH/USDT', 'BTC/USDT']);
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
 
       // Reversed order → same cache key
       await signalCrossAssetDivergence(baseConfig, ['BTC/USDT', 'ETH/USDT']);
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
     });
 
     it('clears correctly and forces a new fetch', async () => {
@@ -192,47 +211,69 @@ describe('signal cache integration — deduplication across calls', () => {
       await signalCrossAssetDivergence(baseConfig, symbols);
       clearSignalCache();
       await signalCrossAssetDivergence(baseConfig, symbols);
-      expect(mockGetCandles).toHaveBeenCalledTimes(4); // 2 + 2
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(4); // 2 + 2
     });
 
     it('returns [] for fewer than 2 symbols without hitting the client', async () => {
       const result = await signalCrossAssetDivergence(baseConfig, ['BTC/USDT']);
       expect(result).toEqual([]);
-      expect(mockGetCandles).not.toHaveBeenCalled();
+      expect(mockCandleSnapshot).not.toHaveBeenCalled();
     });
 
     it('skips unsupported symbols when candle fetch throws and caches the reduced result', async () => {
-      mockGetCandles.mockImplementation(async (symbol: string) => {
-        if (symbol === 'HYPE/USDT') {
-          throw new Error('BadSymbol: binance does not have market symbol HYPE/USDT');
+      mockCandleSnapshot.mockImplementation(async ({ coin }: { coin: string }) => {
+        if (coin === 'HYPE') {
+          throw new Error('unknown coin HYPE');
         }
-        return Array.from({ length: 40 }, (_, i) => ({ close: 40000 + i * 10 + symbol.length }));
+        return Array.from({ length: 40 }, (_, i) => ({
+          t: Date.now() - (40 - i) * 3_600_000,
+          T: Date.now() - (40 - i - 1) * 3_600_000,
+          s: coin,
+          i: '1h',
+          o: String(40000 + i * 10 + coin.length),
+          h: String(40010 + i * 10),
+          l: String(39990 + i * 10),
+          c: String(40000 + i * 10 + coin.length),
+          v: '100',
+          n: 10,
+        }));
       });
 
       const first = await signalCrossAssetDivergence(baseConfig, ['BTC/USDT', 'ETH/USDT', 'HYPE/USDT']);
       expect(Array.isArray(first)).toBe(true);
-      expect(mockGetCandles).toHaveBeenCalledTimes(3);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(3);
 
       const second = await signalCrossAssetDivergence(baseConfig, ['ETH/USDT', 'HYPE/USDT', 'BTC/USDT']);
       expect(second).toEqual(first);
-      expect(mockGetCandles).toHaveBeenCalledTimes(3);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(3);
     });
 
     it('returns [] and caches it when fewer than 2 supported symbols remain after fetch failures', async () => {
-      mockGetCandles.mockImplementation(async (symbol: string) => {
-        if (symbol !== 'BTC/USDT') {
-          throw new Error(`BadSymbol: unsupported ${symbol}`);
+      mockCandleSnapshot.mockImplementation(async ({ coin }: { coin: string }) => {
+        if (coin !== 'BTC') {
+          throw new Error(`unknown coin ${coin}`);
         }
-        return Array.from({ length: 40 }, (_, i) => ({ close: 40000 + i }));
+        return Array.from({ length: 40 }, (_, i) => ({
+          t: Date.now() - (40 - i) * 3_600_000,
+          T: Date.now() - (40 - i - 1) * 3_600_000,
+          s: coin,
+          i: '1h',
+          o: String(40000 + i),
+          h: String(40010 + i),
+          l: String(39990 + i),
+          c: String(40000 + i),
+          v: '100',
+          n: 10,
+        }));
       });
 
       const first = await signalCrossAssetDivergence(baseConfig, ['BTC/USDT', 'HYPE/USDT']);
       expect(first).toEqual([]);
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
 
       const second = await signalCrossAssetDivergence(baseConfig, ['HYPE/USDT', 'BTC/USDT']);
       expect(second).toEqual([]);
-      expect(mockGetCandles).toHaveBeenCalledTimes(2);
+      expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -343,23 +384,23 @@ describe('signal cache integration — deduplication across calls', () => {
       vi.useFakeTimers();
       try {
         clearSignalCache();
-        mockGetCandles.mockClear();
+        mockCandleSnapshot.mockClear();
 
         const shortTtlConfig = { discovery: { signalCacheTtlSeconds: 1 } } as any;
 
         // First call — cache miss, client invoked
         await signalPriceVolRegime(shortTtlConfig, 'BTC/USDT');
-        expect(mockGetCandles).toHaveBeenCalledTimes(1);
+        expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
 
         // Still within TTL → cache hit
         vi.advanceTimersByTime(500);
         await signalPriceVolRegime(shortTtlConfig, 'BTC/USDT');
-        expect(mockGetCandles).toHaveBeenCalledTimes(1);
+        expect(mockCandleSnapshot).toHaveBeenCalledTimes(1);
 
         // Past TTL → cache miss, client invoked again
         vi.advanceTimersByTime(600);
         await signalPriceVolRegime(shortTtlConfig, 'BTC/USDT');
-        expect(mockGetCandles).toHaveBeenCalledTimes(2);
+        expect(mockCandleSnapshot).toHaveBeenCalledTimes(2);
       } finally {
         vi.useRealTimers();
       }
