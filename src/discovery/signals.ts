@@ -1,6 +1,5 @@
 import type { ThufirConfig } from '../core/config.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
-import { PriceService } from '../technical/prices.js';
 import type { SignalPrimitive } from './types.js';
 import { buildReflexivitySetup } from '../reflexivity/fragility.js';
 import { TTLCache } from './signal_cache.js';
@@ -63,6 +62,22 @@ function normalizeHyperliquidSymbol(symbol: string): string {
   return base ?? stripped;
 }
 
+type OHLCVCandle = { timestamp: number; open: number; high: number; low: number; close: number; volume: number };
+
+async function fetchHlCandles(config: ThufirConfig, coin: string, limit: number): Promise<OHLCVCandle[]> {
+  const startTime = Date.now() - limit * 60 * 60 * 1000;
+  const client = new HyperliquidClient(config);
+  const raw = await client.getInfoClient().candleSnapshot({ coin, interval: '1h', startTime });
+  return raw.map((c) => ({
+    timestamp: c.t,
+    open: Number(c.o),
+    high: Number(c.h),
+    low: Number(c.l),
+    close: Number(c.c),
+    volume: Number(c.v),
+  }));
+}
+
 export async function signalPriceVolRegime(
   config: ThufirConfig,
   symbol: string
@@ -71,14 +86,10 @@ export async function signalPriceVolRegime(
   const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
   if (cached !== undefined) return cached;
 
-  const priceService = new PriceService(config);
-  // Normalize away DEX prefix and quote suffix before hitting the price source
-  // e.g. "FLX:GOLD" → "GOLD/USDT", "km:USENERGY" → "USENERGY/USDT", "BTC/USDC" → "BTC/USDT"
   const coin = normalizeHyperliquidSymbol(symbol);
-  const priceSymbol = `${coin}/USDT`;
-  let candles: Awaited<ReturnType<typeof priceService.getCandles>>;
+  let candles: OHLCVCandle[];
   try {
-    candles = await priceService.getCandles(priceSymbol, '1h', 80);
+    candles = await fetchHlCandles(config, coin, 80);
   } catch {
     signalCache.set(cacheKey, null, getSignalCacheTtlMs(config));
     return null;
@@ -124,13 +135,13 @@ export async function signalCrossAssetDivergence(
   const cacheKey = `cross_asset:${[...symbols].sort().join(',')}`;
   const cached = signalCache.get(cacheKey) as SignalPrimitive[] | undefined;
   if (cached !== undefined) return cached;
-  const priceService = new PriceService(config);
   const results: SignalPrimitive[] = [];
 
   const seriesRaw = await Promise.all(
     symbols.map(async (symbol) => {
       try {
-        const candles = await priceService.getCandles(symbol, '1h', 40);
+        const coin = normalizeHyperliquidSymbol(symbol);
+        const candles = await fetchHlCandles(config, coin, 40);
         const closes = candles.map((c) => c.close);
         const trend = pctChange(closes[0]!, closes[closes.length - 1]!);
         return { symbol, trend };
