@@ -543,7 +543,7 @@ async function searchViaTavily(
       },
       body: JSON.stringify({
         api_key: apiKey,
-        query,
+        query: query.slice(0, 400),
         max_results: limit,
         search_depth: 'basic',
       }),

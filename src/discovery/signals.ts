@@ -55,8 +55,12 @@ function toNumber(value: unknown): number {
 
 function normalizeHyperliquidSymbol(symbol: string): string {
   if (!symbol) return symbol;
-  const [base] = symbol.split('/');
-  return base ?? symbol;
+  // Strip DEX provider prefix (e.g. "FLX:GOLD" → "GOLD", "km:USENERGY" → "USENERGY")
+  const colonIdx = symbol.indexOf(':');
+  const stripped = colonIdx >= 0 ? symbol.slice(colonIdx + 1) : symbol;
+  // Strip quote currency (e.g. "GOLD/USDT" → "GOLD")
+  const [base] = stripped.split('/');
+  return base ?? stripped;
 }
 
 export async function signalPriceVolRegime(
@@ -68,9 +72,13 @@ export async function signalPriceVolRegime(
   if (cached !== undefined) return cached;
 
   const priceService = new PriceService(config);
+  // Normalize away DEX prefix and quote suffix before hitting the price source
+  // e.g. "FLX:GOLD" → "GOLD/USDT", "km:USENERGY" → "USENERGY/USDT", "BTC/USDC" → "BTC/USDT"
+  const coin = normalizeHyperliquidSymbol(symbol);
+  const priceSymbol = `${coin}/USDT`;
   let candles: Awaited<ReturnType<typeof priceService.getCandles>>;
   try {
-    candles = await priceService.getCandles(symbol, '1h', 80);
+    candles = await priceService.getCandles(priceSymbol, '1h', 80);
   } catch {
     signalCache.set(cacheKey, null, getSignalCacheTtlMs(config));
     return null;
