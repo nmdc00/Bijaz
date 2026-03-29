@@ -1,42 +1,46 @@
 /**
  * Regression tests for DEX-prefixed symbol normalization in signal functions.
  *
- * Bug: "FLX:GOLD" and "km:USENERGY" all returned "Insufficient data" because
- * normalizeHyperliquidSymbol() only stripped "/quote" suffixes, not "PREFIX:" prefixes,
- * and signalPriceVolRegime never normalized at all before hitting Binance.
+ * Root cause: signalPriceVolRegime used ccxt/Binance (PriceService) which has no
+ * knowledge of Hyperliquid-native markets like FLX:GOLD or km:USENERGY.
+ * normalizeHyperliquidSymbol also failed to strip PREFIX: before the slash suffix.
  *
- * Fix: normalizeHyperliquidSymbol now strips the colon prefix first, then the slash suffix.
- *      signalPriceVolRegime now calls normalizeHyperliquidSymbol and appends "/USDT".
+ * Fix:
+ * - normalizeHyperliquidSymbol strips colon prefix first, then slash suffix
+ * - signalPriceVolRegime now uses the Hyperliquid candleSnapshot API (not Binance)
+ * - signalCrossAssetDivergence same
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ThufirConfig } from '../../src/core/config.js';
 
-// ── PriceService mock ────────────────────────────────────────────────────────
-// Binance knows bare "GOLD/USDT" but not "FLX:GOLD" or "km:USENERGY"
-// (USENERGY is a HL-native equity proxy — no Binance equivalent)
-const BINANCE_KNOWN = new Set(['GOLD/USDT', 'GOLD']);
-vi.mock('../../src/technical/prices.js', () => ({
-  PriceService: class {
-    async getCandles(symbol: string) {
-      if (!BINANCE_KNOWN.has(symbol)) {
-        throw new Error(`binance does not have market symbol ${symbol}`);
-      }
-      return Array.from({ length: 80 }, (_, i) => ({
-        timestamp: Date.now() - (80 - i) * 3_600_000,
-        open: 2000,
-        high: 2010,
-        low: 1990,
-        close: 2000 + i * 0.1,
-        volume: 1000,
-      }));
-    }
-  },
-}));
+// ── Fake candle factory ──────────────────────────────────────────────────────
+function makeCandles(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    t: Date.now() - (n - i) * 3_600_000,
+    T: Date.now() - (n - i - 1) * 3_600_000,
+    s: 'GOLD',
+    i: '1h',
+    o: String(2000 + i * 0.05),
+    h: String(2010 + i * 0.05),
+    l: String(1990 + i * 0.05),
+    c: String(2000 + i * 0.1),
+    v: '1000',
+    n: 50,
+  }));
+}
 
 // ── HyperliquidClient mock ───────────────────────────────────────────────────
-// Universe stores bare names ("GOLD", "USENERGY") — not "FLX:GOLD" / "km:USENERGY"
+// candleSnapshot returns data for bare coin names, throws for prefixed ones
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: class {
+    getInfoClient() {
+      return {
+        candleSnapshot: async ({ coin }: { coin: string }) => {
+          if (coin.includes(':')) throw new Error(`unknown coin ${coin}`);
+          return makeCandles(80);
+        },
+      };
+    }
     async getMergedMetaAndAssetCtxs() {
       return [
         { universe: [{ name: 'GOLD' }, { name: 'USENERGY' }] },
@@ -50,7 +54,6 @@ vi.mock('../../src/execution/hyperliquid/client.js', () => ({
       return [{ fundingRate: '0.0001' }, { fundingRate: '0.0002' }];
     }
     async getRecentTrades(coin: string) {
-      // HL trades API expects bare coin names — returns empty for anything with a colon
       if (coin.includes(':')) return [];
       return [
         { px: '2000', sz: '1', side: 'B' },
@@ -72,21 +75,34 @@ const config = {} as ThufirConfig;
 beforeEach(() => clearSignalCache());
 
 // ── signalPriceVolRegime ─────────────────────────────────────────────────────
-describe('signalPriceVolRegime — DEX prefix normalization', () => {
-  it('resolves FLX:GOLD → GOLD/USDT on Binance and returns a signal', async () => {
+describe('signalPriceVolRegime — DEX prefix normalization via HL candles', () => {
+  it('resolves FLX:GOLD → GOLD and fetches HL candles successfully', async () => {
     const result = await signalPriceVolRegime(config, 'FLX:GOLD');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('price_vol_regime');
-    expect(result?.symbol).toBe('FLX:GOLD'); // original symbol preserved on output
+    expect(result?.symbol).toBe('FLX:GOLD');
   });
 
-  it('still returns null for km:USENERGY (Binance has no USENERGY — separate data gap)', async () => {
+  it('resolves FLX:GOLD/USDC → GOLD and fetches HL candles successfully', async () => {
+    const result = await signalPriceVolRegime(config, 'FLX:GOLD/USDC');
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('price_vol_regime');
+  });
+
+  it('resolves km:USENERGY → USENERGY and fetches HL candles successfully', async () => {
     const result = await signalPriceVolRegime(config, 'km:USENERGY');
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('price_vol_regime');
   });
 
-  it('returns a signal for bare GOLD/USDT (unchanged behaviour)', async () => {
-    const result = await signalPriceVolRegime(config, 'GOLD/USDT');
+  it('resolves km:USENERGY/USDC → USENERGY and fetches HL candles successfully', async () => {
+    const result = await signalPriceVolRegime(config, 'km:USENERGY/USDC');
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('price_vol_regime');
+  });
+
+  it('returns a signal for bare GOLD (unchanged behaviour)', async () => {
+    const result = await signalPriceVolRegime(config, 'GOLD');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('price_vol_regime');
   });
@@ -94,20 +110,26 @@ describe('signalPriceVolRegime — DEX prefix normalization', () => {
 
 // ── signalHyperliquidFundingOISkew ───────────────────────────────────────────
 describe('signalHyperliquidFundingOISkew — DEX prefix normalization', () => {
-  it('resolves FLX:GOLD → GOLD and finds it in the HL universe', async () => {
+  it('resolves FLX:GOLD → GOLD', async () => {
     const result = await signalHyperliquidFundingOISkew(config, 'FLX:GOLD');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('funding_oi_skew');
   });
 
-  it('resolves km:USENERGY → USENERGY and finds it in the HL universe', async () => {
+  it('resolves FLX:GOLD/USDC → GOLD', async () => {
+    const result = await signalHyperliquidFundingOISkew(config, 'FLX:GOLD/USDC');
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('funding_oi_skew');
+  });
+
+  it('resolves km:USENERGY → USENERGY', async () => {
     const result = await signalHyperliquidFundingOISkew(config, 'km:USENERGY');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('funding_oi_skew');
   });
 
-  it('returns a signal for bare GOLD (unchanged behaviour)', async () => {
-    const result = await signalHyperliquidFundingOISkew(config, 'GOLD');
+  it('resolves km:USENERGY/USDC → USENERGY', async () => {
+    const result = await signalHyperliquidFundingOISkew(config, 'km:USENERGY/USDC');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('funding_oi_skew');
   });
@@ -115,20 +137,26 @@ describe('signalHyperliquidFundingOISkew — DEX prefix normalization', () => {
 
 // ── signalHyperliquidOrderflowImbalance ──────────────────────────────────────
 describe('signalHyperliquidOrderflowImbalance — DEX prefix normalization', () => {
-  it('resolves FLX:GOLD → GOLD and fetches trades successfully', async () => {
+  it('resolves FLX:GOLD → GOLD and fetches trades', async () => {
     const result = await signalHyperliquidOrderflowImbalance(config, 'FLX:GOLD');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('orderflow_imbalance');
   });
 
-  it('resolves km:USENERGY → USENERGY and fetches trades successfully', async () => {
+  it('resolves FLX:GOLD/USDC → GOLD', async () => {
+    const result = await signalHyperliquidOrderflowImbalance(config, 'FLX:GOLD/USDC');
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('orderflow_imbalance');
+  });
+
+  it('resolves km:USENERGY → USENERGY', async () => {
     const result = await signalHyperliquidOrderflowImbalance(config, 'km:USENERGY');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('orderflow_imbalance');
   });
 
-  it('returns a signal for bare GOLD (unchanged behaviour)', async () => {
-    const result = await signalHyperliquidOrderflowImbalance(config, 'GOLD');
+  it('resolves km:USENERGY/USDC → USENERGY', async () => {
+    const result = await signalHyperliquidOrderflowImbalance(config, 'km:USENERGY/USDC');
     expect(result).not.toBeNull();
     expect(result?.kind).toBe('orderflow_imbalance');
   });
