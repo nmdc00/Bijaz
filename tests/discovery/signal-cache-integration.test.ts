@@ -312,6 +312,20 @@ describe('signal cache integration — deduplication across calls', () => {
       await signalHyperliquidFundingOISkew(baseConfig, 'BTC');
       expect(mockGetMetaAndAssetCtxs).toHaveBeenCalledTimes(2);
     });
+
+    it('treats Hyperliquid 429s as temporary null results and caches the cooldown', async () => {
+      mockGetMetaAndAssetCtxs.mockRejectedValueOnce(
+        Object.assign(new Error('429 Too Many Requests - null'), { response: { status: 429 } })
+      );
+
+      const first = await signalHyperliquidFundingOISkew(baseConfig, 'BTC');
+      expect(first).toBeNull();
+      expect(mockGetMetaAndAssetCtxs).toHaveBeenCalledTimes(1);
+
+      const second = await signalHyperliquidFundingOISkew(baseConfig, 'BTC');
+      expect(second).toBeNull();
+      expect(mockGetMetaAndAssetCtxs).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ─── signalHyperliquidOrderflowImbalance ────────────────────────────────
@@ -343,6 +357,20 @@ describe('signal cache integration — deduplication across calls', () => {
       clearSignalCache();
       await signalHyperliquidOrderflowImbalance(baseConfig, 'ETH');
       expect(mockGetRecentTrades).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats Hyperliquid 429s as temporary null results and caches the cooldown', async () => {
+      mockGetRecentTrades.mockRejectedValueOnce(
+        Object.assign(new Error('429 Too Many Requests - null'), { response: { status: 429 } })
+      );
+
+      const first = await signalHyperliquidOrderflowImbalance(baseConfig, 'BTC');
+      expect(first).toBeNull();
+      expect(mockGetRecentTrades).toHaveBeenCalledTimes(1);
+
+      const second = await signalHyperliquidOrderflowImbalance(baseConfig, 'BTC');
+      expect(second).toBeNull();
+      expect(mockGetRecentTrades).toHaveBeenCalledTimes(1);
     });
   });
 
