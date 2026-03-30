@@ -38,8 +38,8 @@ describe('mapExpressionPlan', () => {
     expect(expr.expectedEdge).toBeGreaterThan(0);
   });
 
-  it('assigns zero edge for momentum_breakout in neutral directional bias', () => {
-    const cluster: SignalCluster = {
+  it('reduces edge by 0.4x for momentum_breakout in neutral directional bias (not zeroed)', () => {
+    const neutralCluster: SignalCluster = {
       id: 'cluster_1',
       symbol: 'ETH/USDT',
       signals: [],
@@ -47,7 +47,11 @@ describe('mapExpressionPlan', () => {
       confidence: 0.9,
       timeHorizon: 'hours',
     };
-    // _trend suffix → momentum_breakout; neutral bias zeroes it out
+    const directionalCluster: SignalCluster = {
+      ...neutralCluster,
+      directionalBias: 'up',
+    };
+    // _trend suffix → momentum_breakout
     const hypothesis: Hypothesis = {
       id: 'hyp_1_trend',
       clusterId: 'cluster_1',
@@ -61,7 +65,9 @@ describe('mapExpressionPlan', () => {
     const config = {
       autonomy: { adaptiveEdge: { enabled: true, priorEdge: 0.015 } },
     } as any;
-    const expr = mapExpressionPlan(config, cluster, hypothesis);
-    expect(expr.expectedEdge).toBe(0);
+    const exprNeutral = mapExpressionPlan(config, neutralCluster, hypothesis);
+    const exprDirectional = mapExpressionPlan(config, directionalCluster, hypothesis);
+    expect(exprNeutral.expectedEdge).toBeGreaterThan(0);
+    expect(exprNeutral.expectedEdge).toBeCloseTo(exprDirectional.expectedEdge * 0.4, 5);
   });
 });
