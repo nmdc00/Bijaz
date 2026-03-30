@@ -229,7 +229,7 @@ autonomy:
 
   # Full autonomous mode (auto-executes trades)
   fullAuto: false              # Master toggle for auto-execution
-  minEdge: 0.05                # Minimum edge to trade (5%)
+  minEdge: 0.02                # Minimum edge to trade (2%) — LLM entry gate is the real quality bar
   requireHighConfidence: false # Only trade high-confidence opportunities
   pauseOnLossStreak: 3         # Pause after N consecutive losses
   dailyReportTime: "20:00"     # Time to send daily P&L report
@@ -245,7 +245,7 @@ autonomy:
     downweightMultiplier: 0.60
   adaptiveEdge:
     enabled: true              # Replace synthetic confidence*0.1 with history-grounded edge
-    priorEdge: 0.015           # Edge used before minSamples reached per segment (1.5%)
+    priorEdge: 0.05            # Edge used before minSamples reached per segment (5%) — matches minEdge so cold-start produces candidates
     minSamples: 10             # Closed trades needed before empirical estimate kicks in
     signalScaleFactor: 0.5     # How much discovery confidence modulates edge (0=ignore, 1=full)
     decayHalfLifeDays: null    # Time decay for old trades (null=off until enough data)

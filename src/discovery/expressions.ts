@@ -68,10 +68,11 @@ export function mapExpressionPlan(
   const liquidityBucket: ExpressionPlan['liquidityBucket'] =
     tradeCount >= 18 ? 'deep' : tradeCount <= 4 ? 'thin' : 'normal';
 
-  // Adaptive edge: neutral bias zeroes momentum_breakout only (requires directional
-  // conviction). Mean reversion and liquidation_cascade have non-directional rationale.
-  const isMomentumInNeutral =
-    signalClass === 'momentum_breakout' && cluster.directionalBias === 'neutral';
+  // Adaptive edge: momentum_breakout in neutral bias gets a 0.4x penalty (requires
+  // directional conviction, but hard-zero was too aggressive — most market time is
+  // spent in neutral regime). Mean reversion and liquidation_cascade are non-directional.
+  const momentumNeutralPenalty =
+    signalClass === 'momentum_breakout' && cluster.directionalBias === 'neutral' ? 0.4 : 1.0;
   const journalEntries = (() => {
     try {
       return listPerpTradeJournals({ limit: 500 });
@@ -81,16 +82,14 @@ export function mapExpressionPlan(
   })();
 
   let expectedEdge: number;
-  if (isMomentumInNeutral) {
-    expectedEdge = 0;
-  } else if ((config.autonomy as any)?.adaptiveEdge?.enabled !== false) {
+  if ((config.autonomy as any)?.adaptiveEdge?.enabled !== false) {
     const edgeResult = resolveAdaptiveEdge(
       config,
       journalEntries,
       { signalClass, marketRegime, volatilityBucket, liquidityBucket },
       confidence
     );
-    expectedEdge = edgeResult.edge;
+    expectedEdge = edgeResult.edge * momentumNeutralPenalty;
   } else {
     // Legacy path (adaptiveEdge.enabled: false)
     expectedEdge =
