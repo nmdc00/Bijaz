@@ -35,6 +35,18 @@ type HyperliquidPerpAssetCtx = {
   markPx?: string | number | null;
 };
 
+const DEFAULT_SHARED_CACHE_TTL_MS = 3_000;
+
+type SharedCacheEntry<T> = {
+  expiresAt: number;
+  value: T;
+};
+
+const perpDexsCache = new Map<string, SharedCacheEntry<string[]>>();
+const mergedMetaCache = new Map<string, SharedCacheEntry<HyperliquidMergedMetaAndAssetCtxsResponse>>();
+const inFlightPerpDexs = new Map<string, Promise<string[]>>();
+const inFlightMergedMeta = new Map<string, Promise<HyperliquidMergedMetaAndAssetCtxsResponse>>();
+
 export class HyperliquidClient {
   private transport: HttpTransport;
   private info: InfoClient;
@@ -92,11 +104,50 @@ export class HyperliquidClient {
     return this.exchange;
   }
 
+  private getBaseUrl(): string {
+    return this.config.hyperliquid?.baseUrl ?? 'https://api.hyperliquid.xyz';
+  }
+
+  private getSharedCacheTtlMs(): number {
+    const ttl = Number((this.config.hyperliquid as { cacheTtlMs?: unknown } | undefined)?.cacheTtlMs);
+    return Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_SHARED_CACHE_TTL_MS;
+  }
+
+  private getSharedCacheKey(scope: string): string {
+    return `${this.getBaseUrl()}:${scope}`;
+  }
+
   async listPerpDexs(): Promise<string[]> {
-    const response = await this.info.perpDexs();
-    return (response as PerpDexsResponse)
-      .flatMap((entry) => (entry?.name ? [entry.name] : []))
-      .filter((name) => name.trim().length > 0);
+    const cacheKey = this.getSharedCacheKey('perpDexs');
+    const now = Date.now();
+    const cached = perpDexsCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
+    }
+
+    const existing = inFlightPerpDexs.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+
+    const request = (async () => {
+      const response = await this.info.perpDexs();
+      const dexs = (response as PerpDexsResponse)
+        .flatMap((entry) => (entry?.name ? [entry.name] : []))
+        .filter((name) => name.trim().length > 0);
+      perpDexsCache.set(cacheKey, {
+        value: dexs,
+        expiresAt: Date.now() + this.getSharedCacheTtlMs(),
+      });
+      return dexs;
+    })();
+
+    inFlightPerpDexs.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      inFlightPerpDexs.delete(cacheKey);
+    }
   }
 
   async listPerpMarkets(): Promise<HyperliquidMarket[]> {
@@ -151,25 +202,51 @@ export class HyperliquidClient {
   }
 
   async getMergedMetaAndAssetCtxs(): Promise<HyperliquidMergedMetaAndAssetCtxsResponse> {
-    const dexs = await this.listPerpDexs();
-    const responses = await Promise.all([
-      this.info.metaAndAssetCtxs(),
-      ...dexs.map((dex) => this.info.metaAndAssetCtxs({ dex })),
-    ]);
-
-    const universe: HyperliquidMetaUniverse = [];
-    const assetCtxs: unknown[] = [];
-    for (const response of responses) {
-      const [meta, contexts] = response as MetaAndAssetCtxsResponse;
-      const scopedUniverse = (meta as { universe?: HyperliquidMetaUniverse }).universe ?? [];
-      const scopedCtxs = Array.isArray(contexts) ? contexts : [];
-      for (const [idx, market] of scopedUniverse.entries()) {
-        universe.push(market);
-        assetCtxs.push(scopedCtxs[idx] ?? {});
-      }
+    const cacheKey = this.getSharedCacheKey('mergedMetaAndAssetCtxs');
+    const now = Date.now();
+    const cached = mergedMetaCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
     }
 
-    return [{ universe }, assetCtxs];
+    const existing = inFlightMergedMeta.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+
+    const request = (async () => {
+      const dexs = await this.listPerpDexs();
+      const responses = await Promise.all([
+        this.info.metaAndAssetCtxs(),
+        ...dexs.map((dex) => this.info.metaAndAssetCtxs({ dex })),
+      ]);
+
+      const universe: HyperliquidMetaUniverse = [];
+      const assetCtxs: unknown[] = [];
+      for (const response of responses) {
+        const [meta, contexts] = response as MetaAndAssetCtxsResponse;
+        const scopedUniverse = (meta as { universe?: HyperliquidMetaUniverse }).universe ?? [];
+        const scopedCtxs = Array.isArray(contexts) ? contexts : [];
+        for (const [idx, market] of scopedUniverse.entries()) {
+          universe.push(market);
+          assetCtxs.push(scopedCtxs[idx] ?? {});
+        }
+      }
+
+      const merged: HyperliquidMergedMetaAndAssetCtxsResponse = [{ universe }, assetCtxs];
+      mergedMetaCache.set(cacheKey, {
+        value: merged,
+        expiresAt: Date.now() + this.getSharedCacheTtlMs(),
+      });
+      return merged;
+    })();
+
+    inFlightMergedMeta.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      inFlightMergedMeta.delete(cacheKey);
+    }
   }
 
   async getFundingHistory(

@@ -52,6 +52,24 @@ function toNumber(value: unknown): number {
   return Number.isFinite(num) ? num : 0;
 }
 
+function isHyperliquidRateLimitError(error: unknown): boolean {
+  const status = typeof error === 'object' && error !== null ? Number((error as { status?: unknown }).status) : NaN;
+  if (status === 429) {
+    return true;
+  }
+
+  const responseStatus =
+    typeof error === 'object' && error !== null
+      ? Number(((error as { response?: { status?: unknown } }).response?.status as unknown) ?? NaN)
+      : NaN;
+  if (responseStatus === 429) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes('429') || message.toLowerCase().includes('too many requests');
+}
+
 function normalizeHyperliquidSymbol(symbol: string): string {
   if (!symbol) return symbol;
   // Strip DEX provider prefix (e.g. "FLX:GOLD" → "GOLD", "km:USENERGY" → "USENERGY")
@@ -203,7 +221,17 @@ export async function signalHyperliquidFundingOISkew(
   if (cached !== undefined) return cached;
 
   const client = new HyperliquidClient(config);
-  const [meta, assetCtxs] = await client.getMergedMetaAndAssetCtxs();
+  let meta: { universe: Array<{ name: string }> };
+  let assetCtxs: unknown[];
+  try {
+    [meta, assetCtxs] = await client.getMergedMetaAndAssetCtxs();
+  } catch (error) {
+    if (isHyperliquidRateLimitError(error)) {
+      signalCache.set(cacheKey, null, 15_000);
+      return null;
+    }
+    throw error;
+  }
   const contexts = Array.isArray(assetCtxs) ? (assetCtxs as Array<Record<string, unknown>>) : [];
   const idx = meta.universe.findIndex((item) => item.name === coin);
   if (idx < 0 || idx >= contexts.length) return null;
@@ -271,7 +299,16 @@ export async function signalHyperliquidOrderflowImbalance(
   if (cached !== undefined) return cached;
 
   const client = new HyperliquidClient(config);
-  const trades = await client.getRecentTrades(coin);
+  let trades;
+  try {
+    trades = await client.getRecentTrades(coin);
+  } catch (error) {
+    if (isHyperliquidRateLimitError(error)) {
+      signalCache.set(cacheKey, null, 15_000);
+      return null;
+    }
+    throw error;
+  }
   if (trades.length === 0) return null;
 
   let buyNotional = 0;
