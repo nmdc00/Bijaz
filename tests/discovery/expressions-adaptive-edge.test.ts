@@ -117,12 +117,16 @@ describe('_reflex signal class bug fix', () => {
 });
 
 describe('neutral bias handling', () => {
-  it('momentum_breakout in neutral bias → expectedEdge = 0', () => {
+  it('momentum_breakout in neutral bias → expectedEdge reduced by 0.4x (not zeroed)', () => {
     const config = makeConfig();
     const cluster = makeCluster('BTC', 'neutral', 0.8);
     const hypothesis = makeHypothesis('BTC', '_trend');
-    const expr = mapExpressionPlan(config, cluster, hypothesis);
-    expect(expr.expectedEdge).toBe(0);
+    const exprNeutral = mapExpressionPlan(config, cluster, hypothesis);
+    const clusterDirectional = makeCluster('BTC', 'up', 0.8);
+    const exprDirectional = mapExpressionPlan(config, clusterDirectional, hypothesis);
+    // Neutral should be > 0 but reduced vs. directional
+    expect(exprNeutral.expectedEdge).toBeGreaterThan(0);
+    expect(exprNeutral.expectedEdge).toBeCloseTo(exprDirectional.expectedEdge * 0.4, 5);
   });
 
   it('mean_reversion in neutral bias → expectedEdge > 0 (adaptive prior)', () => {
