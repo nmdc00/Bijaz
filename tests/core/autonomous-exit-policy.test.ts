@@ -117,7 +117,7 @@ vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
 function makeApproveLlm() {
   return {
     complete: vi.fn(async () => ({
-      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' , stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }),
       model: 'test',
     })),
   } as any;

@@ -133,7 +133,7 @@ describe('autonomous scan bypass — LLM not called for discovery/filter/evaluat
     const { AutonomousManager } = await import('../../src/core/autonomous.js');
     // Gate returns approve so execution proceeds; async enrichment disabled.
     const llmComplete = vi.fn(async () => ({
-      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' , stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }),
       model: 'test',
     }));
     const llm = { complete: llmComplete } as any;
@@ -162,7 +162,7 @@ describe('autonomous scan bypass — LLM not called for discovery/filter/evaluat
     const { AutonomousManager } = await import('../../src/core/autonomous.js');
     // First call: entry gate (returns approve JSON), second call: enrichment synthesis
     const llmComplete = vi.fn()
-      .mockResolvedValueOnce({ content: JSON.stringify({ verdict: 'approve', reasoning: 'go' }), model: 'test' })
+      .mockResolvedValueOnce({ content: JSON.stringify({ verdict: 'approve', reasoning: 'go' , stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }), model: 'test' })
       .mockResolvedValue({ content: 'trade annotated', model: 'test' });
     const llm = { complete: llmComplete } as any;
     const executor = {
@@ -271,7 +271,7 @@ describe('autonomous scan bypass — LLM not called for discovery/filter/evaluat
     const executor = { execute: vi.fn(async () => ({ executed: true, message: 'ok' })) } as any;
     const llm = {
       complete: vi.fn().mockResolvedValue({
-        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' , stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }),
         model: 'test',
       }),
     } as any;

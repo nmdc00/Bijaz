@@ -118,7 +118,7 @@ describe('AutonomousManager async enrichment', () => {
     const { AutonomousManager } = await import('../../src/core/autonomous.js');
     // Gate call (1st): approve immediately; enrichment call (2nd+): never resolve (timeout test)
     const completeFn = vi.fn()
-      .mockResolvedValueOnce({ content: JSON.stringify({ verdict: 'approve', reasoning: 'go' }), model: 'test' })
+      .mockResolvedValueOnce({ content: JSON.stringify({ verdict: 'approve', reasoning: 'go', stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }), model: 'test' })
       .mockImplementation(() => new Promise(() => {}));
     const llm = { complete: completeFn } as any;
     const executor = {
