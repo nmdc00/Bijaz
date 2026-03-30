@@ -39,6 +39,20 @@ function ensureSchema(): void {
       target_rr           REAL
     )
   `);
+
+  const columns = db.prepare("PRAGMA table_info('llm_entry_gate_log')").all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  const addColumnIfMissing = (name: string, definition: string): void => {
+    if (columnNames.has(name)) {
+      return;
+    }
+    db.exec(`ALTER TABLE llm_entry_gate_log ADD COLUMN ${definition}`);
+    columnNames.add(name);
+  };
+
+  addColumnIfMissing('stop_level_price', 'stop_level_price REAL');
+  addColumnIfMissing('equity_at_risk_pct', 'equity_at_risk_pct REAL');
+  addColumnIfMissing('target_rr', 'target_rr REAL');
 }
 
 export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
