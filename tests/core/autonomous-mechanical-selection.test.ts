@@ -158,7 +158,7 @@ describe('AutonomousManager mechanical expression selection', () => {
 
     const gateLlm = {
       complete: vi.fn(async () => ({
-        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' , stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }),
         model: 'test',
       })),
     } as any;

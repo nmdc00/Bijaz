@@ -22,12 +22,18 @@ export interface EntryGateDecision {
   verdict: 'approve' | 'reject' | 'resize';
   reasoning: string;
   adjustedSizeUsd?: number;
+  stopLevelPrice?: number | null;
+  equityAtRiskPct?: number;
+  targetRR?: number;
 }
 
 const DecisionSchema = z.object({
   verdict: z.enum(['approve', 'reject', 'resize']),
   reasoning: z.string(),
   adjustedSizeUsd: z.number().optional(),
+  stopLevelPrice: z.number().nullable(),
+  equityAtRiskPct: z.number(),
+  targetRR: z.number(),
 });
 
 const logger = new Logger('info');
@@ -80,7 +86,14 @@ The default is no trade. You need a compelling reason to approve. When in doubt,
 You are not a quant system. You reason about narrative, market context, and whether this setup makes sense right now.
 
 Respond ONLY with valid JSON matching this schema:
-{"verdict":"approve"|"reject"|"resize","reasoning":"...","adjustedSizeUsd":number|undefined}`;
+{"verdict":"approve"|"reject"|"resize","reasoning":"...","adjustedSizeUsd":number|undefined,"stopLevelPrice":number|null,"equityAtRiskPct":number,"targetRR":number}
+
+Fields:
+- stopLevelPrice: the specific price at which the thesis is invalidated; null if you cannot identify one
+- equityAtRiskPct: estimated % of book equity lost if stop is hit (use candidate notional and leverage)
+- targetRR: your estimated reward-to-risk ratio for this setup
+
+All four fields (verdict, reasoning, stopLevelPrice, equityAtRiskPct, targetRR) are required. If you cannot fill them, reject.`;
 
   const bookTable = formatBookTable(bookEntries);
 
@@ -112,7 +125,7 @@ Signal performance data will be populated in Phase 2. Use your judgment based on
 ## Instruction
 
 Respond ONLY with valid JSON:
-{"verdict":"approve"|"reject"|"resize","reasoning":"<your reasoning>","adjustedSizeUsd":<number if resize, omit otherwise>}`;
+{"verdict":"approve"|"reject"|"resize","reasoning":"<your reasoning>","adjustedSizeUsd":<number if resize, omit otherwise>,"stopLevelPrice":<price that invalidates thesis, or null>,"equityAtRiskPct":<% of book equity lost at stop>,"targetRR":<reward:risk ratio>}`;
 
   return { system, user };
 }
@@ -135,7 +148,7 @@ async function callLlm(
 
   const normalized = normalizeOptionalFieldPseudoJson(
     response.content.trim(),
-    ['adjustedSizeUsd']
+    ['adjustedSizeUsd', 'stopLevelPrice']
   );
   const parsed = JSON.parse(normalized) as Record<string, unknown>;
   if (parsed.adjustedSizeUsd === null) {
@@ -145,6 +158,9 @@ async function callLlm(
   return {
     verdict: validated.verdict,
     reasoning: validated.reasoning,
+    stopLevelPrice: validated.stopLevelPrice,
+    equityAtRiskPct: validated.equityAtRiskPct,
+    targetRR: validated.targetRR,
     ...(validated.adjustedSizeUsd !== undefined ? { adjustedSizeUsd: validated.adjustedSizeUsd } : {}),
   };
 }
@@ -264,6 +280,9 @@ export class LlmEntryGate {
       regime: candidate.regime,
       session: candidate.session,
       edge: candidate.edge,
+      stopLevelPrice: decision.stopLevelPrice,
+      equityAtRiskPct: decision.equityAtRiskPct,
+      targetRR: decision.targetRR,
     });
 
     return decision;

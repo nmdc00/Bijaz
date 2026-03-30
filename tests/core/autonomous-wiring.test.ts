@@ -186,6 +186,9 @@ function makeGateLlm(verdict: 'approve' | 'reject' | 'resize', adjustedSizeUsd?:
       content: JSON.stringify({
         verdict,
         reasoning: `test verdict: ${verdict}`,
+        stopLevelPrice: null,
+        equityAtRiskPct: 2.5,
+        targetRR: 2.0,
         ...(adjustedSizeUsd !== undefined ? { adjustedSizeUsd } : {}),
       }),
       model: 'test',
