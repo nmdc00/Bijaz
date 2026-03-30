@@ -62,7 +62,7 @@ const {
 
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: vi.fn(() => ({
-    getInfoClient: () => ({ candleSnapshot: mockCandleSnapshot }),
+    getCandleSnapshot: mockCandleSnapshot,
     getMergedMetaAndAssetCtxs: mockGetMetaAndAssetCtxs,
     getFundingHistory: mockGetFundingHistory,
     getRecentTrades: mockGetRecentTrades,
@@ -326,6 +326,20 @@ describe('signal cache integration — deduplication across calls', () => {
       expect(second).toBeNull();
       expect(mockGetMetaAndAssetCtxs).toHaveBeenCalledTimes(1);
     });
+
+    it('treats Hyperliquid 500s as temporary null results and caches the cooldown', async () => {
+      mockGetMetaAndAssetCtxs.mockRejectedValueOnce(
+        Object.assign(new Error('500 Internal Server Error - null'), { response: { status: 500 } })
+      );
+
+      const first = await signalHyperliquidFundingOISkew(baseConfig, 'BTC');
+      expect(first).toBeNull();
+      expect(mockGetMetaAndAssetCtxs).toHaveBeenCalledTimes(1);
+
+      const second = await signalHyperliquidFundingOISkew(baseConfig, 'BTC');
+      expect(second).toBeNull();
+      expect(mockGetMetaAndAssetCtxs).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ─── signalHyperliquidOrderflowImbalance ────────────────────────────────
@@ -372,6 +386,20 @@ describe('signal cache integration — deduplication across calls', () => {
       expect(second).toBeNull();
       expect(mockGetRecentTrades).toHaveBeenCalledTimes(1);
     });
+
+    it('treats Hyperliquid 500s as temporary null results and caches the cooldown', async () => {
+      mockGetRecentTrades.mockRejectedValueOnce(
+        Object.assign(new Error('500 Internal Server Error - null'), { response: { status: 500 } })
+      );
+
+      const first = await signalHyperliquidOrderflowImbalance(baseConfig, 'BTC');
+      expect(first).toBeNull();
+      expect(mockGetRecentTrades).toHaveBeenCalledTimes(1);
+
+      const second = await signalHyperliquidOrderflowImbalance(baseConfig, 'BTC');
+      expect(second).toBeNull();
+      expect(mockGetRecentTrades).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ─── signalReflexivityFragility ─────────────────────────────────────────
@@ -402,6 +430,20 @@ describe('signal cache integration — deduplication across calls', () => {
       clearSignalCache();
       await signalReflexivityFragility(baseConfig, 'BTC/USDT');
       expect(mockBuildReflexivitySetup).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats Hyperliquid transient errors as temporary null results and caches the cooldown', async () => {
+      mockBuildReflexivitySetup.mockRejectedValueOnce(
+        Object.assign(new Error('500 Internal Server Error - null'), { response: { status: 500 } })
+      );
+
+      const first = await signalReflexivityFragility(baseConfig, 'BTC/USDT');
+      expect(first).toBeNull();
+      expect(mockBuildReflexivitySetup).toHaveBeenCalledTimes(1);
+
+      const second = await signalReflexivityFragility(baseConfig, 'BTC/USDT');
+      expect(second).toBeNull();
+      expect(mockBuildReflexivitySetup).toHaveBeenCalledTimes(1);
     });
   });
 
