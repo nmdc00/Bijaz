@@ -341,7 +341,7 @@ describe('Section 3: LlmTradeOriginator → EntryGate handoff shape', () => {
   it('gate reject: executor not called when gate returns reject', async () => {
     // Mock the gate to return reject
     const book = makeBook();
-    const gateMainLlm = makeLlmClient(JSON.stringify({ verdict: 'reject', reasoning: 'not a good setup' }));
+    const gateMainLlm = makeLlmClient(JSON.stringify({ verdict: 'reject', reasoning: 'not a good setup', stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }));
     const gate = new LlmEntryGate(gateMainLlm, makeLlmClient(null), vi.fn().mockResolvedValue(undefined), book, dummyConfig);
     const mockExecute = vi.fn();
 
@@ -356,7 +356,7 @@ describe('Section 3: LlmTradeOriginator → EntryGate handoff shape', () => {
 
   it('gate approve: executor called with correct symbol', async () => {
     const book = makeBook();
-    const gateMainLlm = makeLlmClient(JSON.stringify({ verdict: 'approve', reasoning: 'strong setup' }));
+    const gateMainLlm = makeLlmClient(JSON.stringify({ verdict: 'approve', reasoning: 'strong setup', stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }));
     const gate = new LlmEntryGate(gateMainLlm, makeLlmClient(null), vi.fn().mockResolvedValue(undefined), book, dummyConfig);
     const mockExecute = vi.fn().mockResolvedValue({ success: true });
 

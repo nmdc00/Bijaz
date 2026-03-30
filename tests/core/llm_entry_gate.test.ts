@@ -69,11 +69,14 @@ function makeBook(overrides?: {
   } as unknown as PositionBook;
 }
 
+const defaultRiskFields = { stopLevelPrice: 48000, equityAtRiskPct: 2.5, targetRR: 2.0 };
+
 function makeLlmClient(responseJson: object | null, shouldThrow?: boolean): LlmClient {
+  const fullResponse = responseJson === null ? null : { ...defaultRiskFields, ...responseJson };
   const completeFn = shouldThrow
     ? vi.fn().mockRejectedValue(new Error('LLM timeout'))
     : vi.fn().mockResolvedValue({
-        content: JSON.stringify(responseJson),
+        content: JSON.stringify(fullResponse),
         model: 'test-model',
       });
   return { complete: completeFn } as unknown as LlmClient;
@@ -318,6 +321,7 @@ describe('LlmEntryGate', () => {
       expect(result).toEqual({
         verdict: 'reject',
         reasoning: 'fallback-shaped reject',
+        ...defaultRiskFields,
       });
     });
 
@@ -325,7 +329,7 @@ describe('LlmEntryGate', () => {
       const book = makeBook();
       const mainLlm: LlmClient = {
         complete: vi.fn().mockResolvedValue({
-          content: '{"verdict":"reject","reasoning":"pseudo-json reject","adjustedSizeUsd":undefined}',
+          content: '{"verdict":"reject","reasoning":"pseudo-json reject","adjustedSizeUsd":undefined,"stopLevelPrice":47000,"equityAtRiskPct":3.0,"targetRR":1.5}',
           model: 'test-main',
         }),
       } as unknown as LlmClient;
@@ -336,6 +340,9 @@ describe('LlmEntryGate', () => {
       expect(result).toEqual({
         verdict: 'reject',
         reasoning: 'pseudo-json reject',
+        stopLevelPrice: 47000,
+        equityAtRiskPct: 3.0,
+        targetRR: 1.5,
       });
     });
 
@@ -406,6 +413,78 @@ describe('LlmEntryGate', () => {
       expect(call.session).toBe('asia');
       expect(call.edge).toBe(0.05);
       expect(call.usedFallback).toBe(false);
+    });
+  });
+
+  describe('risk fields (stopLevelPrice, equityAtRiskPct, targetRR)', () => {
+    it('returns risk fields from LLM response', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({
+        verdict: 'approve',
+        reasoning: 'good setup',
+        stopLevelPrice: 45000,
+        equityAtRiskPct: 3.0,
+        targetRR: 2.5,
+      });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.stopLevelPrice).toBe(45000);
+      expect(result.equityAtRiskPct).toBe(3.0);
+      expect(result.targetRR).toBe(2.5);
+    });
+
+    it('accepts null stopLevelPrice', async () => {
+      const book = makeBook();
+      const mainLlm: LlmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: JSON.stringify({ verdict: 'approve', reasoning: 'ok', stopLevelPrice: null, equityAtRiskPct: 2.0, targetRR: 1.8 }),
+          model: 'test-main',
+        }),
+      } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.stopLevelPrice).toBeNull();
+      expect(result.equityAtRiskPct).toBe(2.0);
+    });
+
+    it('falls back when LLM omits required risk fields', async () => {
+      const book = makeBook();
+      const mainLlm: LlmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: JSON.stringify({ verdict: 'approve', reasoning: 'missing risk fields' }),
+          model: 'test-main',
+        }),
+      } as unknown as LlmClient;
+      const fallbackLlm = makeLlmClient({ verdict: 'reject', reasoning: 'fallback reject' });
+      const gate = new LlmEntryGate(mainLlm, fallbackLlm, notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.verdict).toBe('reject');
+      expect((fallbackLlm.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    });
+
+    it('includes risk fields in DB log', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({
+        verdict: 'approve',
+        reasoning: 'logged',
+        stopLevelPrice: 44000,
+        equityAtRiskPct: 1.5,
+        targetRR: 3.0,
+      });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      const call = mockRecordEntryGateDecision.mock.calls[0][0];
+      expect(call.stopLevelPrice).toBe(44000);
+      expect(call.equityAtRiskPct).toBe(1.5);
+      expect(call.targetRR).toBe(3.0);
     });
   });
 
