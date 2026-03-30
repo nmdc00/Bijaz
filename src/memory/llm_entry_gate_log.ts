@@ -12,25 +12,31 @@ export interface EntryGateLogEntry {
   regime?: string;
   session?: string;
   edge?: number;
+  stopLevelPrice?: number | null;
+  equityAtRiskPct?: number;
+  targetRR?: number;
 }
 
 function ensureSchema(): void {
   const db = openDatabase();
   db.exec(`
     CREATE TABLE IF NOT EXISTS llm_entry_gate_log (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-      symbol            TEXT NOT NULL,
-      side              TEXT NOT NULL,
-      notional_usd      REAL NOT NULL,
-      verdict           TEXT NOT NULL,
-      reasoning         TEXT NOT NULL,
-      adjusted_size_usd REAL,
-      used_fallback     INTEGER NOT NULL DEFAULT 0,
-      signal_class      TEXT,
-      regime            TEXT,
-      session           TEXT,
-      edge              REAL
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      symbol              TEXT NOT NULL,
+      side                TEXT NOT NULL,
+      notional_usd        REAL NOT NULL,
+      verdict             TEXT NOT NULL,
+      reasoning           TEXT NOT NULL,
+      adjusted_size_usd   REAL,
+      used_fallback       INTEGER NOT NULL DEFAULT 0,
+      signal_class        TEXT,
+      regime              TEXT,
+      session             TEXT,
+      edge                REAL,
+      stop_level_price    REAL,
+      equity_at_risk_pct  REAL,
+      target_rr           REAL
     )
   `);
 }
@@ -40,9 +46,9 @@ export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
   const db = openDatabase();
   db.prepare(
     `INSERT INTO llm_entry_gate_log
-       (symbol, side, notional_usd, verdict, reasoning, adjusted_size_usd, used_fallback, signal_class, regime, session, edge)
+       (symbol, side, notional_usd, verdict, reasoning, adjusted_size_usd, used_fallback, signal_class, regime, session, edge, stop_level_price, equity_at_risk_pct, target_rr)
      VALUES
-       (@symbol, @side, @notionalUsd, @verdict, @reasoning, @adjustedSizeUsd, @usedFallback, @signalClass, @regime, @session, @edge)`
+       (@symbol, @side, @notionalUsd, @verdict, @reasoning, @adjustedSizeUsd, @usedFallback, @signalClass, @regime, @session, @edge, @stopLevelPrice, @equityAtRiskPct, @targetRR)`
   ).run({
     symbol: entry.symbol,
     side: entry.side,
@@ -55,5 +61,8 @@ export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
     regime: entry.regime ?? null,
     session: entry.session ?? null,
     edge: entry.edge ?? null,
+    stopLevelPrice: entry.stopLevelPrice ?? null,
+    equityAtRiskPct: entry.equityAtRiskPct ?? null,
+    targetRR: entry.targetRR ?? null,
   });
 }
