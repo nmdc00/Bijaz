@@ -52,9 +52,9 @@ function toNumber(value: unknown): number {
   return Number.isFinite(num) ? num : 0;
 }
 
-function isHyperliquidRateLimitError(error: unknown): boolean {
+function isHyperliquidTransientInfoError(error: unknown): boolean {
   const status = typeof error === 'object' && error !== null ? Number((error as { status?: unknown }).status) : NaN;
-  if (status === 429) {
+  if (status === 429 || status >= 500) {
     return true;
   }
 
@@ -62,12 +62,18 @@ function isHyperliquidRateLimitError(error: unknown): boolean {
     typeof error === 'object' && error !== null
       ? Number(((error as { response?: { status?: unknown } }).response?.status as unknown) ?? NaN)
       : NaN;
-  if (responseStatus === 429) {
+  if (responseStatus === 429 || responseStatus >= 500) {
     return true;
   }
 
   const message = error instanceof Error ? error.message : String(error ?? '');
-  return message.includes('429') || message.toLowerCase().includes('too many requests');
+  const lower = message.toLowerCase();
+  return (
+    message.includes('429') ||
+    lower.includes('too many requests') ||
+    message.includes('500') ||
+    lower.includes('internal server error')
+  );
 }
 
 function normalizeHyperliquidSymbol(symbol: string): string {
@@ -97,7 +103,7 @@ type OHLCVCandle = { timestamp: number; open: number; high: number; low: number;
 async function fetchHlCandles(config: ThufirConfig, coin: string, limit: number): Promise<OHLCVCandle[]> {
   const startTime = Date.now() - limit * 60 * 60 * 1000;
   const client = new HyperliquidClient(config);
-  const raw = await client.getInfoClient().candleSnapshot({ coin, interval: '1h', startTime });
+  const raw = await client.getCandleSnapshot({ coin, interval: '1h', startTime });
   return raw.map((c) => ({
     timestamp: c.t,
     open: Number(c.o),
@@ -226,7 +232,7 @@ export async function signalHyperliquidFundingOISkew(
   try {
     [meta, assetCtxs] = await client.getMergedMetaAndAssetCtxs();
   } catch (error) {
-    if (isHyperliquidRateLimitError(error)) {
+    if (isHyperliquidTransientInfoError(error)) {
       signalCache.set(cacheKey, null, 15_000);
       return null;
     }
@@ -303,7 +309,7 @@ export async function signalHyperliquidOrderflowImbalance(
   try {
     trades = await client.getRecentTrades(coin);
   } catch (error) {
-    if (isHyperliquidRateLimitError(error)) {
+    if (isHyperliquidTransientInfoError(error)) {
       signalCache.set(cacheKey, null, 15_000);
       return null;
     }
@@ -364,7 +370,16 @@ export async function signalReflexivityFragility(
   const cached = signalCache.get(cacheKey) as SignalPrimitive | null | undefined;
   if (cached !== undefined) return cached;
 
-  const setup = await buildReflexivitySetup({ config, symbol });
+  let setup;
+  try {
+    setup = await buildReflexivitySetup({ config, symbol });
+  } catch (error) {
+    if (isHyperliquidTransientInfoError(error)) {
+      signalCache.set(cacheKey, null, 15_000);
+      return null;
+    }
+    throw error;
+  }
   if (!setup) {
     signalCache.set(cacheKey, null, getSignalCacheTtlMs(config));
     return null;

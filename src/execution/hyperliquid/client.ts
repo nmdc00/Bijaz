@@ -36,16 +36,56 @@ type HyperliquidPerpAssetCtx = {
 };
 
 const DEFAULT_SHARED_CACHE_TTL_MS = 3_000;
+const DEFAULT_INFO_CONCURRENCY = 3;
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 1_500;
 
 type SharedCacheEntry<T> = {
   expiresAt: number;
   value: T;
 };
 
+type SharedRateLimitState = {
+  active: number;
+  cooldownUntil: number;
+  waiters: Array<() => void>;
+};
+
 const perpDexsCache = new Map<string, SharedCacheEntry<string[]>>();
 const mergedMetaCache = new Map<string, SharedCacheEntry<HyperliquidMergedMetaAndAssetCtxsResponse>>();
 const inFlightPerpDexs = new Map<string, Promise<string[]>>();
 const inFlightMergedMeta = new Map<string, Promise<HyperliquidMergedMetaAndAssetCtxsResponse>>();
+const sharedRateLimitStates = new Map<string, SharedRateLimitState>();
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientInfoError(error: unknown): boolean {
+  const status = typeof error === 'object' && error !== null ? Number((error as { status?: unknown }).status) : NaN;
+  if (status === 429 || status >= 500) {
+    return true;
+  }
+
+  const responseStatus =
+    typeof error === 'object' && error !== null
+      ? Number(((error as { response?: { status?: unknown } }).response?.status as unknown) ?? NaN)
+      : NaN;
+  if (responseStatus === 429 || responseStatus >= 500) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const lower = message.toLowerCase();
+  return (
+    message.includes('429') ||
+    lower.includes('too many requests') ||
+    message.includes('500') ||
+    lower.includes('internal server error')
+  );
+}
 
 export class HyperliquidClient {
   private transport: HttpTransport;
@@ -62,6 +102,64 @@ export class HyperliquidClient {
     return this.info;
   }
 
+  private getRateLimitState(): SharedRateLimitState {
+    const key = this.getBaseUrl();
+    let state = sharedRateLimitStates.get(key);
+    if (!state) {
+      state = { active: 0, cooldownUntil: 0, waiters: [] };
+      sharedRateLimitStates.set(key, state);
+    }
+    return state;
+  }
+
+  private getMaxConcurrentInfoRequests(): number {
+    const configured = Number((this.config.hyperliquid as { maxConcurrentInfoRequests?: unknown } | undefined)?.maxConcurrentInfoRequests);
+    return Number.isFinite(configured) && configured >= 1
+      ? Math.floor(configured)
+      : DEFAULT_INFO_CONCURRENCY;
+  }
+
+  private getRateLimitCooldownMs(): number {
+    const configured = Number((this.config.hyperliquid as { rateLimitCooldownMs?: unknown } | undefined)?.rateLimitCooldownMs);
+    return Number.isFinite(configured) && configured >= 0
+      ? Math.floor(configured)
+      : DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+  }
+
+  private async acquireInfoRequestSlot(): Promise<SharedRateLimitState> {
+    const state = this.getRateLimitState();
+    const maxConcurrent = this.getMaxConcurrentInfoRequests();
+    while (state.active >= maxConcurrent) {
+      await new Promise<void>((resolve) => state.waiters.push(resolve));
+    }
+    state.active += 1;
+    return state;
+  }
+
+  private releaseInfoRequestSlot(state: SharedRateLimitState): void {
+    state.active = Math.max(0, state.active - 1);
+    const next = state.waiters.shift();
+    next?.();
+  }
+
+  private async withInfoRequestLimit<T>(fn: () => Promise<T>): Promise<T> {
+    const state = await this.acquireInfoRequestSlot();
+    try {
+      const waitMs = state.cooldownUntil - Date.now();
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
+      return await fn();
+    } catch (error) {
+      if (isTransientInfoError(error)) {
+        state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + this.getRateLimitCooldownMs());
+      }
+      throw error;
+    } finally {
+      this.releaseInfoRequestSlot(state);
+    }
+  }
+
   async getUserDexAbstraction(): Promise<boolean | null> {
     const user = this.getAccountAddress();
     if (!user) {
@@ -70,7 +168,7 @@ export class HyperliquidClient {
       );
     }
     // HIP-3 DEX abstraction (unified account) state. Returns boolean or null.
-    return this.info.userDexAbstraction({ user });
+    return this.withInfoRequestLimit(() => this.info.userDexAbstraction({ user }));
   }
 
   getAccountAddress(): string | null {
@@ -131,7 +229,7 @@ export class HyperliquidClient {
     }
 
     const request = (async () => {
-      const response = await this.info.perpDexs();
+      const response = await this.withInfoRequestLimit(() => this.info.perpDexs());
       const dexs = (response as PerpDexsResponse)
         .flatMap((entry) => (entry?.name ? [entry.name] : []))
         .filter((name) => name.trim().length > 0);
@@ -153,8 +251,8 @@ export class HyperliquidClient {
   async listPerpMarkets(): Promise<HyperliquidMarket[]> {
     const dexs = await this.listPerpDexs();
     const metas = await Promise.all([
-      this.info.meta(),
-      ...dexs.map((dex) => this.info.meta({ dex })),
+      this.withInfoRequestLimit(() => this.info.meta()),
+      ...dexs.map((dex) => this.withInfoRequestLimit(() => this.info.meta({ dex }))),
     ]);
 
     return metas.flatMap((meta, metaIndex) => {
@@ -171,7 +269,10 @@ export class HyperliquidClient {
   }
 
   async getAllMids(): Promise<Record<string, number>> {
-    const [mids, dexs] = await Promise.all([this.info.allMids(), this.listPerpDexs()]);
+    const [mids, dexs] = await Promise.all([
+      this.withInfoRequestLimit(() => this.info.allMids()),
+      this.listPerpDexs(),
+    ]);
     const out: Record<string, number> = {};
     for (const [symbol, value] of Object.entries(mids ?? {})) {
       const num = Number(value);
@@ -181,7 +282,10 @@ export class HyperliquidClient {
     }
 
     const dexContexts = await Promise.all(
-      dexs.map(async (dex) => ({ dex, response: await this.info.metaAndAssetCtxs({ dex }) }))
+      dexs.map(async (dex) => ({
+        dex,
+        response: await this.withInfoRequestLimit(() => this.info.metaAndAssetCtxs({ dex })),
+      }))
     );
     for (const { response } of dexContexts) {
       const [meta, assetCtxs] = response as MetaAndAssetCtxsResponse;
@@ -198,7 +302,7 @@ export class HyperliquidClient {
   }
 
   async getMetaAndAssetCtxs(): Promise<MetaAndAssetCtxsResponse> {
-    return this.info.metaAndAssetCtxs();
+    return this.withInfoRequestLimit(() => this.info.metaAndAssetCtxs());
   }
 
   async getMergedMetaAndAssetCtxs(): Promise<HyperliquidMergedMetaAndAssetCtxsResponse> {
@@ -217,8 +321,8 @@ export class HyperliquidClient {
     const request = (async () => {
       const dexs = await this.listPerpDexs();
       const responses = await Promise.all([
-        this.info.metaAndAssetCtxs(),
-        ...dexs.map((dex) => this.info.metaAndAssetCtxs({ dex })),
+        this.withInfoRequestLimit(() => this.info.metaAndAssetCtxs()),
+        ...dexs.map((dex) => this.withInfoRequestLimit(() => this.info.metaAndAssetCtxs({ dex }))),
       ]);
 
       const universe: HyperliquidMetaUniverse = [];
@@ -254,15 +358,26 @@ export class HyperliquidClient {
     startTime: number,
     endTime?: number
   ): Promise<FundingHistoryResponse> {
-    return this.info.fundingHistory({ coin, startTime, endTime });
+    return this.withInfoRequestLimit(() => this.info.fundingHistory({ coin, startTime, endTime }));
   }
 
   async getRecentTrades(coin: string): Promise<RecentTradesResponse> {
-    return this.info.recentTrades({ coin });
+    return this.withInfoRequestLimit(() => this.info.recentTrades({ coin }));
   }
 
   async getL2Book(coin: string): Promise<L2BookResponse> {
-    return this.info.l2Book({ coin });
+    return this.withInfoRequestLimit(() => this.info.l2Book({ coin }));
+  }
+
+  async getCandleSnapshot(params: {
+    coin: string;
+    interval: '1m' | '3m' | '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '8h' | '12h' | '1d' | '3d' | '1w' | '1M';
+    startTime: number;
+    endTime?: number;
+  }): Promise<Array<{ t: number; o: string; h: string; l: string; c: string; v: string }>> {
+    return this.withInfoRequestLimit(() => this.info.candleSnapshot(params)) as Promise<
+      Array<{ t: number; o: string; h: string; l: string; c: string; v: string }>
+    >;
   }
 
   async getOpenOrders(): Promise<unknown[]> {
@@ -272,7 +387,7 @@ export class HyperliquidClient {
         'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
       );
     }
-    return this.info.openOrders({ user });
+    return this.withInfoRequestLimit(() => this.info.openOrders({ user }));
   }
 
   async getClearinghouseState(): Promise<unknown> {
@@ -282,7 +397,7 @@ export class HyperliquidClient {
         'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
       );
     }
-    return this.info.clearinghouseState({ user });
+    return this.withInfoRequestLimit(() => this.info.clearinghouseState({ user }));
   }
 
   async getSpotClearinghouseState(params?: {
@@ -294,7 +409,7 @@ export class HyperliquidClient {
         'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
       );
     }
-    return this.info.spotClearinghouseState({ user, dex: params?.dex });
+    return this.withInfoRequestLimit(() => this.info.spotClearinghouseState({ user, dex: params?.dex }));
   }
 
   async getUserFees(): Promise<UserFeesResponse> {
@@ -304,7 +419,7 @@ export class HyperliquidClient {
         'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
       );
     }
-    return this.info.userFees({ user });
+    return this.withInfoRequestLimit(() => this.info.userFees({ user }));
   }
 
   async getUserFillsByTime(params: {
@@ -318,12 +433,14 @@ export class HyperliquidClient {
         'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
       );
     }
-    return this.info.userFillsByTime({
-      user,
-      startTime: params.startTime,
-      endTime: params.endTime,
-      aggregateByTime: params.aggregateByTime,
-    });
+    return this.withInfoRequestLimit(() =>
+      this.info.userFillsByTime({
+        user,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        aggregateByTime: params.aggregateByTime,
+      })
+    );
   }
 
   async getPortfolioMetrics(): Promise<PortfolioResponse> {
@@ -333,6 +450,6 @@ export class HyperliquidClient {
         'Hyperliquid account address not configured (hyperliquid.accountAddress or HYPERLIQUID_ACCOUNT_ADDRESS).'
       );
     }
-    return this.info.portfolio({ user });
+    return this.withInfoRequestLimit(() => this.info.portfolio({ user }));
   }
 }
