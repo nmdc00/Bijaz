@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { handleDashboardPageRequest } from '../../src/gateway/dashboard_page.js';
+import { handleDashboardPageRequest, resolveDashboardDistDir } from '../../src/gateway/dashboard_page.js';
 
 describe('dashboard page route', () => {
   let dashboardDir: string | null = null;
@@ -84,5 +84,15 @@ describe('dashboard page route', () => {
     } as any;
 
     expect(handleDashboardPageRequest(req, res)).toBe(false);
+  });
+
+  it('falls back to the repo-root dashboard-dist when running from dist/gateway', () => {
+    const distDir = resolveDashboardDistDir({
+      envPath: '',
+      moduleDir: '/opt/bijaz/dist/gateway',
+      exists: () => false,
+    });
+
+    expect(distDir).toBe('/opt/bijaz/src/gateway/dashboard-dist');
   });
 });
