@@ -555,10 +555,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return `${symbol}: Skipped originator proposal (insufficient daily budget $${remainingDaily.toFixed(2)})`;
     }
 
-    const adaptiveLeverageCap =
-      (getAutonomyPolicyState().leverageCapOverride) ??
-      Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
-    const targetLeverage = Math.min(3, adaptiveLeverageCap);
+    const targetLeverage = proposal.leverage;
 
     const riskCheck = await checkPerpRiskLimits({
       config: this.thufirConfig,
@@ -777,8 +774,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     const baseMinEdge = this.config.minEdge;
     const adaptiveMinEdge = policyState.minEdgeOverride ?? baseMinEdge;
     const adaptiveMaxTrades = policyState.maxTradesPerScanOverride ?? this.config.maxTradesPerScan;
-    const adaptiveLeverageCap =
-      policyState.leverageCapOverride ?? Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
 
     const eligible = result.expressions.filter((expr) => {
       const cluster = cycleSnapshot.clusterBySymbol.get(expr.symbol);
@@ -932,7 +927,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         continue;
       }
       let size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
-      const targetLeverage = Math.min(expr.leverage, adaptiveLeverageCap);
+      const targetLeverage = expr.leverage;
 
       const riskCheck = await checkPerpRiskLimits({
         config: this.thufirConfig,
