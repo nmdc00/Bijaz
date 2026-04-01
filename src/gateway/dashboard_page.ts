@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 function buildDashboardHtml(): string {
@@ -553,6 +553,24 @@ function buildDashboardHtml(): string {
 </html>`;
 }
 
+export function resolveDashboardDistDir(params?: {
+  envPath?: string;
+  moduleDir?: string;
+  exists?: (path: string) => boolean;
+}): string {
+  const exists = params?.exists ?? existsSync;
+  const envPath = String(params?.envPath ?? process.env.THUFIR_DASHBOARD_DIST_PATH ?? '').trim();
+  if (envPath) {
+    return envPath;
+  }
+
+  const moduleDir = params?.moduleDir ?? fileURLToPath(new URL('.', import.meta.url));
+  const compiledDistDir = join(moduleDir, 'dashboard-dist');
+  const projectRoot = dirname(dirname(moduleDir));
+  const sourceDistDir = join(projectRoot, 'src', 'gateway', 'dashboard-dist');
+  return exists(compiledDistDir) ? compiledDistDir : sourceDistDir;
+}
+
 export function handleDashboardPageRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const path = url.pathname;
@@ -566,8 +584,7 @@ export function handleDashboardPageRequest(req: IncomingMessage, res: ServerResp
     return true;
   }
 
-  const distDir = String(process.env.THUFIR_DASHBOARD_DIST_PATH ?? '').trim()
-    || join(fileURLToPath(new URL('.', import.meta.url)), 'dashboard-dist');
+  const distDir = resolveDashboardDistDir();
   const indexPath = join(distDir, 'index.html');
   if (existsSync(indexPath)) {
     if (path.startsWith('/dashboard/assets/')) {
