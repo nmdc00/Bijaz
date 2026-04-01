@@ -12,10 +12,11 @@ export interface TradeProposal {
   side: 'long' | 'short';
   thesisText: string;
   invalidationCondition: string;
-  invalidationPrice: number | null;
+  invalidationPrice: number;
   suggestedTtlMinutes: number;
   confidence: number;
   leverage: number;
+  expectedRMultiple: number;
 }
 
 export interface OriginationInputBundle {
@@ -33,10 +34,11 @@ const ProposalSchema = z.object({
   side: z.enum(['long', 'short']),
   thesisText: z.string(),
   invalidationCondition: z.string(),
-  invalidationPrice: z.number().nullable().optional(),
+  invalidationPrice: z.number(),
   suggestedTtlMinutes: z.number(),
   confidence: z.number(),
   leverage: z.number().min(1).default(1),
+  expectedRMultiple: z.number().min(0),
 });
 
 const SYSTEM_PROMPT = `You are Thufir, a disciplined trading agent. Your job is to evaluate market conditions and decide if there is ONE compelling trade setup.
@@ -46,14 +48,17 @@ Your default response is null — no trade. You should return null unless:
 2. You can specify exactly what would prove you wrong (invalidation condition)
 3. The TA data confirms the narrative (not just one or the other)
 
-A valid proposal requires ALL of: symbol, side, thesisText, invalidationCondition, suggestedTtlMinutes, confidence, leverage.
-Include invalidationPrice (number) if you can identify a specific price level that invalidates the thesis. Omit it (null) if not.
-Set leverage based on conviction and setup quality — higher conviction / lower volatility setups can use more leverage. Use 1 for uncertain setups.
+A valid proposal requires ALL of: symbol, side, thesisText, invalidationCondition, invalidationPrice, suggestedTtlMinutes, confidence, leverage, expectedRMultiple.
 
-Null is the correct answer most of the time. Do not force a trade.
+- invalidationPrice: the specific price level at which the thesis is structurally wrong. This is REQUIRED — if you cannot name a specific price, return null instead of proposing.
+- suggestedTtlMinutes: thesis-aware deadline, not a default. Ask yourself "how long should this take to play out?" — not "what's the standard timeout?". A news-driven move may be 30min; a structural breakout may be 4h.
+- expectedRMultiple: your honest reward-to-risk estimate (e.g. 2.5 means you expect to capture 2.5x the amount risked). Must be > 0.
+- leverage: based on conviction and setup quality. Use 1 for uncertain setups.
+
+Null is the correct answer most of the time. Do not force a trade. If you cannot specify a concrete invalidationPrice, return null.
 
 Respond with ONLY valid JSON matching this schema OR the literal string "null":
-{"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number|null,"suggestedTtlMinutes":number,"confidence":number,"leverage":number}`;
+{"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number,"suggestedTtlMinutes":number,"confidence":number,"leverage":number,"expectedRMultiple":number}`;
 
 const logger = new Logger('info');
 
@@ -153,10 +158,11 @@ function parseProposal(raw: string): TradeProposal | null {
       side: validated.side,
       thesisText: validated.thesisText,
       invalidationCondition: validated.invalidationCondition,
-      invalidationPrice: validated.invalidationPrice ?? null,
+      invalidationPrice: validated.invalidationPrice,
       suggestedTtlMinutes: validated.suggestedTtlMinutes,
       confidence: validated.confidence,
       leverage: validated.leverage,
+      expectedRMultiple: validated.expectedRMultiple,
     };
   } catch (error) {
     if (error instanceof SyntaxError) {

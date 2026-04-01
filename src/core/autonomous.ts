@@ -593,6 +593,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       regime: 'unknown',
       session: sessionContext.session,
       entryReasoning: proposal.thesisText,
+      invalidationPrice: proposal.invalidationPrice,
+      suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+      expectedRMultiple: proposal.expectedRMultiple,
     };
 
     if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
