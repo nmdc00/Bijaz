@@ -13,6 +13,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PerpTradeJournalEntry } from '../../src/memory/perp_trade_journal.js';
+import type { SignalPerformanceSummary } from '../../src/core/signal_performance.js';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -23,11 +25,34 @@ vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
 }));
 
 const mockLoggerWarn = vi.fn();
+const mockListPerpTradeJournals = vi.fn(() => []);
+const mockSummarizeSignalPerformance = vi.fn(
+  (_entries: PerpTradeJournalEntry[], signalClass: string): SignalPerformanceSummary => ({
+    signalClass,
+    sampleCount: 0,
+    wins: 0,
+    losses: 0,
+    thesisCorrectRate: 0,
+    expectancy: 0,
+    variance: 0,
+    sharpeLike: 0,
+    maeProxy: 0,
+    mfeProxy: 0,
+  })
+);
 
 vi.mock('../../src/core/logger.js', () => ({
   Logger: vi.fn().mockImplementation(() => ({
     warn: (...args: unknown[]) => mockLoggerWarn(...args),
   })),
+}));
+
+vi.mock('../../src/memory/perp_trade_journal.js', () => ({
+  listPerpTradeJournals: (...args: unknown[]) => mockListPerpTradeJournals(...args),
+}));
+
+vi.mock('../../src/core/signal_performance.js', () => ({
+  summarizeSignalPerformance: (...args: unknown[]) => mockSummarizeSignalPerformance(...args),
 }));
 
 // ── Import after mocks ────────────────────────────────────────────────────────
@@ -93,6 +118,21 @@ describe('LlmEntryGate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     notify = vi.fn().mockResolvedValue(undefined);
+    mockListPerpTradeJournals.mockReturnValue([]);
+    mockSummarizeSignalPerformance.mockImplementation(
+      (_entries: PerpTradeJournalEntry[], signalClass: string): SignalPerformanceSummary => ({
+        signalClass,
+        sampleCount: 0,
+        wins: 0,
+        losses: 0,
+        thesisCorrectRate: 0,
+        expectancy: 0,
+        variance: 0,
+        sharpeLike: 0,
+        maeProxy: 0,
+        mfeProxy: 0,
+      })
+    );
   });
 
   describe('conflict fast-path', () => {
@@ -580,6 +620,89 @@ describe('LlmEntryGate', () => {
       expect(userContent).toContain('conc%');
       expect(userContent).toContain('$4000');
       expect(userContent).toContain('$500');
+    });
+  });
+
+  describe('signal performance context', () => {
+    it('queries recent perp trade journals and summarizes the candidate signal class', async () => {
+      const entries: PerpTradeJournalEntry[] = [
+        { kind: 'perp_trade_journal', symbol: 'BTC', signalClass: 'momentum_breakout', outcome: 'executed' },
+      ];
+      const book = makeBook();
+      const gate = new LlmEntryGate(makeLlmClient({ verdict: 'approve', reasoning: 'good' }), makeLlmClient(null), notify, book, dummyConfig);
+
+      mockListPerpTradeJournals.mockReturnValue(entries);
+
+      await gate.evaluate(makeCandidate({ signalClass: 'momentum_breakout' }), markPrice);
+
+      expect(mockListPerpTradeJournals).toHaveBeenCalledWith({ limit: 200 });
+      expect(mockSummarizeSignalPerformance).toHaveBeenCalledWith(entries, 'momentum_breakout');
+    });
+
+    it('renders live track record stats in the prompt when signal history exists', async () => {
+      const book = makeBook();
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'supported by stats' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      mockSummarizeSignalPerformance.mockReturnValue({
+        signalClass: 'momentum_breakout',
+        sampleCount: 7,
+        wins: 4,
+        losses: 3,
+        thesisCorrectRate: 4 / 7,
+        expectancy: 0.37,
+        variance: 0.21,
+        sharpeLike: 0.81,
+        maeProxy: 0.042,
+        mfeProxy: 0.118,
+      });
+
+      await gate.evaluate(makeCandidate({ signalClass: 'momentum_breakout' }), markPrice);
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      expect(userContent).toContain('Signal class: momentum_breakout');
+      expect(userContent).toContain('7 trades');
+      expect(userContent).toContain('Win rate: 57%');
+      expect(userContent).toContain('Expectancy: 0.37');
+      expect(userContent).toContain('Sharpe-like: 0.81');
+      expect(userContent).toContain('Avg adverse move: 0.042');
+      expect(userContent).toContain('Avg favorable move: 0.118');
+      expect(userContent).not.toContain('Signal performance data will be populated in Phase 2');
+    });
+
+    it('renders novel setup guidance when no signal history exists', async () => {
+      const book = makeBook();
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'reject', reasoning: 'novel setup' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      mockSummarizeSignalPerformance.mockReturnValue({
+        signalClass: 'novel_breakout',
+        sampleCount: 0,
+        wins: 0,
+        losses: 0,
+        thesisCorrectRate: 0,
+        expectancy: 0,
+        variance: 0,
+        sharpeLike: 0,
+        maeProxy: 0,
+        mfeProxy: 0,
+      });
+
+      await gate.evaluate(makeCandidate({ signalClass: 'novel_breakout' }), markPrice);
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      expect(userContent).toContain('No historical trades for signal class "novel_breakout"');
+      expect(userContent).toContain('Treat as a novel setup');
     });
   });
 });
