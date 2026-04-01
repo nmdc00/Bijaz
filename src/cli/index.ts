@@ -55,6 +55,7 @@ import {
   runContextPackEffectivenessEvaluation,
   type ContextPackEffectivenessReport,
 } from '../discovery/context_pack_effectiveness.js';
+import { resolveGatewayLaunch } from './gateway_runtime.js';
 
 /**
  * Create the appropriate executor based on config execution mode.
@@ -2269,8 +2270,8 @@ program
       process.env.THUFIR_LOG_LEVEL = 'debug';
     }
 
-    const args = ['src/gateway/index.ts'];
-    const child = spawn('tsx', args, {
+    const launch = resolveGatewayLaunch();
+    const child = spawn(launch.command, launch.args, {
       stdio: 'inherit',
       env: { ...process.env },
     });
