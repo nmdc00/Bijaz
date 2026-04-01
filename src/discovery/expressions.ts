@@ -38,7 +38,7 @@ export function mapExpressionPlan(
   cluster: SignalCluster,
   hypothesis: Hypothesis
 ): ExpressionPlan {
-  const leverage = Math.min(config.hyperliquid?.maxLeverage ?? 5, 5);
+  const leverage = config.hyperliquid?.maxLeverage ?? 5;
   const dailyLimit = config.wallet?.limits?.daily ?? 100;
   const probeFraction = config.autonomy?.probeRiskFraction ?? 0.005;
   const probeBudget = Math.max(1, dailyLimit * probeFraction);
