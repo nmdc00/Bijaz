@@ -3,6 +3,8 @@ import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
 import type { PositionBook } from './position_book.js';
 import { recordEntryGateDecision } from '../memory/llm_entry_gate_log.js';
+import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
+import { summarizeSignalPerformance, type SignalPerformanceSummary } from './signal_performance.js';
 import { Logger } from './logger.js';
 
 export interface EntryGateCandidate {
@@ -69,6 +71,19 @@ function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
   return [summary, '', header, divider, ...rows].join('\n');
 }
 
+function formatTrackRecord(stats: SignalPerformanceSummary): string {
+  if (stats.sampleCount === 0) {
+    return `No historical trades for signal class "${stats.signalClass}". Treat as a novel setup — apply extra scrutiny.`;
+  }
+  const winPct = (stats.thesisCorrectRate * 100).toFixed(0);
+  const credibility = stats.sampleCount < 5 ? ' (low sample — high uncertainty)' : '';
+  return [
+    `Signal class: ${stats.signalClass} — ${stats.sampleCount} trades${credibility}`,
+    `Win rate: ${winPct}% | Expectancy: ${stats.expectancy.toFixed(2)} | Sharpe-like: ${stats.sharpeLike.toFixed(2)}`,
+    `Avg adverse move: ${stats.maeProxy.toFixed(3)} | Avg favorable move: ${stats.mfeProxy.toFixed(3)}`,
+  ].join('\n');
+}
+
 function resolveTimeoutMs(config: ThufirConfig): number {
   return Math.max(1, Number(config.autonomy?.llmEntryGate?.timeoutMs ?? 5_000));
 }
@@ -81,6 +96,7 @@ function buildPrompt(
   candidate: EntryGateCandidate,
   bookEntries: ReturnType<PositionBook['getAll']>,
   sameSideWarning: string | null,
+  signalStats: SignalPerformanceSummary,
 ): { system: string; user: string } {
   const system = `You are Thufir, an LLM-primary trading agent. Your job is to decide whether to approve, reject, or resize a trade candidate.
 
@@ -137,7 +153,7 @@ ${warningBlock}
 
 ## Signal Performance Context
 
-Signal performance data will be populated in Phase 2. Use your judgment based on the candidate's signal class and regime.
+${formatTrackRecord(signalStats)}
 
 ## Instruction
 
@@ -152,9 +168,10 @@ async function callLlm(
   candidate: EntryGateCandidate,
   bookEntries: ReturnType<PositionBook['getAll']>,
   sameSideWarning: string | null,
+  signalStats: SignalPerformanceSummary,
   timeoutMs?: number
 ): Promise<EntryGateDecision> {
-  const { system, user } = buildPrompt(candidate, bookEntries, sameSideWarning);
+  const { system, user } = buildPrompt(candidate, bookEntries, sameSideWarning, signalStats);
   const response = await client.complete(
     [
       { role: 'system', content: system },
@@ -254,6 +271,10 @@ export class LlmEntryGate {
     }
 
     const bookEntries = this.book.getAll();
+    const signalStats = summarizeSignalPerformance(
+      listPerpTradeJournals({ limit: 200 }),
+      candidate.signalClass,
+    );
     const timeoutMs = resolveTimeoutMs(this.config);
     let usedFallback = false;
     let decision: EntryGateDecision;
@@ -268,7 +289,7 @@ export class LlmEntryGate {
 
     // Try main LLM — no timeoutMs cap, matching AgenticOpenAiClient behaviour
     try {
-      decision = await callLlm(this.mainLlm, candidate, bookEntries, sameSideWarning);
+      decision = await callLlm(this.mainLlm, candidate, bookEntries, sameSideWarning, signalStats);
     } catch (error) {
       const summary = summarizeLlmError(error);
       logger.warn('Entry gate main LLM failed; falling back', {
@@ -284,7 +305,7 @@ export class LlmEntryGate {
         await this.notify('⚠️ Entry gate: using fallback LLM — decision quality may be lower');
       } catch { /* best-effort */ }
       try {
-        decision = await callLlm(this.fallbackLlm, candidate, bookEntries, sameSideWarning, timeoutMs);
+        decision = await callLlm(this.fallbackLlm, candidate, bookEntries, sameSideWarning, signalStats, timeoutMs);
       } catch (fallbackError) {
         const summary = summarizeLlmError(fallbackError);
         logger.warn('Entry gate fallback LLM failed; using safe default', {
