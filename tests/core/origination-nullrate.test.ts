@@ -154,6 +154,8 @@ describe('LlmTradeOriginator null-rate discipline', () => {
       invalidationPrice: 63000,
       suggestedTtlMinutes: 120,
       confidence: 0.55,   // exactly at threshold
+      leverage: 3,
+      expectedRMultiple: 2.5,
     });
 
     const originator = new LlmTradeOriginator(
@@ -181,6 +183,8 @@ describe('LlmTradeOriginator null-rate discipline', () => {
       invalidationPrice: 3000,
       suggestedTtlMinutes: 60,
       confidence: 0.49,   // below 0.55
+      leverage: 2,
+      expectedRMultiple: 1.5,
     });
 
     const originator = new LlmTradeOriginator(
