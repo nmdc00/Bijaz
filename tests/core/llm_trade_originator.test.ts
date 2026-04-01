@@ -542,7 +542,7 @@ describe('LlmTradeOriginator', () => {
       expect(contextSection.length).toBeLessThanOrEqual(1000);
     });
 
-    it('includes system prompt with null-bias framing', async () => {
+    it('includes system prompt with wealth-accumulation framing', async () => {
       const completeFn = vi.fn().mockResolvedValue({ content: 'null', model: 'test' });
       const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
       const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
@@ -551,8 +551,8 @@ describe('LlmTradeOriginator', () => {
 
       const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
       const systemContent = messages.find((m) => m.role === 'system')?.content ?? '';
-      expect(systemContent).toContain('default response is null');
-      expect(systemContent).toContain('Null is the correct answer most of the time');
+      expect(systemContent).toContain('invalidationPrice');
+      expect(systemContent).toContain('expectedRMultiple');
     });
   });
 });
