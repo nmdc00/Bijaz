@@ -1425,7 +1425,7 @@ function resolveJournalClosedAtMs(
   createdAt: string | undefined
 ): number | null {
   const raw = String(payload.closedAt ?? createdAt ?? '');
-  const value = Date.parse(raw);
+  const value = raw ? Date.parse(raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z') : NaN;
   return Number.isFinite(value) ? value : null;
 }
 
