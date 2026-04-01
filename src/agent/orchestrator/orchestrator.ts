@@ -495,7 +495,8 @@ function getMutatingTradeSkipReason(
     const cooldownMs = resolveTradeMutationCooldownMs(ctx);
     if (cooldownMs > 0) {
       const previous = getExecutionState(TRADE_MUTATION_GUARD_SOURCE);
-      const previousTs = previous?.updatedAt ? Date.parse(previous.updatedAt) : Number.NaN;
+      const rawTs = previous?.updatedAt ?? '';
+      const previousTs = rawTs ? Date.parse(rawTs.includes('T') ? rawTs : rawTs.replace(' ', 'T') + 'Z') : Number.NaN;
       if (Number.isFinite(previousTs)) {
         const elapsedMs = Date.now() - previousTs;
         if (elapsedMs >= 0 && elapsedMs < cooldownMs) {
