@@ -15,6 +15,7 @@ export interface TradeProposal {
   invalidationPrice: number | null;
   suggestedTtlMinutes: number;
   confidence: number;
+  leverage: number;
 }
 
 export interface OriginationInputBundle {
@@ -35,6 +36,7 @@ const ProposalSchema = z.object({
   invalidationPrice: z.number().nullable().optional(),
   suggestedTtlMinutes: z.number(),
   confidence: z.number(),
+  leverage: z.number().min(1).default(1),
 });
 
 const SYSTEM_PROMPT = `You are Thufir, a disciplined trading agent. Your job is to evaluate market conditions and decide if there is ONE compelling trade setup.
@@ -44,13 +46,14 @@ Your default response is null — no trade. You should return null unless:
 2. You can specify exactly what would prove you wrong (invalidation condition)
 3. The TA data confirms the narrative (not just one or the other)
 
-A valid proposal requires ALL of: symbol, side, thesisText, invalidationCondition, suggestedTtlMinutes, confidence.
+A valid proposal requires ALL of: symbol, side, thesisText, invalidationCondition, suggestedTtlMinutes, confidence, leverage.
 Include invalidationPrice (number) if you can identify a specific price level that invalidates the thesis. Omit it (null) if not.
+Set leverage based on conviction and setup quality — higher conviction / lower volatility setups can use more leverage. Use 1 for uncertain setups.
 
 Null is the correct answer most of the time. Do not force a trade.
 
 Respond with ONLY valid JSON matching this schema OR the literal string "null":
-{"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number|null,"suggestedTtlMinutes":number,"confidence":number}`;
+{"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number|null,"suggestedTtlMinutes":number,"confidence":number,"leverage":number}`;
 
 const logger = new Logger('info');
 
@@ -153,6 +156,7 @@ function parseProposal(raw: string): TradeProposal | null {
       invalidationPrice: validated.invalidationPrice ?? null,
       suggestedTtlMinutes: validated.suggestedTtlMinutes,
       confidence: validated.confidence,
+      leverage: validated.leverage,
     };
   } catch (error) {
     if (error instanceof SyntaxError) {
