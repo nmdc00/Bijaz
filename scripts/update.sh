@@ -29,6 +29,10 @@ fi
 
 echo "- Restarting service"
 if command -v systemctl >/dev/null 2>&1; then
+  if systemctl list-unit-files --type=service --no-legend | awk '{print $1}' | grep -qx 'bijaz.service'; then
+    echo "- Disabling legacy bijaz service"
+    sudo systemctl disable --now bijaz || true
+  fi
   sudo systemctl restart thufir
   sudo systemctl status thufir --no-pager
   if systemctl list-unit-files --type=service --no-legend | awk '{print $1}' | grep -qx 'openclaw-gateway.service'; then
