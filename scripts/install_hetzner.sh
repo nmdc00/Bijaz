@@ -184,7 +184,7 @@ WorkingDirectory=${INSTALL_PATH}
 Environment=NODE_ENV=production
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:${HOME}/.bun/bin
 EnvironmentFile=${INSTALL_PATH}/.env
-ExecStart=/usr/bin/pnpm thufir gateway
+ExecStart=/usr/bin/node ${INSTALL_PATH}/dist/gateway/index.js
 Restart=always
 User=${RUN_USER}
 Group=${RUN_USER}
@@ -197,6 +197,9 @@ echo "Enabling service..."
 sudo systemctl daemon-reload
 sudo systemctl enable thufir
 sudo systemctl start thufir
+if systemctl list-unit-files --type=service --no-legend | awk '{print $1}' | grep -qx 'bijaz.service'; then
+  sudo systemctl disable --now bijaz || true
+fi
 
 echo "Installing update helper..."
 sudo tee /usr/local/bin/thufir-update >/dev/null <<EOF
@@ -206,6 +209,9 @@ cd "${INSTALL_PATH}"
 git pull
 pnpm install
 pnpm build
+if systemctl list-unit-files --type=service --no-legend | awk '{print $1}' | grep -qx 'bijaz.service'; then
+  sudo systemctl disable --now bijaz || true
+fi
 sudo systemctl restart thufir
 sudo systemctl status thufir --no-pager
 if systemctl list-unit-files --type=service --no-legend | awk '{print \$1}' | grep -qx 'llm-mux.service'; then
