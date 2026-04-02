@@ -16,6 +16,7 @@ import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { selectDiscoveryMarkets } from '../discovery/market_selector.js';
+import { countFinalPredictions } from '../memory/calibration.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
 import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -153,6 +154,11 @@ export interface AutonomousEvents {
   'resumed': () => void;
   'error': (error: Error) => void;
 }
+
+// Fires a one-time Telegram notification when learning_examples reaches the Phase 2 threshold.
+// Resets on process restart — intentional, as the system should remind on each deploy until acted on.
+let plilPhase2NotifiedThisRun = false;
+const PLIL_PHASE2_THRESHOLD = 50;
 
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
@@ -351,6 +357,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   async runScan(options?: { forceExecute?: boolean; maxTrades?: number }): Promise<string> {
     if (this.isPaused) {
       return `Autonomous trading is paused: ${this.pauseReason}`;
+    }
+
+    if (!plilPhase2NotifiedThisRun && this.notify) {
+      const count = countFinalPredictions();
+      if (count >= PLIL_PHASE2_THRESHOLD) {
+        plilPhase2NotifiedThisRun = true;
+        this.notify(
+          `🧠 PLIL Phase 2 unblocked: ${count} confirmed predictions in learning_examples.\n` +
+          `Time to start feat/v1.99-learning-metrics (rolling window metrics + gate wiring).`
+        ).catch(() => {});
+      }
     }
 
     const remaining = this.limiter.getRemainingDaily();

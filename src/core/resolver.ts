@@ -83,6 +83,7 @@ export async function resolveOutcomes(
       recordOutcome({
         id: prediction.id,
         outcome,
+        outcomeBasis: resolvedOutcome ? 'final' : 'estimated',
         outcomeTimestamp: asOfIso,
         resolutionMetadata: {
           basis: resolvedOutcome ? 'market_resolution' : 'snapshot_threshold',

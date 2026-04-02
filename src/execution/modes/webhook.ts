@@ -24,6 +24,8 @@ export class WebhookExecutor implements ExecutionAdapter {
       predictedProbability: market.prices?.[decision.outcome] ?? undefined,
       confidenceLevel: decision.confidence,
       reasoning: decision.reasoning,
+      modelProbability: decision.modelProbability ?? undefined,
+      marketProbability: market.prices?.[decision.outcome] ?? undefined,
     });
 
     const response = await fetch(this.webhookUrl, {
