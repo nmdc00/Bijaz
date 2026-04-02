@@ -14,6 +14,7 @@ export interface CalibrationSummary {
 export function recordOutcome(params: {
   id: string;
   outcome: 'YES' | 'NO';
+  outcomeBasis?: 'final' | 'estimated';
   outcomeTimestamp?: string;
   resolutionMetadata?: Record<string, unknown> | null;
 }): void {
@@ -107,7 +108,8 @@ export function recordOutcome(params: {
           resolution_metadata = @resolutionMetadata,
           resolution_timestamp = @resolutionTimestamp,
           brier_contribution = @brier,
-          pnl = @pnl
+          pnl = @pnl,
+          outcome_basis = @outcomeBasis
       WHERE id = @id
     `
   ).run({
@@ -121,6 +123,7 @@ export function recordOutcome(params: {
     resolutionTimestamp: params.outcomeTimestamp ?? new Date().toISOString(),
     brier,
     pnl,
+    outcomeBasis: params.outcomeBasis ?? 'estimated',
   });
 
   if (payout && payout > 0) {
