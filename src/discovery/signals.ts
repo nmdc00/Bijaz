@@ -308,12 +308,11 @@ export async function signalHyperliquidOrderflowImbalance(
   let trades;
   try {
     trades = await client.getRecentTrades(coin);
-  } catch (error) {
-    if (isHyperliquidTransientInfoError(error)) {
-      signalCache.set(cacheKey, null, 15_000);
-      return null;
-    }
-    throw error;
+  } catch {
+    // DEX perps return HTTP 500 with body null — recentTrades is unsupported for them.
+    // Cache null so the same coin isn't retried on every scan cycle.
+    signalCache.set(cacheKey, null, getSignalCacheTtlMs(config));
+    return null;
   }
   if (trades.length === 0) return null;
 
