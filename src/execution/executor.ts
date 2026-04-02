@@ -14,6 +14,7 @@ export interface TradeDecision {
   confidence?: 'low' | 'medium' | 'high';
   reasoning?: string;
   marketSlippageBps?: number;
+  modelProbability?: number; // Thufir's raw probability estimate for prediction-market trades
 }
 
 export interface TradeResult {
