@@ -35,6 +35,9 @@ export interface PredictionInput {
   executed?: boolean;
   executionPrice?: number;
   positionSize?: number;
+  // PLIL v1.99: clean probability separation
+  modelProbability?: number;    // Thufir's raw estimate — never market price
+  marketProbability?: number;   // market-implied price at decision time
 }
 
 export interface PredictionRecord {
@@ -68,6 +71,9 @@ export interface PredictionRecord {
   outcome?: Outcome | null;
   outcomeTimestamp?: string | null;
   pnl?: number | null;
+  modelProbability?: number | null;
+  marketProbability?: number | null;
+  outcomeBasis?: 'final' | 'estimated' | 'legacy' | null;
 }
 
 export interface OpenPositionRecord {
@@ -183,7 +189,9 @@ export function createPrediction(input: PredictionInput): string {
       resolution_status,
       executed,
       execution_price,
-      position_size
+      position_size,
+      model_probability,
+      market_probability
     ) VALUES (
       @id,
       @marketId,
@@ -208,7 +216,9 @@ export function createPrediction(input: PredictionInput): string {
       @resolutionStatus,
       @executed,
       @executionPrice,
-      @positionSize
+      @positionSize,
+      @modelProbability,
+      @marketProbability
     )
   `);
 
@@ -237,6 +247,8 @@ export function createPrediction(input: PredictionInput): string {
     executed: input.executed ? 1 : 0,
     executionPrice: input.executionPrice ?? null,
     positionSize: input.positionSize ?? null,
+    modelProbability: input.modelProbability ?? null,
+    marketProbability: input.marketProbability ?? null,
   });
 
   return id;
@@ -280,7 +292,10 @@ export function listPredictions(options?: {
       position_size as positionSize,
       outcome,
       outcome_timestamp as outcomeTimestamp,
-      pnl
+      pnl,
+      model_probability as modelProbability,
+      market_probability as marketProbability,
+      outcome_basis as outcomeBasis
     FROM predictions
   `;
 
@@ -330,6 +345,9 @@ export function listPredictions(options?: {
     outcome: (row.outcome as Outcome | null) ?? null,
     outcomeTimestamp: (row.outcomeTimestamp as string | null) ?? null,
     pnl: row.pnl as number | null,
+    modelProbability: row.modelProbability as number | null,
+    marketProbability: row.marketProbability as number | null,
+    outcomeBasis: (row.outcomeBasis as 'final' | 'estimated' | 'legacy' | null) ?? null,
   }));
 }
 
@@ -367,7 +385,10 @@ export function getPrediction(id: string): PredictionRecord | null {
         position_size as positionSize,
         outcome,
         outcome_timestamp as outcomeTimestamp,
-        pnl
+        pnl,
+        model_probability as modelProbability,
+        market_probability as marketProbability,
+        outcome_basis as outcomeBasis
       FROM predictions
       WHERE id = ?
       LIMIT 1
@@ -414,6 +435,9 @@ export function getPrediction(id: string): PredictionRecord | null {
     outcome: (row.outcome as Outcome | null) ?? null,
     outcomeTimestamp: (row.outcomeTimestamp as string | null) ?? null,
     pnl: row.pnl as number | null,
+    modelProbability: row.modelProbability as number | null,
+    marketProbability: row.marketProbability as number | null,
+    outcomeBasis: (row.outcomeBasis as 'final' | 'estimated' | 'legacy' | null) ?? null,
   };
 }
 
