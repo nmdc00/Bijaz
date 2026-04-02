@@ -144,6 +144,18 @@ export function recordOutcome(params: {
   }
 }
 
+export function countFinalPredictions(): number {
+  const db = openDatabase();
+  try {
+    const row = db.prepare('SELECT COUNT(*) AS c FROM learning_examples').get() as
+      | { c: number }
+      | undefined;
+    return Number(row?.c ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 export function listCalibrationSummaries(): CalibrationSummary[] {
   const db = openDatabase();
   const rows = db
