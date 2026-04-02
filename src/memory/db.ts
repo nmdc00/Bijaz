@@ -20,11 +20,40 @@ function ensureDirectory(path: string): void {
 
 function applySchema(db: Database.Database): void {
   migratePredictionsForDelphiResolution(db);
+  migratePredictionsForPlil(db);  // must run before schema.sql so the view can reference outcome_basis
   const schemaSql = getSchemaSql();
   db.exec(schemaSql);
   migratePredictionsForDelphiResolution(db);
   migrateAlertPersistenceLifecycle(db);
   migrateCausalEventReasoning(db);
+}
+
+function migratePredictionsForPlil(db: Database.Database): void {
+  const hasPredictionsTable = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'predictions' LIMIT 1")
+    .get();
+  if (!hasPredictionsTable) {
+    return;
+  }
+
+  const columns = db
+    .prepare("PRAGMA table_info('predictions')")
+    .all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  const addColumnIfMissing = (name: string, definition: string): void => {
+    if (columnNames.has(name)) {
+      return;
+    }
+    db.exec(`ALTER TABLE predictions ADD COLUMN ${definition}`);
+    columnNames.add(name);
+  };
+
+  addColumnIfMissing('model_probability', 'model_probability REAL');
+  addColumnIfMissing('market_probability', 'market_probability REAL');
+  addColumnIfMissing(
+    'outcome_basis',
+    "outcome_basis TEXT DEFAULT 'legacy' CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))"
+  );
 }
 
 function migrateCausalEventReasoning(db: Database.Database): void {

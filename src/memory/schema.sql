@@ -46,7 +46,16 @@ CREATE TABLE IF NOT EXISTS predictions (
     outcome TEXT CHECK(outcome IS NULL OR outcome IN ('YES', 'NO')),
     outcome_timestamp TEXT,
     pnl REAL,
-    brier_contribution REAL
+    brier_contribution REAL,
+
+    -- PLIL v1.99: clean probability separation and outcome integrity
+    model_probability REAL,    -- Thufir's raw probability estimate (never market price)
+    market_probability REAL,   -- market-implied price at decision time
+    outcome_basis TEXT DEFAULT 'legacy'
+        CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))
+        -- 'final'    = confirmed market resolution (use for learning)
+        -- 'estimated' = snapshot-threshold inference (exclude from learning)
+        -- 'legacy'   = pre-v1.99 row (exclude from learning)
 );
 
 CREATE INDEX IF NOT EXISTS idx_predictions_market ON predictions(market_id);
@@ -59,6 +68,42 @@ CREATE INDEX IF NOT EXISTS idx_predictions_symbol ON predictions(symbol);
 CREATE INDEX IF NOT EXISTS idx_predictions_created ON predictions(created_at);
 CREATE INDEX IF NOT EXISTS idx_predictions_outcome ON predictions(outcome);
 CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(outcome) WHERE outcome IS NULL;
+CREATE INDEX IF NOT EXISTS idx_predictions_outcome_basis ON predictions(outcome_basis);
+CREATE INDEX IF NOT EXISTS idx_predictions_learning
+  ON predictions(outcome_basis, domain, outcome_timestamp DESC)
+  WHERE outcome_basis = 'final'
+    AND model_probability IS NOT NULL
+    AND market_probability IS NOT NULL
+    AND outcome IS NOT NULL;
+
+-- ============================================================================
+-- Learning Examples (view — single source of truth for metrics and calibration)
+-- ============================================================================
+
+CREATE VIEW IF NOT EXISTS learning_examples AS
+SELECT
+  id,
+  domain,
+  regime_tag           AS regime,
+  strategy_class,
+  symbol,
+  model_probability,
+  market_probability,
+  executed,
+  position_size,
+  CASE WHEN outcome = 'YES' THEN 1 ELSE 0 END                               AS outcome_value,
+  pnl,
+  (model_probability  - CASE WHEN outcome = 'YES' THEN 1.0 ELSE 0.0 END)
+  * (model_probability  - CASE WHEN outcome = 'YES' THEN 1.0 ELSE 0.0 END)  AS brier_model,
+  (market_probability - CASE WHEN outcome = 'YES' THEN 1.0 ELSE 0.0 END)
+  * (market_probability - CASE WHEN outcome = 'YES' THEN 1.0 ELSE 0.0 END)  AS brier_market,
+  created_at,
+  outcome_timestamp    AS resolved_at
+FROM predictions
+WHERE outcome_basis     = 'final'
+  AND model_probability  IS NOT NULL
+  AND market_probability IS NOT NULL
+  AND outcome            IS NOT NULL;
 
 -- ============================================================================
 -- Calibration Cache

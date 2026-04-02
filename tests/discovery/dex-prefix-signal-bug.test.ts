@@ -33,17 +33,21 @@ function makeCandles(n: number) {
 // candleSnapshot returns data for bare coin names, throws for prefixed ones
 vi.mock('../../src/execution/hyperliquid/client.js', () => ({
   HyperliquidClient: class {
-    async getCandleSnapshot({ coin }: { coin: string }) {
-      // HL candle API: lowercase prefix works (flx:GOLD ✓), uppercase fails (FLX:GOLD → 500)
-      // bare coin names only work for main perp markets (BTC, ETH), not DEX symbols
-      const colonIdx = coin.indexOf(':');
-      if (colonIdx >= 0 && coin.slice(0, colonIdx) !== coin.slice(0, colonIdx).toLowerCase()) {
-        throw new Error('500 Internal Server Error');
-      }
-      if (colonIdx < 0 && !['BTC', 'ETH', 'GOLD', 'USENERGY'].includes(coin)) {
-        throw new Error('500 Internal Server Error');
-      }
-      return makeCandles(80);
+    getInfoClient() {
+      return {
+        candleSnapshot: async ({ coin }: { coin: string }) => {
+          // HL candle API: lowercase prefix works (flx:GOLD ✓), uppercase fails (FLX:GOLD → 500)
+          // bare coin names only work for main perp markets (BTC, ETH), not DEX symbols
+          const colonIdx = coin.indexOf(':');
+          if (colonIdx >= 0 && coin.slice(0, colonIdx) !== coin.slice(0, colonIdx).toLowerCase()) {
+            throw new Error('500 Internal Server Error');
+          }
+          if (colonIdx < 0 && !['BTC', 'ETH', 'GOLD', 'USENERGY'].includes(coin)) {
+            throw new Error('500 Internal Server Error');
+          }
+          return makeCandles(80);
+        },
+      };
     }
     async getMergedMetaAndAssetCtxs() {
       return [
