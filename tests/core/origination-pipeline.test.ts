@@ -150,8 +150,6 @@ const validProposalJson = JSON.stringify({
   invalidationPrice: 63000,
   suggestedTtlMinutes: 120,
   confidence: 0.72,
-  leverage: 3,
-  expectedRMultiple: 2.5,
 });
 
 const validShortProposalJson = JSON.stringify({
@@ -162,8 +160,6 @@ const validShortProposalJson = JSON.stringify({
   invalidationPrice: 3200,
   suggestedTtlMinutes: 60,
   confidence: 0.68,
-  leverage: 2,
-  expectedRMultiple: 2.0,
 });
 
 const dummyConfig = {} as any;
@@ -253,11 +249,9 @@ describe('Section 2: LlmTradeOriginator null discipline', () => {
       side: 'long',
       thesisText: 'Weak setup',
       invalidationCondition: 'Falls below support',
-      invalidationPrice: 140,
+      invalidationPrice: null,
       suggestedTtlMinutes: 60,
       confidence: 0.3,
-      leverage: 1,
-      expectedRMultiple: 1.5,
     });
     const config = { autonomy: { origination: { minConfidence: 0.55, timeoutMs: 10000 } } } as any;
     const originator = new LlmTradeOriginator(
@@ -441,7 +435,7 @@ describe('Section 4: Exit policy from LLM proposal', () => {
     expect(args[3]).toBe(63000);
   });
 
-  it('proposal is rejected when invalidationPrice is null — price is now required', async () => {
+  it('invalidationPrice is null when proposal has invalidationPrice: null', async () => {
     const noInvalidationProposal = JSON.stringify({
       symbol: 'SOL',
       side: 'long',
@@ -450,8 +444,6 @@ describe('Section 4: Exit policy from LLM proposal', () => {
       invalidationPrice: null,
       suggestedTtlMinutes: 90,
       confidence: 0.65,
-      leverage: 1,
-      expectedRMultiple: 2.0,
     });
     const originator = new LlmTradeOriginator(
       makeLlmClient(noInvalidationProposal),
@@ -459,8 +451,12 @@ describe('Section 4: Exit policy from LLM proposal', () => {
       dummyConfig
     );
     const proposal = await originator.propose(makeBundle());
-    expect(proposal).toBeNull();
-    expect(mockUpsertPositionExitPolicy).not.toHaveBeenCalled();
+    expect(proposal!.invalidationPrice).toBeNull();
+
+    writeExitPolicyFromProposal(proposal!, mockUpsertPositionExitPolicy);
+
+    const args = mockUpsertPositionExitPolicy.mock.calls[0];
+    expect(args[3]).toBeNull();
   });
 });
 
