@@ -572,10 +572,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return `${symbol}: Skipped originator proposal (insufficient daily budget $${remainingDaily.toFixed(2)})`;
     }
 
-    const adaptiveLeverageCap =
-      (getAutonomyPolicyState().leverageCapOverride) ??
-      Number((this.thufirConfig.hyperliquid as any)?.maxLeverage ?? 5);
-    const targetLeverage = Math.min(3, adaptiveLeverageCap);
+    const targetLeverage = proposal.leverage;
 
     const riskCheck = await checkPerpRiskLimits({
       config: this.thufirConfig,
@@ -615,6 +612,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       entryReasoning: proposal.thesisText,
       invalidationPrice: proposal.invalidationPrice,
       suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+      expectedRMultiple: proposal.expectedRMultiple,
     };
 
     if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
