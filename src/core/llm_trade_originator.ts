@@ -8,6 +8,7 @@ import { recordTradeProposal } from '../memory/llm_trade_proposals.js';
 import { Logger } from './logger.js';
 
 export interface TradeProposal {
+  proposalRecordId?: number;
   symbol: string;
   side: 'long' | 'short';
   thesisText: string;
@@ -276,7 +277,7 @@ export class LlmTradeOriginator {
     }
 
     // Write to DB
-    recordTradeProposal({
+    const proposalRecordId = recordTradeProposal({
       triggerReason,
       alertedSymbols: effectiveBundle.alertedSymbols,
       proposed: proposal !== null,
@@ -290,6 +291,13 @@ export class LlmTradeOriginator {
       executed: false,
       usedFallback,
     });
+
+    if (proposal !== null) {
+      proposal = {
+        ...proposal,
+        proposalRecordId,
+      };
+    }
 
     return proposal;
   }

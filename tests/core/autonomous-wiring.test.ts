@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
   const triggerShouldFire = vi.fn();
   const originatorPropose = vi.fn();
   const upsertExitPolicy = vi.fn();
+  const updateTradeProposalOutcome = vi.fn();
 
   // Stable mock objects — replaced entirely on each TaSurface/OriginationTrigger/LlmTradeOriginator construction
   // by capturing via the constructor mock
@@ -41,7 +42,7 @@ const mocks = vi.hoisted(() => {
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy,
+    upsertExitPolicy, updateTradeProposalOutcome,
     taSurfaceInstance, triggerInstance, originatorInstance,
   };
 });
@@ -62,6 +63,10 @@ vi.mock('../../src/core/origination_trigger.js', () => ({
 
 vi.mock('../../src/core/llm_trade_originator.js', () => ({
   LlmTradeOriginator: vi.fn(() => mocks.originatorInstance),
+}));
+
+vi.mock('../../src/memory/llm_trade_proposals.js', () => ({
+  updateTradeProposalOutcome: (...args: unknown[]) => mocks.updateTradeProposalOutcome(...args),
 }));
 
 vi.mock('../../src/discovery/engine.js', () => ({
@@ -221,6 +226,7 @@ const BASE_SNAPSHOT = {
 };
 
 const BASE_PROPOSAL = {
+  proposalRecordId: 42,
   symbol: 'BTC',
   side: 'long' as const,
   thesisText: 'BTC breaking out with OI spike',
@@ -277,6 +283,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     const decision = executor.execute.mock.calls[0]![1];
     expect(decision.symbol).toBe('BTC');
     expect(decision.side).toBe('buy');
+    expect(decision.modelProbability).toBe(0.72);
 
     // Exit policy: invalidationPrice = 68000, TTL = 45 min
     expect(mocks.upsertExitPolicy).toHaveBeenCalledTimes(1);
@@ -286,6 +293,8 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(invPrice).toBe(68000);
     expect(timeStop).toBeGreaterThan(Date.now());
     expect(timeStop).toBeLessThanOrEqual(Date.now() + 45 * 60 * 1000 + 1000);
+
+    expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 
     expect(result).toContain('paper ok');
   });
@@ -371,6 +380,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(executor.execute).not.toHaveBeenCalled();
     expect(result).toMatch(/rejected by LLM entry gate/i);
     expect(limiter.release).toHaveBeenCalled();
+    expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'reject', false);
   });
 
   it('6. gate resize → executor called with adjusted size', async () => {

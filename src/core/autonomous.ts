@@ -51,6 +51,7 @@ import { TaSurface } from './ta_surface.js';
 import { OriginationTrigger } from './origination_trigger.js';
 import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { listEvents } from '../memory/events.js';
+import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -618,6 +619,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
       if (gateDecision.verdict === 'reject') {
         this.limiter.release(probeUsd);
+        if (proposal.proposalRecordId != null) {
+          updateTradeProposalOutcome(proposal.proposalRecordId, gateDecision.verdict, false);
+        }
         return `${symbol}: Originator proposal rejected by LLM entry gate — ${gateDecision.reasoning}`;
       }
       if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
@@ -634,10 +638,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       size,
       orderType: 'market',
       leverage: targetLeverage,
+      modelProbability: proposal.confidence,
       reasoning: `LLM originator: ${proposal.thesisText} | confidence=${proposal.confidence.toFixed(2)} invalidation=${proposal.invalidationCondition} ttl=${proposal.suggestedTtlMinutes}min`,
     };
 
     const tradeResult = await this.executor.execute(market, decision);
+    if (proposal.proposalRecordId != null) {
+      updateTradeProposalOutcome(proposal.proposalRecordId, 'approve', tradeResult.executed);
+    }
     if (tradeResult.executed) {
       this.limiter.confirm(probeUsd);
 
