@@ -51,6 +51,7 @@ import { TaSurface } from './ta_surface.js';
 import { OriginationTrigger } from './origination_trigger.js';
 import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { listEvents } from '../memory/events.js';
+import { extractRecentIntelEvents } from '../events/extract.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 
 function clamp01(value: number): number {
@@ -464,6 +465,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return true;
     });
 
+    // Refresh events from recent intel so reactive trigger has current data
+    extractRecentIntelEvents(25);
+
     // Get pending events for trigger
     const pendingEvents = listEvents({ limit: 10 });
 
@@ -613,6 +617,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       entryReasoning: proposal.thesisText,
       invalidationPrice: proposal.invalidationPrice,
       suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+      expectedRMultiple: proposal.expectedRMultiple,
     };
 
     if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
