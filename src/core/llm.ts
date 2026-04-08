@@ -1162,6 +1162,38 @@ type OpenAiMessage =
   | { role: 'assistant'; content: string | null; tool_calls: OpenAiToolCall[] }
   | { role: 'tool'; content: string; tool_call_id: string };
 
+function toResponsesInputItem(msg: OpenAiMessage): unknown[] {
+  if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
+    return msg.tool_calls.map((call) => ({
+      type: 'function_call',
+      name: call.function.name,
+      arguments: call.function.arguments,
+      call_id: call.id,
+    }));
+  }
+  if (msg.role === 'tool') {
+    return [
+      {
+        type: 'function_call_output',
+        call_id: msg.tool_call_id,
+        output: msg.content ?? '',
+      },
+    ];
+  }
+
+  return [
+    {
+      role: msg.role,
+      content: [
+        {
+          type: msg.role === 'assistant' ? 'output_text' : 'input_text',
+          text: msg.content ?? '',
+        },
+      ],
+    },
+  ];
+}
+
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 
 function sleep(ms: number): Promise<void> {
@@ -1299,20 +1331,7 @@ export class AgenticOpenAiClient implements LlmClient {
                     .join('\n\n---\n\n') || undefined,
                   input: openaiMessages
                     .filter((msg) => msg.role !== 'system')
-                    .flatMap((msg): unknown[] => {
-                      if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
-                        return msg.tool_calls.map((call) => ({
-                          type: 'function_call',
-                          name: call.function.name,
-                          arguments: call.function.arguments,
-                          call_id: call.id,
-                        }));
-                      }
-                      if (msg.role === 'tool') {
-                        return [{ type: 'function_call_output', call_id: (msg as any).tool_call_id, output: msg.content ?? '' }];
-                      }
-                      return [{ role: msg.role, content: [{ type: 'input_text', text: msg.content ?? '' }] }];
-                    }),
+                    .flatMap((msg): unknown[] => toResponsesInputItem(msg)),
                   tools: scopedTools.map((tool) => ({
                     type: 'function',
                     function: {
@@ -1559,10 +1578,7 @@ class OpenAiClient implements LlmClient {
                   .join('\n\n---\n\n') || undefined,
                 input: openaiMessages
                   .filter((msg) => msg.role !== 'system')
-                  .map((msg) => ({
-                    role: msg.role,
-                    content: [{ type: 'input_text', text: msg.content }],
-                  })),
+                  .flatMap((msg) => toResponsesInputItem(msg)),
               }
             : {
                 model: this.model,
