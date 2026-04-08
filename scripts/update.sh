@@ -19,6 +19,13 @@ if [ -d "$ROOT_DIR/vendor/openclaw/.git" ]; then
   pnpm --dir "$ROOT_DIR/vendor/openclaw" install
 fi
 
+echo "- Syncing workspace files"
+WORKSPACE_DIR="${THUFIR_WORKSPACE:-$HOME/.bijaz}"
+mkdir -p "$WORKSPACE_DIR"
+for f in "$ROOT_DIR/workspace/"*.md; do
+  cp "$f" "$WORKSPACE_DIR/" 2>/dev/null || true
+done
+
 echo "- Building"
 pnpm build
 

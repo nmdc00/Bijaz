@@ -760,6 +760,7 @@ const ConfigSchema = z.object({
       eventDriven: z.boolean().default(false),
       eventDrivenMinItems: z.number().default(1),
       eventDrivenCooldownSeconds: z.number().default(120),
+      eventDrivenHeartbeat: z.boolean().default(false),
       strategy: z.enum(['opportunity', 'discovery']).default('discovery'),
       probeRiskFraction: z.number().default(0.005),
       // Full autonomous mode options
