@@ -224,6 +224,7 @@ autonomy:
   watchlistOnly: true
   eventDriven: false
   eventDrivenMinItems: 1
+  eventDrivenHeartbeat: true
   strategy: discovery
   probeRiskFraction: 0.005
 

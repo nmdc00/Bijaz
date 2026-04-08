@@ -122,6 +122,9 @@ const eventScanTrigger = new EventScanTriggerCoordinator({
   cooldownMs: Math.max(0, Number(config.autonomy?.eventDrivenCooldownSeconds ?? 120)) * 1000,
 });
 
+// Set by the heartbeat block below; called from maybeRunEventDrivenScan when eventDrivenHeartbeat is on.
+let _triggerHeartbeat: (() => Promise<void>) | null = null;
+
 async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount: number): Promise<void> {
   const minItems = Math.max(1, Number(config.autonomy?.eventDrivenMinItems ?? 1));
   const decision = eventScanTrigger.tryAcquire({
@@ -142,6 +145,12 @@ async function maybeRunEventDrivenScan(source: 'intel' | 'proactive', itemCount:
   logger.info(
     `Event-driven scan executed (${source}) in ${Date.now() - startedAt}ms: ${scanResult}`
   );
+  if (config.autonomy?.eventDrivenHeartbeat && _triggerHeartbeat) {
+    logger.info(`Event-driven heartbeat triggered (${source})`);
+    await _triggerHeartbeat().catch((err: unknown) => {
+      logger.error('Event-driven heartbeat failed', err);
+    });
+  }
 }
 
 for (const instance of agentRegistry.agents.values()) {
@@ -750,6 +759,9 @@ if (heartbeatConfig?.enabled) {
       }
     }
   };
+
+  // Expose for event-driven triggering (must be after runHeartbeat is defined)
+  _triggerHeartbeat = async () => runHeartbeat();
 
   scheduler.registerJob(
     {
