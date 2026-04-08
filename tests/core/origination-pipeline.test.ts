@@ -491,12 +491,15 @@ describe('Section 7: DB logging', () => {
   });
 
   it('recordTradeProposal called with proposed=true for valid proposal', async () => {
+    mockRecordTradeProposal.mockReturnValueOnce(42);
     const originator = new LlmTradeOriginator(
       makeLlmClient(validProposalJson),
       makeLlmClient('null'),
       dummyConfig
     );
-    await originator.propose(makeBundle({ triggerReason: 'ta_alert', alertedSymbols: ['BTC'] }));
+    const proposal = await originator.propose(
+      makeBundle({ triggerReason: 'ta_alert', alertedSymbols: ['BTC'] })
+    );
 
     expect(mockRecordTradeProposal).toHaveBeenCalledOnce();
     const record = mockRecordTradeProposal.mock.calls[0][0];
@@ -506,6 +509,7 @@ describe('Section 7: DB logging', () => {
     expect(record.confidence).toBe(0.72);
     expect(record.triggerReason).toBe('ta_alert');
     expect(record.alertedSymbols).toContain('BTC');
+    expect(proposal?.proposalRecordId).toBe(42);
   });
 
   it('updateTradeProposalOutcome callable with gate verdict', () => {
