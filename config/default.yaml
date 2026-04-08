@@ -79,7 +79,7 @@ agent:
     maxTokens: 128
     temperature: 0.2
     timeoutMs: 12000
-    localSoftTimeoutMs: 6000
+    localSoftTimeoutMs: 12000
     fallbackTimeoutMs: 12000
     keepWarmEnabled: true
     keepWarmIntervalSeconds: 180
