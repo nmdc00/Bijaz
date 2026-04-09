@@ -1121,6 +1121,8 @@ function listTradeLogRows(
   filters: DashboardFilters,
   limit = 30
 ): TradeLogRow[] {
+  // Fetch a larger window so temporal signalClass lookup has enough context.
+  const fetchLimit = Math.max(1, Math.min(limit, 100));
   const rows = db
     .prepare(
       `
@@ -1131,10 +1133,29 @@ function listTradeLogRows(
         LIMIT ?
       `
     )
-    .all(Math.max(1, Math.min(limit, 100))) as Array<{ payload?: string; createdAt?: string }>;
+    .all(fetchLimit * 4) as Array<{ payload?: string; createdAt?: string }>;
+
+  // Build a per-symbol timeline of entry journals so close journals can borrow signalClass.
+  type EntryCtx = { createdAtMs: number; signalClass: string | null };
+  const entriesBySymbol = new Map<string, EntryCtx[]>();
+  for (const row of rows) {
+    if (!row.payload) continue;
+    let p: Record<string, unknown>;
+    try { p = JSON.parse(row.payload) as Record<string, unknown>; } catch { continue; }
+    if (p.reduceOnly === true) continue;
+    if (!journalModeMatches(p, filters)) continue;
+    const sym = typeof p.symbol === 'string' ? p.symbol.trim().toUpperCase() : null;
+    if (!sym) continue;
+    const createdAtMs = resolveJournalClosedAtMs(p, row.createdAt);
+    if (createdAtMs == null) continue;
+    const arr = entriesBySymbol.get(sym) ?? [];
+    arr.push({ createdAtMs, signalClass: resolveJournalSignalClass(p) });
+    entriesBySymbol.set(sym, arr);
+  }
 
   const out: TradeLogRow[] = [];
   for (const row of rows) {
+    if (out.length >= fetchLimit) break;
     if (!row.payload) continue;
     let payload: Record<string, unknown>;
     try {
@@ -1165,13 +1186,29 @@ function listTradeLogRows(
     const thesisCorrect =
       typeof payload.thesisCorrect === 'boolean' ? payload.thesisCorrect : null;
     const closedAt = String(payload.closedAt ?? row.createdAt ?? new Date().toISOString());
+    const closedAtMs = resolveJournalClosedAtMs(payload, row.createdAt);
+
+    // For close journals with no signalClass, borrow from the most recent entry for that symbol.
+    let signalClass = resolveJournalSignalClass(payload);
+    if (signalClass == null && payload.reduceOnly === true && closedAtMs != null) {
+      const sym = typeof payload.symbol === 'string' ? payload.symbol.trim().toUpperCase() : null;
+      let bestEntry: EntryCtx | null = null;
+      for (const e of entriesBySymbol.get(sym ?? '') ?? []) {
+        if (e.createdAtMs <= closedAtMs + 300_000) {
+          if (bestEntry == null || e.createdAtMs > bestEntry.createdAtMs) {
+            bestEntry = e;
+          }
+        }
+      }
+      signalClass = bestEntry?.signalClass ?? null;
+    }
 
     const tradeIdRaw = Number(payload.tradeId);
     out.push({
       tradeId: Number.isFinite(tradeIdRaw) ? tradeIdRaw : null,
       symbol: String(payload.symbol ?? '').toUpperCase(),
       side,
-      signalClass: resolveJournalSignalClass(payload),
+      signalClass,
       outcome: outcomeRaw as 'executed' | 'failed',
       directionScore,
       timingScore,
