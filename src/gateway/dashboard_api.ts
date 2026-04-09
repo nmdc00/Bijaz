@@ -1490,25 +1490,29 @@ function listPerformanceBreakdown(
     map.set(key, current);
   };
 
-  // First pass: index close journal outcomes by hypothesisId.
-  // Close journals (reduceOnly=true) carry capturedR and thesisCorrect but no signalClass;
-  // entry journals carry signalClass/regime but no outcome scores. Link them via hypothesisId.
-  const closeOutcomes = new Map<string, { capturedR: number | null; thesisCorrect: boolean | null }>();
+  // Close journals (reduceOnly=true) have performance data (capturedR, thesisCorrect) but
+  // no signalClass/regime — those live on the corresponding entry journal. Link them
+  // temporally: for each close, find the most recent entry for the same symbol that was
+  // recorded before (or up to 5 min after) the close, and borrow its signalClass/regime.
+  type EntryCtx = { createdAtMs: number; signalClass: string | null; regime: string | null };
+  const entriesBySymbol = new Map<string, EntryCtx[]>();
   for (const row of rows) {
     if (!row.payload) continue;
     let p: Record<string, unknown>;
     try { p = JSON.parse(row.payload) as Record<string, unknown>; } catch { continue; }
-    if (p.reduceOnly !== true) continue;
-    const hid = typeof p.hypothesisId === 'string' && p.hypothesisId.trim() ? p.hypothesisId.trim() : null;
-    if (!hid || closeOutcomes.has(hid)) continue;
-    const cr = Number(p.capturedR ?? p.captured_r);
-    closeOutcomes.set(hid, {
-      capturedR: Number.isFinite(cr) ? cr : null,
-      thesisCorrect: typeof p.thesisCorrect === 'boolean' ? p.thesisCorrect : null,
-    });
+    if (p.reduceOnly === true) continue;
+    if (resolveJournalOutcome(p) !== 'executed') continue;
+    if (!journalModeMatches(p, filters)) continue;
+    const sym = typeof p.symbol === 'string' ? p.symbol.trim().toUpperCase() : null;
+    if (!sym) continue;
+    const createdAtMs = resolveJournalClosedAtMs(p, row.createdAt);
+    if (createdAtMs == null) continue;
+    const arr = entriesBySymbol.get(sym) ?? [];
+    arr.push({ createdAtMs, signalClass: resolveJournalSignalClass(p), regime: resolveJournalMarketRegime(p) });
+    entriesBySymbol.set(sym, arr);
   }
 
-  // Second pass: aggregate entry journals, using close outcome data where available.
+  // For each close journal, aggregate performance attributed to the matching entry's context.
   for (const row of rows) {
     if (!row.payload) continue;
     let payload: Record<string, unknown>;
@@ -1518,8 +1522,7 @@ function listPerformanceBreakdown(
       continue;
     }
     if (!journalModeMatches(payload, filters)) continue;
-    // Skip close journals — their signal class is unknown; outcome data is looked up via closeOutcomes.
-    if (payload.reduceOnly === true) continue;
+    if (payload.reduceOnly !== true) continue;
     const outcome = resolveJournalOutcome(payload);
     if (outcome !== 'executed' && outcome !== 'failed') continue;
     const closedAtMs = resolveJournalClosedAtMs(payload, row.createdAt);
@@ -1527,35 +1530,25 @@ function listPerformanceBreakdown(
     if ((fromMs != null && closedAtMs < fromMs) || (toMs != null && closedAtMs > toMs)) {
       continue;
     }
-    const signalClass = resolveJournalSignalClass(payload) ?? 'unknown';
-    const regime = resolveJournalMarketRegime(payload) ?? 'unknown';
-    const session = resolveSessionKey(closedAtMs);
 
-    // Resolve win/score: prefer close journal outcome data over entry journal defaults.
-    const hypothesisId = typeof payload.hypothesisId === 'string' && payload.hypothesisId.trim()
-      ? payload.hypothesisId.trim() : null;
-    const closePerf = hypothesisId ? closeOutcomes.get(hypothesisId) : null;
-    let score: number;
-    let win: boolean;
-    if (closePerf != null) {
-      const r = closePerf.capturedR;
-      if (r != null && Number.isFinite(r)) {
-        score = r;
-        win = r > 0;
-      } else if (closePerf.thesisCorrect === true) {
-        score = 1;
-        win = true;
-      } else if (closePerf.thesisCorrect === false) {
-        score = -1;
-        win = false;
-      } else {
-        score = resolveJournalExpectancyScore(payload);
-        win = resolveJournalWin(payload);
+    const sym = typeof payload.symbol === 'string' ? payload.symbol.trim().toUpperCase() : null;
+    // Find the most recent entry for this symbol recorded before (or ≤5 min after) this close.
+    let bestEntry: EntryCtx | null = null;
+    if (sym) {
+      for (const e of entriesBySymbol.get(sym) ?? []) {
+        if (e.createdAtMs <= closedAtMs + 300_000) {
+          if (bestEntry == null || e.createdAtMs > bestEntry.createdAtMs) {
+            bestEntry = e;
+          }
+        }
       }
-    } else {
-      score = resolveJournalExpectancyScore(payload);
-      win = resolveJournalWin(payload);
     }
+
+    const signalClass = bestEntry?.signalClass ?? resolveJournalSignalClass(payload) ?? 'unknown';
+    const regime = bestEntry?.regime ?? resolveJournalMarketRegime(payload) ?? 'unknown';
+    const session = resolveSessionKey(closedAtMs);
+    const score = resolveJournalExpectancyScore(payload);
+    const win = resolveJournalWin(payload);
 
     add(signalAgg, signalClass, win, score);
     add(regimeAgg, regime, win, score);

@@ -250,24 +250,48 @@ describe('dashboard api payload', () => {
     process.env.THUFIR_DB_PATH = dbPath;
     const db = openDatabase(dbPath);
 
+    // Real pattern: entry journal carries signalClass/regime, close journal carries outcome.
+    // Entry and close are linked temporally (close recorded shortly after entry).
     recordPerpTradeJournal({
       kind: 'perp_trade_journal',
+      execution_mode: 'paper',
       symbol: 'BTC',
-      side: 'buy',
+      side: 'sell',
       signalClass: 'momentum_breakout',
       marketRegime: 'trending',
       outcome: 'executed',
+      reduceOnly: false,
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'buy',
+      reduceOnly: true,
+      outcome: 'executed',
       capturedR: 1.25,
+      captured_r: 1.25,
       thesisCorrect: true,
     });
     recordPerpTradeJournal({
       kind: 'perp_trade_journal',
+      execution_mode: 'paper',
       symbol: 'ETH',
-      side: 'sell',
+      side: 'buy',
       signalClass: 'mean_reversion',
       marketRegime: 'choppy',
-      outcome: 'failed',
+      outcome: 'executed',
+      reduceOnly: false,
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      execution_mode: 'paper',
+      symbol: 'ETH',
+      side: 'sell',
+      reduceOnly: true,
+      outcome: 'executed',
       capturedR: -0.75,
+      captured_r: -0.75,
       thesisCorrect: false,
     });
 
@@ -285,6 +309,12 @@ describe('dashboard api payload', () => {
     expect(payload.sections.performanceBreakdown.bySignalClass.length).toBeGreaterThan(0);
     expect(payload.sections.performanceBreakdown.byRegime.length).toBeGreaterThan(0);
     expect(payload.sections.performanceBreakdown.bySession.length).toBeGreaterThan(0);
+
+    const scMap = new Map(payload.sections.performanceBreakdown.bySignalClass.map((r) => [r.key, r]));
+    expect(scMap.get('momentum_breakout')?.winRate).toBe(1);
+    expect(scMap.get('momentum_breakout')?.expectancyR).toBeCloseTo(1.25);
+    expect(scMap.get('mean_reversion')?.winRate).toBe(0);
+    expect(scMap.get('mean_reversion')?.expectancyR).toBeCloseTo(-0.75);
   });
 
   it('returns promotion gate rows keyed by symbol:signalClass', () => {
