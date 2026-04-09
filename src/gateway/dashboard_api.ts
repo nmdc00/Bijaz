@@ -1490,6 +1490,25 @@ function listPerformanceBreakdown(
     map.set(key, current);
   };
 
+  // First pass: index close journal outcomes by hypothesisId.
+  // Close journals (reduceOnly=true) carry capturedR and thesisCorrect but no signalClass;
+  // entry journals carry signalClass/regime but no outcome scores. Link them via hypothesisId.
+  const closeOutcomes = new Map<string, { capturedR: number | null; thesisCorrect: boolean | null }>();
+  for (const row of rows) {
+    if (!row.payload) continue;
+    let p: Record<string, unknown>;
+    try { p = JSON.parse(row.payload) as Record<string, unknown>; } catch { continue; }
+    if (p.reduceOnly !== true) continue;
+    const hid = typeof p.hypothesisId === 'string' && p.hypothesisId.trim() ? p.hypothesisId.trim() : null;
+    if (!hid || closeOutcomes.has(hid)) continue;
+    const cr = Number(p.capturedR ?? p.captured_r);
+    closeOutcomes.set(hid, {
+      capturedR: Number.isFinite(cr) ? cr : null,
+      thesisCorrect: typeof p.thesisCorrect === 'boolean' ? p.thesisCorrect : null,
+    });
+  }
+
+  // Second pass: aggregate entry journals, using close outcome data where available.
   for (const row of rows) {
     if (!row.payload) continue;
     let payload: Record<string, unknown>;
@@ -1499,8 +1518,7 @@ function listPerformanceBreakdown(
       continue;
     }
     if (!journalModeMatches(payload, filters)) continue;
-    // Skip exit/close journals — they don't have a signal class and shouldn't
-    // influence signal-class or regime performance stats.
+    // Skip close journals — their signal class is unknown; outcome data is looked up via closeOutcomes.
     if (payload.reduceOnly === true) continue;
     const outcome = resolveJournalOutcome(payload);
     if (outcome !== 'executed' && outcome !== 'failed') continue;
@@ -1512,8 +1530,33 @@ function listPerformanceBreakdown(
     const signalClass = resolveJournalSignalClass(payload) ?? 'unknown';
     const regime = resolveJournalMarketRegime(payload) ?? 'unknown';
     const session = resolveSessionKey(closedAtMs);
-    const score = resolveJournalExpectancyScore(payload);
-    const win = resolveJournalWin(payload);
+
+    // Resolve win/score: prefer close journal outcome data over entry journal defaults.
+    const hypothesisId = typeof payload.hypothesisId === 'string' && payload.hypothesisId.trim()
+      ? payload.hypothesisId.trim() : null;
+    const closePerf = hypothesisId ? closeOutcomes.get(hypothesisId) : null;
+    let score: number;
+    let win: boolean;
+    if (closePerf != null) {
+      const r = closePerf.capturedR;
+      if (r != null && Number.isFinite(r)) {
+        score = r;
+        win = r > 0;
+      } else if (closePerf.thesisCorrect === true) {
+        score = 1;
+        win = true;
+      } else if (closePerf.thesisCorrect === false) {
+        score = -1;
+        win = false;
+      } else {
+        score = resolveJournalExpectancyScore(payload);
+        win = resolveJournalWin(payload);
+      }
+    } else {
+      score = resolveJournalExpectancyScore(payload);
+      win = resolveJournalWin(payload);
+    }
+
     add(signalAgg, signalClass, win, score);
     add(regimeAgg, regime, win, score);
     add(sessionAgg, session, win, score);
