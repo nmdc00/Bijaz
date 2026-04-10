@@ -6,6 +6,7 @@ import { recordEntryGateDecision } from '../memory/llm_entry_gate_log.js';
 import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { summarizeSignalPerformance, type SignalPerformanceSummary } from './signal_performance.js';
 import { Logger } from './logger.js';
+import { withExecutionContext } from './llm_infra.js';
 
 export interface EntryGateCandidate {
   symbol: string;
@@ -290,9 +291,13 @@ export class LlmEntryGate {
         `not just because the signal fired again.`
       : null;
 
+    const criticalCtx = { mode: 'FULL_AGENT' as const, critical: true, reason: 'entry_gate' };
+
     // Try main LLM — no timeoutMs cap, matching AgenticOpenAiClient behaviour
     try {
-      decision = await callLlm(this.mainLlm, candidate, bookEntries, sameSideWarning, signalStats);
+      decision = await withExecutionContext(criticalCtx, () =>
+        callLlm(this.mainLlm, candidate, bookEntries, sameSideWarning, signalStats)
+      );
     } catch (error) {
       const summary = summarizeLlmError(error);
       logger.warn('Entry gate main LLM failed; falling back', {
@@ -308,7 +313,9 @@ export class LlmEntryGate {
         await this.notify('⚠️ Entry gate: using fallback LLM — decision quality may be lower');
       } catch { /* best-effort */ }
       try {
-        decision = await callLlm(this.fallbackLlm, candidate, bookEntries, sameSideWarning, signalStats, timeoutMs);
+        decision = await withExecutionContext(criticalCtx, () =>
+          callLlm(this.fallbackLlm, candidate, bookEntries, sameSideWarning, signalStats, timeoutMs)
+        );
       } catch (fallbackError) {
         const summary = summarizeLlmError(fallbackError);
         logger.warn('Entry gate fallback LLM failed; using safe default', {
