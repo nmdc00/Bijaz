@@ -112,11 +112,11 @@ Respond ONLY with valid JSON matching this schema:
 {"verdict":"approve"|"reject"|"resize","reasoning":"...","adjustedSizeUsd":number|undefined,"stopLevelPrice":number|null,"equityAtRiskPct":number,"targetRR":number}
 
 Fields:
-- stopLevelPrice: the specific price at which the thesis is invalidated; null if you cannot identify one
+- stopLevelPrice: the price at which the thesis is invalidated. If the candidate does not provide one, derive it yourself from market structure (nearest support/resistance, recent swing, or a 2–3% move against the position). Only set null if you genuinely cannot reason about a stop at all — a missing explicit level is NOT grounds for rejection.
 - equityAtRiskPct: estimated % of book equity lost if stop is hit (use candidate notional and leverage)
 - targetRR: your estimated reward-to-risk ratio for this setup
 
-All four fields (verdict, reasoning, stopLevelPrice, equityAtRiskPct, targetRR) are required. If you cannot fill them, reject.`;
+All four fields (verdict, reasoning, stopLevelPrice, equityAtRiskPct, targetRR) are required. Derive stopLevelPrice from context if not supplied — do not reject solely because it was not provided.`;
 
   const bookTable = formatBookTable(bookEntries);
 
