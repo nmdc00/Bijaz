@@ -261,9 +261,9 @@ autonomy:
     timeoutMs: 5000
     rejectOnBothFail: true
   ta:
-    oiSpikePct: 4
-    fundingExtremeAnnual: 25
-    volumeSpikePct: 80
+    oiSpikePct: 8
+    fundingExtremeAnnual: 50
+    volumeSpikePct: 150
   origination:
     enabled: true
     cadenceMinutes: 15
