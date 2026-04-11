@@ -1590,6 +1590,21 @@ export async function executeToolCall(
           thesisInvalidationHit,
           exitMode,
         });
+        // Resolve the matching entry journal early so both the failed and executed
+        // close paths can inherit signalClass from the original open record.
+        let closeReference: ReturnType<typeof resolveClosedTradeReference> = null;
+        if (reduceOnly) {
+          try {
+            const closeHistory = listPerpTradeJournals({ symbol, limit: 200 });
+            closeReference = resolveClosedTradeReference({
+              entries: closeHistory,
+              symbol,
+              hypothesisId,
+              closeSide: side as 'buy' | 'sell',
+            });
+          } catch { /* best-effort: never block trading */ }
+        }
+        const effectiveSignalClass = signalClass ?? closeReference?.signalClass ?? null;
         const exitFsmValidation = validateReduceOnlyExitFsm({
           enabled: exitFsmEnabled,
           reduceOnly,
@@ -1687,7 +1702,7 @@ export async function executeToolCall(
               markPrice: market.markPrice ?? null,
               confidence: null,
               reasoning: `Policy gate blocked: ${policyGate.reason ?? 'policy constraints active'}`,
-              signalClass,
+              signalClass: effectiveSignalClass,
               marketRegime,
               volatilityBucket,
               liquidityBucket,
@@ -1764,7 +1779,7 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
-              signalClass,
+              signalClass: effectiveSignalClass,
               marketRegime,
               volatilityBucket,
               liquidityBucket,
@@ -1836,7 +1851,7 @@ export async function executeToolCall(
                 estimatedFeeRate: feeEstimate.estimated_fee_rate,
                 estimatedFeeType: feeEstimate.estimated_fee_type,
                 estimatedFeeUsd: feeEstimate.estimated_fee_usd,
-                signalClass,
+                signalClass: effectiveSignalClass,
                 marketRegime,
                 volatilityBucket,
                 liquidityBucket,
@@ -1935,7 +1950,7 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
-              signalClass,
+              signalClass: effectiveSignalClass,
               marketRegime,
               volatilityBucket,
               liquidityBucket,
@@ -2022,25 +2037,18 @@ export async function executeToolCall(
           | null = null;
         if (reduceOnly) {
           try {
-            const history = listPerpTradeJournals({ symbol, limit: 200 });
-            const reference = resolveClosedTradeReference({
-              entries: history,
-              symbol,
-              hypothesisId,
-              closeSide: side as 'buy' | 'sell',
-            });
             const entrySide =
-              reference?.side ?? ((side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy');
+              closeReference?.side ?? ((side as 'buy' | 'sell') === 'buy' ? 'sell' : 'buy');
             componentScores = computeClosedTradeComponentScores({
               entrySide,
               thesisCorrect: exitAssessment.thesisCorrect,
-              size: reference?.size ?? size,
-              expectedEdge: reference?.expectedEdge ?? expectedEdge,
-              entryPrice: closeEntryPriceOverride ?? reference?.markPrice ?? null,
+              size: closeReference?.size ?? size,
+              expectedEdge: closeReference?.expectedEdge ?? expectedEdge,
+              entryPrice: closeEntryPriceOverride ?? closeReference?.markPrice ?? null,
               exitPrice: market.markPrice ?? null,
               pricePathHigh: closePathHigh,
               pricePathLow: closePathLow,
-              invalidationPrice: reference?.invalidationPrice ?? invalidationPrice,
+              invalidationPrice: closeReference?.invalidationPrice ?? invalidationPrice,
             });
           } catch {
             componentScores = computeClosedTradeComponentScores({
@@ -2075,7 +2083,7 @@ export async function executeToolCall(
             estimatedFeeRate: feeEstimate.estimated_fee_rate,
             estimatedFeeType: feeEstimate.estimated_fee_type,
             estimatedFeeUsd: feeEstimate.estimated_fee_usd,
-            signalClass,
+            signalClass: effectiveSignalClass,
             marketRegime,
             volatilityBucket,
             liquidityBucket,
