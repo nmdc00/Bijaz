@@ -191,7 +191,7 @@ execution:
 
 paper:
   enabled: true
-  initialCashUsdc: 200
+  initialCashUsdc: 300
   defaultMode: paper
   requireExplicitLive: true
   liveSymbolsAllowlist: []  # No restriction — all discovered markets eligible for live execution
