@@ -96,6 +96,8 @@ const validProposalJson = JSON.stringify({
   invalidationPrice: 63000,
   suggestedTtlMinutes: 120,
   confidence: 0.72,
+  leverage: 3,
+  expectedRMultiple: 2.5,
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -174,6 +176,8 @@ describe('LlmTradeOriginator', () => {
         invalidationPrice: 8.0,
         suggestedTtlMinutes: 60,
         confidence: 0.65,
+        leverage: 2,
+        expectedRMultiple: 2.0,
       });
       const mainLlm = makeLlmClient(shortProposal);
       const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
@@ -191,9 +195,11 @@ describe('LlmTradeOriginator', () => {
         side: 'long',
         thesisText: 'Weak setup',
         invalidationCondition: 'Falls below support',
-        invalidationPrice: null,
+        invalidationPrice: 140,
         suggestedTtlMinutes: 60,
         confidence: 0.3,
+        leverage: 1,
+        expectedRMultiple: 1.5,
       });
       const mainLlm = makeLlmClient(lowConfidenceProposal);
       const config = { autonomy: { origination: { minConfidence: 0.55, timeoutMs: 10000 } } } as any;
@@ -213,9 +219,11 @@ describe('LlmTradeOriginator', () => {
         side: 'long',
         thesisText: 'At threshold confidence',
         invalidationCondition: 'Drop below support',
-        invalidationPrice: null,
+        invalidationPrice: 3200,
         suggestedTtlMinutes: 60,
         confidence: 0.55,
+        leverage: 2,
+        expectedRMultiple: 2.0,
       });
       const mainLlm = makeLlmClient(proposal);
       const config = { autonomy: { origination: { minConfidence: 0.55, timeoutMs: 10000 } } } as any;
@@ -350,8 +358,8 @@ describe('LlmTradeOriginator', () => {
     });
   });
 
-  describe('8. invalidationPrice null accepted', () => {
-    it('accepts invalidationPrice: null as a valid optional field', async () => {
+  describe('8. invalidationPrice required', () => {
+    it('returns null when invalidationPrice is null — no price, no trade', async () => {
       const proposalWithNullPrice = JSON.stringify({
         symbol: 'SOL',
         side: 'long',
@@ -360,17 +368,17 @@ describe('LlmTradeOriginator', () => {
         invalidationPrice: null,
         suggestedTtlMinutes: 90,
         confidence: 0.6,
+        leverage: 1,
+        expectedRMultiple: 1.5,
       });
       const mainLlm = makeLlmClient(proposalWithNullPrice);
       const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
       const result = await originator.propose(makeBundle());
 
-      expect(result).not.toBeNull();
-      expect(result!.invalidationPrice).toBeNull();
-      expect(result!.symbol).toBe('SOL');
+      expect(result).toBeNull();
     });
 
-    it('accepts omitted invalidationPrice (undefined → null)', async () => {
+    it('returns null when invalidationPrice is omitted', async () => {
       const proposalNoPrice = JSON.stringify({
         symbol: 'ETH',
         side: 'short',
@@ -378,13 +386,53 @@ describe('LlmTradeOriginator', () => {
         invalidationCondition: 'Break above recent high',
         suggestedTtlMinutes: 60,
         confidence: 0.63,
+        leverage: 2,
+        expectedRMultiple: 2.0,
       });
       const mainLlm = makeLlmClient(proposalNoPrice);
       const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
       const result = await originator.propose(makeBundle());
 
+      expect(result).toBeNull();
+    });
+
+    it('returns null when expectedRMultiple is omitted', async () => {
+      const proposalNoR = JSON.stringify({
+        symbol: 'BTC',
+        side: 'long',
+        thesisText: 'Strong breakout',
+        invalidationCondition: 'Close below 63k',
+        invalidationPrice: 63000,
+        suggestedTtlMinutes: 90,
+        confidence: 0.65,
+        leverage: 3,
+      });
+      const mainLlm = makeLlmClient(proposalNoR);
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+      const result = await originator.propose(makeBundle());
+
+      expect(result).toBeNull();
+    });
+
+    it('accepts a valid proposal with all required fields', async () => {
+      const proposal = JSON.stringify({
+        symbol: 'SOL',
+        side: 'long',
+        thesisText: 'Break and hold above key resistance',
+        invalidationCondition: 'Close below $140 on 1h',
+        invalidationPrice: 140,
+        suggestedTtlMinutes: 90,
+        confidence: 0.68,
+        leverage: 3,
+        expectedRMultiple: 2.5,
+      });
+      const mainLlm = makeLlmClient(proposal);
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+      const result = await originator.propose(makeBundle());
+
       expect(result).not.toBeNull();
-      expect(result!.invalidationPrice).toBeNull();
+      expect(result!.invalidationPrice).toBe(140);
+      expect(result!.expectedRMultiple).toBe(2.5);
     });
   });
 
@@ -494,7 +542,7 @@ describe('LlmTradeOriginator', () => {
       expect(contextSection.length).toBeLessThanOrEqual(1000);
     });
 
-    it('includes system prompt with null-bias framing', async () => {
+    it('includes system prompt with wealth-accumulation framing', async () => {
       const completeFn = vi.fn().mockResolvedValue({ content: 'null', model: 'test' });
       const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
       const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
@@ -503,8 +551,8 @@ describe('LlmTradeOriginator', () => {
 
       const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
       const systemContent = messages.find((m) => m.role === 'system')?.content ?? '';
-      expect(systemContent).toContain('default response is null');
-      expect(systemContent).toContain('Null is the correct answer most of the time');
+      expect(systemContent).toContain('invalidationPrice');
+      expect(systemContent).toContain('expectedRMultiple');
     });
   });
 });
