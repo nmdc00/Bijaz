@@ -209,16 +209,6 @@ channels:
     token: ""          # TELEGRAM_BOT_TOKEN
     allowedChatIds: [] # Restrict to these chat IDs (optional)
     pollingInterval: 5 # seconds
-    monitor:
-      enabled: false
-      apiId: 0           # Telegram API ID — from https://my.telegram.org
-      apiHash: ""        # Telegram API hash — from https://my.telegram.org
-      phone: ""          # Phone number used to authenticate (E.164, e.g. +44...)
-      sessionString: ""  # Populated by scripts/telegram_monitor_auth.ts
-      channels:          # Public channel usernames to monitor (without @)
-        - marketfeed
-      breakingNewsKeywords: []        # Extra keywords that trigger immediate scan
-      eventDrivenScanEnabled: true    # Fire autonomous scan on breaking-news match
   whatsapp:
     enabled: false
     verifyToken: ""     # WHATSAPP_VERIFY_TOKEN
