@@ -6,6 +6,7 @@ export type PositionExitPolicy = {
   timeStopAtMs: number | null;
   invalidationPrice: number | null;
   notes: string | null;
+  entryAtMs: number | null;
 };
 
 function ensureSchema(): void {
@@ -17,9 +18,16 @@ function ensureSchema(): void {
       time_stop_at_ms INTEGER,
       invalidation_price REAL,
       notes TEXT,
+      entry_at_ms INTEGER,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  // Migration: add entry_at_ms to existing tables that predate this column.
+  try {
+    db.exec(`ALTER TABLE position_exit_policy ADD COLUMN entry_at_ms INTEGER`);
+  } catch {
+    // Column already exists — safe to ignore.
+  }
 }
 
 function normalizeSymbol(symbol: string): string {
@@ -36,19 +44,22 @@ export function upsertPositionExitPolicy(
   ensureSchema();
   const db = openDatabase();
   db.prepare(
-    `INSERT INTO position_exit_policy (symbol, side, time_stop_at_ms, invalidation_price, notes, created_at)
-     VALUES (@symbol, @side, @timeStopAtMs, @invalidationPrice, @notes, datetime('now'))
+    `INSERT INTO position_exit_policy (symbol, side, time_stop_at_ms, invalidation_price, notes, entry_at_ms, created_at)
+     VALUES (@symbol, @side, @timeStopAtMs, @invalidationPrice, @notes, @entryAtMs, datetime('now'))
      ON CONFLICT(symbol) DO UPDATE SET
        side = excluded.side,
        time_stop_at_ms = excluded.time_stop_at_ms,
        invalidation_price = excluded.invalidation_price,
        notes = excluded.notes`
+    // entry_at_ms intentionally excluded from UPDATE — preserves original entry time across
+    // heartbeat mutations like extend_ttl / update_invalidation.
   ).run({
     symbol: normalizeSymbol(symbol),
     side,
     timeStopAtMs: timeStopAtMs ?? null,
     invalidationPrice: invalidationPrice ?? null,
     notes: notes ?? null,
+    entryAtMs: Date.now(),
   });
 }
 
@@ -57,7 +68,7 @@ export function getPositionExitPolicy(symbol: string): PositionExitPolicy | null
   const db = openDatabase();
   const row = db
     .prepare(
-      `SELECT symbol, side, time_stop_at_ms, invalidation_price, notes
+      `SELECT symbol, side, time_stop_at_ms, invalidation_price, notes, entry_at_ms
        FROM position_exit_policy WHERE symbol = @symbol LIMIT 1`
     )
     .get({ symbol: normalizeSymbol(symbol) }) as Record<string, unknown> | undefined;
@@ -69,6 +80,7 @@ export function getPositionExitPolicy(symbol: string): PositionExitPolicy | null
     timeStopAtMs: row.time_stop_at_ms != null ? Number(row.time_stop_at_ms) : null,
     invalidationPrice: row.invalidation_price != null ? Number(row.invalidation_price) : null,
     notes: row.notes != null ? String(row.notes) : null,
+    entryAtMs: row.entry_at_ms != null ? Number(row.entry_at_ms) : null,
   };
 }
 
