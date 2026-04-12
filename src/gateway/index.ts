@@ -47,6 +47,7 @@ import { listWatchlist } from '../memory/watchlist.js';
 import { createMarketClient } from '../execution/market-client.js';
 import { pruneIntel } from '../intel/store.js';
 import { rankIntelAlerts } from '../intel/alerts.js';
+import { TelegramChannelMonitor } from '../intel/telegram_monitor.js';
 import { refreshMarketPrices, syncMarketCache } from '../core/markets_sync.js';
 import { formatProactiveSummary, runProactiveSearch } from '../core/proactive_search.js';
 import { buildAgentPeerSessionKey, resolveThreadSessionKeys } from './session_keys.js';
@@ -1141,6 +1142,33 @@ if (telegram) {
     } catch (error) {
       logger.error(`Telegram message handling failed for ${msg.senderId}`, error);
     }
+  });
+}
+
+// Telegram channel monitor — reads public channels via MTProto user session.
+// Only starts when channels.telegram.monitor.enabled = true and sessionString is set.
+if (config.channels?.telegram?.monitor?.enabled) {
+  const monitorNotify = async (msg: string) => {
+    if (!telegram) return;
+    for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
+      try {
+        await telegram.sendMessage(String(chatId), msg);
+      } catch { /* best-effort */ }
+    }
+  };
+
+  const channelMonitor = new TelegramChannelMonitor(
+    config,
+    async (itemCount) => {
+      if (config.channels.telegram.monitor?.eventDrivenScanEnabled !== false) {
+        await maybeRunEventDrivenScan('intel', itemCount);
+      }
+    },
+    monitorNotify,
+  );
+
+  channelMonitor.start().catch((err) => {
+    logger.error('TelegramChannelMonitor: failed to start', err);
   });
 }
 
