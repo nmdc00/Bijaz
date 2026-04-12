@@ -18,20 +18,40 @@ const BREAKING_KEYWORDS = new Set([
   'nuclear', 'explos', 'attack', 'missile', 'coup', 'assassin',
   'emergency', 'breaking', 'halt', 'ban', 'freeze',
   'collapse', 'arrested', 'indicted', 'tariff', 'escalat',
+  'sabotage',
 
   // Macro / monetary policy
   'fomc', 'rate hike', 'rate cut', 'rate decision', 'federal reserve',
   'inflation', 'cpi', 'pce', 'nfp', 'non-farm', 'unemployment',
   'recession', 'stagflation', 'gdp', 'debt ceiling', 'default',
   'quantitative', 'balance sheet', 'pivot', 'powell', 'lagarde',
+  'devaluat', 'imf rescue', 'capital control',
 
   // Market structure shocks
   'circuit breaker', 'trading halt', 'margin call', 'liquidat',
   'flash crash', 'contagion', 'bank run', 'bail', 'insolvenc',
   'bankruptcy', 'chapter 11', 'seized', 'nationali',
+  'squeeze',
 
   // Energy / commodities
   'opec', 'oil embargo', 'supply cut', 'pipeline',
+  'production cut', 'output cut',
+
+  // Shipping / chokepoints
+  'strait', 'hormuz', 'suez', 'red sea', 'houthi', 'tanker',
+  'outage',
+
+  // Weather shocks
+  'drought', 'flood', 'frost', 'heatwave', 'hurricane', 'el niño',
+
+  // Animal disease / agri supply
+  'outbreak', 'avian flu', 'bird flu', 'swine fever',
+
+  // Export controls
+  'export ban', 'export control', 'export restriction',
+
+  // Labor disruptions
+  'strike',
 ]);
 
 // ---------------------------------------------------------------------------
