@@ -43,6 +43,8 @@ const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 // Default thesis expires 2 hours from a fake entry time.
 // We set thesisExpiresAtMs = NOW + 60 min (so entry was 60 min ago)
 const THESIS_EXPIRES = NOW + 60 * 60 * 1000; // 60 min from now
+// Canonical entry time: 60 min before NOW (matching the THESIS_EXPIRES proxy assumption)
+const ENTRY_AT = NOW - 60 * 60 * 1000;
 
 function makeBookEntry(overrides: Partial<BookEntry> = {}): BookEntry {
   return {
@@ -56,6 +58,7 @@ function makeBookEntry(overrides: Partial<BookEntry> = {}): BookEntry {
     exitContractSummary: null,
     lastConsultAtMs: null,
     lastConsultDecision: null,
+    entryAtMs: ENTRY_AT,
     ...overrides,
   };
 }
@@ -98,24 +101,25 @@ function makeConsultant(
 describe('LlmExitConsultant.shouldConsult', () => {
   it('returns false when position is < 20 min old, ROE below thresholds, TTL not close', () => {
     const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
-    // Entry 10 min ago, thesis expires in 60 min — neither time nor TTL condition fires
+    // Entry 10 min ago — entryAtMs set explicitly, TTL 110 min from now.
     const entry = makeBookEntry({
-      thesisExpiresAtMs: NOW + 60 * 60 * 1000, // 60 min from now
+      thesisExpiresAtMs: NOW + 110 * 60 * 1000,
+      entryAtMs: NOW - 10 * 60 * 1000,
       lastConsultAtMs: null,
     });
-    // Make entry only 10 min old: thesisExpires - 2h = entry time, entryAge = now - (thesisExpires - 2h)
-    // For entryAge < 20 min: NOW - (THESIS_EXPIRES - 2h) < 20 * 60 * 1000
-    // THESIS_EXPIRES = NOW + 60*60*1000, so (THESIS_EXPIRES - 2h) = NOW + 60*60*1000 - 2*60*60*1000 = NOW - 60*60*1000
-    // entryAge = NOW - (NOW - 60*60*1000) = 60*60*1000 = 60 min. That's ≥ 20 min.
-    // So let's set thesisExpiresAtMs far in the future so entry age < 20 min:
-    // entryAge = NOW - (thesisExpires - 2h) < 20 min
-    // thesisExpires - 2h > NOW - 20 min
-    // thesisExpires > NOW - 20 min + 2h = NOW + 100 min
-    const entry2 = makeBookEntry({
-      thesisExpiresAtMs: NOW + 110 * 60 * 1000, // entry is 10 min ago, thesis in 110 min
+    expect(consultant.shouldConsult(entry, 50000, 0.01, NOW)).toBe(false);
+  });
+
+  it('returns false immediately after entry with long TTL (regression: 24h TTL must not trigger at t=0)', () => {
+    // The bug: when thesis TTL > 2h, (thesisExpiresAtMs - 2h) > entryTime, giving entryAge < 0.
+    // The old code had `entryAge < 0 || entryAge >= firstConsultMs`, causing instant consultation.
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      thesisExpiresAtMs: NOW + 24 * 60 * 60 * 1000, // 24h TTL
+      entryAtMs: NOW - 30 * 1000,                    // opened 30 seconds ago
       lastConsultAtMs: null,
     });
-    expect(consultant.shouldConsult(entry2, 50000, 0.01, NOW)).toBe(false);
+    expect(consultant.shouldConsult(entry, 95.77, 0, NOW)).toBe(false);
   });
 
   it('returns true after 20 min since last consult', () => {

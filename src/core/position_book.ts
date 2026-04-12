@@ -14,6 +14,7 @@ export interface BookEntry {
   exitContractSummary: string | null;
   lastConsultAtMs: number | null;
   lastConsultDecision: string | null;
+  entryAtMs: number | null;
 }
 
 function normalizeSide(side: string): 'long' | 'short' {
@@ -77,6 +78,7 @@ export class PositionBook {
         exitContractSummary: summarizeExitContract(exitContract),
         lastConsultAtMs: existing?.lastConsultAtMs ?? null,
         lastConsultDecision: existing?.lastConsultDecision ?? null,
+        entryAtMs: policy?.entryAtMs ?? null,
       });
     }
 

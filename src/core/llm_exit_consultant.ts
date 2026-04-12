@@ -134,9 +134,13 @@ export class LlmExitConsultant {
 
     // Time-based trigger
     if (position.lastConsultAtMs === null) {
-      // Never consulted — trigger once position is at least 20 min old
-      const entryAge = nowMs - (position.thesisExpiresAtMs - 2 * 60 * 60 * 1000);
-      if (entryAge < 0 || entryAge >= firstConsultMs) {
+      // Never consulted — trigger once position is at least firstConsultMs old.
+      // Use explicit entryAtMs when available; fall back to thesisExpiry - 2h proxy
+      // (the historical default TTL). The proxy must never be negative: a TTL > 2h
+      // would give entryAge < 0 and incorrectly trigger immediate consultation.
+      const entryMs = position.entryAtMs ?? (position.thesisExpiresAtMs - 2 * 60 * 60 * 1000);
+      const entryAge = nowMs - entryMs;
+      if (entryAge >= firstConsultMs) {
         return true;
       }
     } else if (nowMs - position.lastConsultAtMs >= cadenceMs) {
