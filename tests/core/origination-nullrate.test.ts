@@ -81,6 +81,7 @@ function makeBookEntry(symbol: string, side: 'long' | 'short'): BookEntry {
     exitContractSummary: null,
     lastConsultAtMs: null,
     lastConsultDecision: null,
+    entryAtMs: Date.now(),
   };
 }
 
