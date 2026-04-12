@@ -738,6 +738,18 @@ const ConfigSchema = z.object({
           token: z.string().optional(),
           allowedChatIds: z.array(z.union([z.string(), z.number()])).default([]),
           pollingInterval: z.number().default(5),
+          monitor: z
+            .object({
+              enabled: z.boolean().default(false),
+              apiId: z.number().optional(),
+              apiHash: z.string().optional(),
+              phone: z.string().optional(),
+              sessionString: z.string().default(''),
+              channels: z.array(z.string()).default([]),
+              breakingNewsKeywords: z.array(z.string()).default([]),
+              eventDrivenScanEnabled: z.boolean().default(true),
+            })
+            .default({}),
         })
         .default({}),
       whatsapp: z
