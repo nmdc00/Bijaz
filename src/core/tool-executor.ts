@@ -1502,6 +1502,11 @@ export async function executeToolCall(
             ? Number(toolInput.time_stop_at_ms)
             : null;
         const rawExitContract = (toolInput as Record<string, unknown>).exit_contract;
+        const rawTradeType = (toolInput as Record<string, unknown>).trade_type;
+        const legacyTradeType: 'scalp' | 'tactical' | 'structural' | undefined =
+          rawTradeType === 'scalp' || rawTradeType === 'tactical' || rawTradeType === 'structural'
+            ? rawTradeType
+            : undefined;
         const takeProfitR = toFiniteNumberOrNull(toolInput.take_profit_r);
         const trailMode = typeof toolInput.trail_mode === 'string' ? toolInput.trail_mode.trim() : null;
         const emergencyOverride = Boolean(toolInput.emergency_override ?? false);
@@ -1671,6 +1676,7 @@ export async function executeToolCall(
                 thesis: thesisText,
                 invalidationPrice: resolvedContract?.invalidationPrice ?? invalidationPrice,
                 side: (side as string) === 'buy' ? 'long' : 'short',
+                tradeType: legacyTradeType,
               })
             : null;
         const policyNotes = persistedExitContract ? serializeExitContract(persistedExitContract) : null;
