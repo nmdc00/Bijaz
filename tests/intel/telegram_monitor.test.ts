@@ -206,6 +206,22 @@ describe('TelegramChannelMonitor message handling', () => {
     expect(storeIntelMock).not.toHaveBeenCalled();
   });
 
+  it('ignores messages from non-monitored sources (e.g. DMs)', async () => {
+    const onBreakingNews = vi.fn().mockResolvedValue(undefined);
+    const monitor = new TelegramChannelMonitor(makeConfig(), onBreakingNews, vi.fn()) as any;
+    monitor.client = {
+      // Resolves to a user DM, not the monitored channel
+      getEntity: vi.fn().mockResolvedValue({ username: 'someuser' }),
+    };
+    await monitor.handleMessage(
+      { message: { message: 'war breaking emergency sanctions', peerId: {} } },
+      ['marketfeed'],
+      new Set(['war', 'emergency', 'sanctions']),
+    );
+    expect(storeIntelMock).not.toHaveBeenCalled();
+    expect(onBreakingNews).not.toHaveBeenCalled();
+  });
+
   it('respects custom breakingNewsKeywords from config', async () => {
     const config = makeConfig({ breakingNewsKeywords: ['fomc', 'rate hike'] });
     const onBreakingNews = vi.fn().mockResolvedValue(undefined);

@@ -114,6 +114,10 @@ export class TelegramChannelMonitor {
     await this.client.connect();
     this.logger.info(`TelegramChannelMonitor: connected, monitoring [${channels.map((c) => '@' + c).join(', ')}]`);
 
+    // Register without a chats filter — gramJS resolves chats to peer IDs at
+    // registration time and silently drops the filter if the entity isn't
+    // cached yet, meaning the handler never fires.  We filter by source channel
+    // manually inside handleMessage after entity resolution instead.
     this.client.addEventHandler(
       async (event: NewMessageEvent) => {
         if (this.stopped) return;
@@ -123,7 +127,7 @@ export class TelegramChannelMonitor {
           this.logger.warn('TelegramChannelMonitor: message handler error', err);
         }
       },
-      new NewMessage({ chats: channels }),
+      new NewMessage({}),
     );
   }
 
@@ -153,6 +157,9 @@ export class TelegramChannelMonitor {
       const entity = await this.client!.getEntity((event.message as any).peerId);
       source = (entity as any).username ?? (entity as any).title ?? source;
     } catch { /* use first configured channel as fallback */ }
+
+    // Ignore messages not from a monitored channel (e.g. DMs)
+    if (!channels.some((c) => c.toLowerCase() === source.toLowerCase())) return;
 
     const isNew = storeIntel({
       id: randomUUID(),
