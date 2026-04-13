@@ -15,6 +15,7 @@ export const ExitHardRuleSchema = z.object({
 
 export const ExitContractSchema = z.object({
   thesis: z.string().min(1),
+  tradeType: z.enum(['scalp', 'tactical', 'structural']).default('tactical'),
   hardRules: z.array(ExitHardRuleSchema).default([]),
   reviewGuidance: z.array(z.string().min(1)).default([]),
 });
@@ -125,13 +126,14 @@ export function summarizeExitContract(contract: ExitContract | null): string {
       : 'none';
   const reviewGuidance =
     contract.reviewGuidance.length > 0 ? contract.reviewGuidance.join('; ') : 'none';
-  return `thesis=${contract.thesis}; hard_rules=${hardRules}; review_guidance=${reviewGuidance}`;
+  return `trade_type=${contract.tradeType}; thesis=${contract.thesis}; hard_rules=${hardRules}; review_guidance=${reviewGuidance}`;
 }
 
 export function buildLegacyExitContract(params: {
   thesis: string;
   invalidationPrice?: number | null;
   side: 'long' | 'short';
+  tradeType?: 'scalp' | 'tactical' | 'structural';
 }): ExitContract {
   const hardRules: ExitHardRule[] = [];
   if (params.invalidationPrice != null && Number.isFinite(params.invalidationPrice)) {
@@ -146,11 +148,12 @@ export function buildLegacyExitContract(params: {
 
   return {
     thesis: params.thesis.trim() || 'Trade thesis',
+    tradeType: params.tradeType ?? 'tactical',
     hardRules,
     reviewGuidance: [
-      'Re-evaluate whether the original thesis still holds under current market context.',
-      'Reduce or close early if momentum stalls or the narrative degrades.',
-      'Keep holding when structure remains intact and context strengthens.',
+      'Hold as long as the original thesis narrative remains intact — slow momentum is not invalidation.',
+      'Close only when the thesis is specifically contradicted by new information or price action.',
+      'Use extend_ttl if the thesis is valid but needs more time. Use update_invalidation if structure shifted but direction holds.',
     ],
   };
 }

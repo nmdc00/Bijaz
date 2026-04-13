@@ -115,24 +115,30 @@ export class LlmExitConsultant {
   /**
    * Returns true if the position should be consulted right now.
    *
-   * Triggers (any one suffices):
-   * - 20+ min since last consult (or position age ≥ 20 min and never consulted)
-   * - |ROE| crossed 3%, 7%, or 15% since last consult
-   * - < 15 min remain before thesisExpiresAtMs
+   * For structural trades (tradeType === 'structural'):
+   * - Time-based cadence is suppressed (first consult at 4h, then every 4h)
+   * - Positive ROE threshold crossings are suppressed — profit alone is not a reason to exit
+   * - Significant drawdown (ROE ≤ −5%) triggers consultation
+   * - Near-invalidation-price proximity (within 2% of hard invalidation rule) triggers consultation
+   * - TTL approach trigger fires as normal
+   *
+   * For tactical/scalp trades:
+   * - 20-min cadence, all ROE thresholds, TTL approach (unchanged behaviour)
    */
   shouldConsult(
     position: BookEntry,
-    _currentPrice: number,
+    currentPrice: number,
     roe: number,
     nowMs: number,
   ): boolean {
+    const isStructural = position.exitContract?.tradeType === 'structural';
     const absRoe = Math.abs(roe);
-    const firstConsultMs = resolveFirstConsultMs(this.config);
-    const cadenceMs = resolveCadenceMs(this.config);
-    const roeThresholds = resolveRoeThresholds(this.config);
     const ttlApproachMs = resolveTtlApproachMs(this.config);
 
-    // Time-based trigger
+    // Time-based trigger — 4h cadence for structural, configured default otherwise
+    const firstConsultMs = isStructural ? 4 * 60 * 60_000 : resolveFirstConsultMs(this.config);
+    const cadenceMs = isStructural ? 4 * 60 * 60_000 : resolveCadenceMs(this.config);
+
     if (position.lastConsultAtMs === null) {
       // Never consulted — trigger once position is at least firstConsultMs old.
       // Use explicit entryAtMs when available; fall back to thesisExpiry - 2h proxy
@@ -148,28 +154,49 @@ export class LlmExitConsultant {
     }
 
     // ROE threshold crossing
-    // Determine what the last consulted ROE abs value was (use 0 if never consulted)
-    let lastAbsRoe = 0;
-    if (position.lastConsultDecision != null) {
-      try {
-        const prev = JSON.parse(position.lastConsultDecision) as { roeAtConsult?: number };
-        if (typeof prev.roeAtConsult === 'number') {
-          lastAbsRoe = Math.abs(prev.roeAtConsult);
-        }
-      } catch {
-        // ignore parse errors
-      }
-    }
-    for (const threshold of roeThresholds) {
-      if (absRoe >= threshold && lastAbsRoe < threshold) {
+    if (isStructural) {
+      // Structural trades: only trigger on significant drawdown, never on profit
+      if (roe <= -0.05) {
         return true;
+      }
+    } else {
+      // Tactical/scalp: trigger on any threshold crossing (profit or loss)
+      const roeThresholds = resolveRoeThresholds(this.config);
+      let lastAbsRoe = 0;
+      if (position.lastConsultDecision != null) {
+        try {
+          const prev = JSON.parse(position.lastConsultDecision) as { roeAtConsult?: number };
+          if (typeof prev.roeAtConsult === 'number') {
+            lastAbsRoe = Math.abs(prev.roeAtConsult);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+      for (const threshold of roeThresholds) {
+        if (absRoe >= threshold && lastAbsRoe < threshold) {
+          return true;
+        }
       }
     }
 
-    // TTL approach trigger
+    // TTL approach trigger — fires for all trade types
     const remainingMs = position.thesisExpiresAtMs - nowMs;
     if (remainingMs <= ttlApproachMs) {
       return true;
+    }
+
+    // Near-invalidation-price trigger (structural only) — consult before the hard close fires
+    if (isStructural && currentPrice > 0) {
+      const invalidationRule = position.exitContract?.hardRules.find(
+        (r) => r.reason === 'thesis invalidation'
+      );
+      if (invalidationRule != null) {
+        const proximity = Math.abs(currentPrice - invalidationRule.value) / currentPrice;
+        if (proximity <= 0.02) {
+          return true;
+        }
+      }
     }
 
     return false;
@@ -298,12 +325,21 @@ function buildMessages(
   freshContext: string,
 ): import('./llm.js').ChatMessage[] {
   const system =
-    `You are Thufir, an LLM-primary trading agent managing an open position. ` +
-    `Your job: decide whether to hold, reduce, close, extend the thesis TTL, or update the invalidation price. ` +
-    `You have the original entry reasoning and current market context. Use both. ` +
-    `Be willing to exit early if the narrative has changed. Be willing to extend if the thesis is intact and there is more to go.`;
+    `You are Thufir, an LLM-primary trading agent reviewing an open position. ` +
+    `Your default is HOLD. ` +
+    `Close or reduce only when one of these is true: ` +
+    `(1) the original thesis narrative is explicitly invalidated by new information, ` +
+    `(2) the invalidation price is hit, ` +
+    `(3) the TTL is expiring and there is no case to extend it, or ` +
+    `(4) a hard risk rule fires. ` +
+    `Profit alone is NOT a reason to close. Slow momentum is NOT invalidation. ` +
+    `A structural macro trade should be held until the thesis resolves or breaks — ` +
+    `not harvested early because it has not yet repriced fully. ` +
+    `Prefer extend_ttl over close when the thesis is intact but underdeveloped. ` +
+    `Prefer update_invalidation over close when structure shifted but direction is valid.`;
 
   const roePct = (roe * 100).toFixed(2);
+  const tradeType = position.exitContract?.tradeType ?? 'tactical';
   const user =
     `## Position state\n` +
     `symbol: ${position.symbol}\n` +
@@ -312,6 +348,7 @@ function buildMessages(
     `entry price: ${position.entryPrice}\n` +
     `current price: ${currentPrice}\n` +
     `ROE: ${roePct}%\n` +
+    `trade type: ${tradeType}\n` +
     `time held: ${timeHeldMin} minutes\n` +
     `time remaining on thesis: ${remainingMin} minutes\n\n` +
     `## Original entry reasoning\n${position.entryReasoningText || '(none recorded)'}\n\n` +
