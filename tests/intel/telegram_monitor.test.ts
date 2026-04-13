@@ -91,6 +91,7 @@ function makeMonitor(
 ) {
   const monitor = new TelegramChannelMonitor(config, onBreakingNews, notify) as any;
   monitor.channelMap = new Map([[CHANNEL_ID, 'marketfeed']]);
+  monitor.entityObjects = new Map([['marketfeed', {}]]);
   return { monitor, onBreakingNews, notify };
 }
 
