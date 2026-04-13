@@ -68,11 +68,18 @@ const BREAKING_KEYWORDS = new Set([
  *
  * Auth: requires a Telegram API ID, API hash, and a pre-generated session
  * string.  Run `scripts/telegram_monitor_auth.ts` once to obtain the string.
+ *
+ * Channel matching strategy: channel usernames are resolved to entity IDs
+ * once at startup (getEntity by username always works, even on a cold session).
+ * Incoming updates carry a numeric channelId in peerId which is matched against
+ * those IDs directly — no per-message async lookup or entity cache dependency.
  */
 export class TelegramChannelMonitor {
   private client: TelegramClient | null = null;
   private logger = new Logger('info');
   private stopped = false;
+  /** channelId (bigint) → display username, populated at start() */
+  private channelMap: Map<bigint, string> = new Map();
 
   constructor(
     private config: ThufirConfig,
@@ -112,17 +119,37 @@ export class TelegramChannelMonitor {
     });
 
     await this.client.connect();
+
+    // Resolve each channel username → entity ID now, while we have the username
+    // to look up by.  Incoming updates only carry a numeric channelId in peerId;
+    // resolving by ID alone fails on a cold session because the access hash is
+    // missing.  Resolving by username always works and caches the entity.
+    this.channelMap = new Map();
+    for (const ch of channels) {
+      try {
+        const entity = await this.client.getEntity(ch) as any;
+        const id: bigint | number | undefined = entity?.id;
+        if (id != null) {
+          this.channelMap.set(BigInt(id), ch);
+          this.logger.info(`TelegramChannelMonitor: resolved @${ch} → id=${id}`);
+        } else {
+          this.logger.warn(`TelegramChannelMonitor: entity for @${ch} has no id — messages may be missed`);
+        }
+      } catch (err) {
+        this.logger.warn(`TelegramChannelMonitor: could not resolve @${ch}`, err);
+      }
+    }
+
     this.logger.info(`TelegramChannelMonitor: connected, monitoring [${channels.map((c) => '@' + c).join(', ')}]`);
 
-    // Register without a chats filter — gramJS resolves chats to peer IDs at
-    // registration time and silently drops the filter if the entity isn't
-    // cached yet, meaning the handler never fires.  We filter by source channel
-    // manually inside handleMessage after entity resolution instead.
+    // No chats filter — gramJS resolves the filter at registration time using
+    // only the entity cache; on a cold restart it silently drops the filter and
+    // the handler never fires.  We match by channelId in handleMessage instead.
     this.client.addEventHandler(
       async (event: NewMessageEvent) => {
         if (this.stopped) return;
         try {
-          await this.handleMessage(event, channels, allKeywords);
+          await this.handleMessage(event, allKeywords);
         } catch (err) {
           this.logger.warn('TelegramChannelMonitor: message handler error', err);
         }
@@ -145,21 +172,17 @@ export class TelegramChannelMonitor {
 
   private async handleMessage(
     event: NewMessageEvent,
-    channels: string[],
     keywords: Set<string>,
   ): Promise<void> {
     const text: string = (event.message as any).message ?? (event.message as any).text ?? '';
     if (!text.trim()) return;
 
-    // Resolve source channel name
-    let source = channels[0] ?? 'telegram_channel';
-    try {
-      const entity = await this.client!.getEntity((event.message as any).peerId);
-      source = (entity as any).username ?? (entity as any).title ?? source;
-    } catch { /* use first configured channel as fallback */ }
-
-    // Ignore messages not from a monitored channel (e.g. DMs)
-    if (!channels.some((c) => c.toLowerCase() === source.toLowerCase())) return;
+    // Match by channel ID — fast, no async, no entity-cache dependency.
+    // peerId.channelId is present for channel messages; absent for DMs/groups.
+    const rawChannelId = (event.message as any).peerId?.channelId;
+    if (rawChannelId == null) return;
+    const source = this.channelMap.get(BigInt(rawChannelId));
+    if (!source) return; // not a monitored channel
 
     const isNew = storeIntel({
       id: randomUUID(),

@@ -8,6 +8,7 @@
  * - Non-breaking messages are stored but do NOT trigger callback
  * - Duplicate messages (same title+url) are silently dropped
  * - notify() is called on breaking-news events
+ * - Messages from non-monitored channels (wrong ID, DMs) are ignored
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -36,7 +37,7 @@ vi.mock('telegram', () => ({
     connect = vi.fn().mockResolvedValue(undefined);
     disconnect = vi.fn().mockResolvedValue(undefined);
     addEventHandler = vi.fn();
-    getEntity = vi.fn().mockResolvedValue({ username: 'marketfeed', title: 'Market Feed' });
+    getEntity = vi.fn().mockResolvedValue({ id: BigInt(123), username: 'marketfeed', title: 'Market Feed' });
     session = { save: () => 'mock-session-string' };
   },
 }));
@@ -55,6 +56,8 @@ vi.mock('telegram/events/index.js', () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
+const CHANNEL_ID = BigInt(123);
+
 function makeConfig(overrides: Record<string, unknown> = {}): any {
   return {
     channels: {
@@ -71,6 +74,31 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
           ...overrides,
         },
       },
+    },
+  };
+}
+
+const TEST_KEYWORDS = new Set([
+  'blockad', 'sanction', 'war', 'nuclear', 'crash', 'default', 'emergency',
+  'breaking', 'tariff', 'invad', 'attack', 'missile',
+]);
+
+/** Set up a monitor with channelMap pre-populated (bypasses start()) */
+function makeMonitor(
+  config = makeConfig(),
+  onBreakingNews = vi.fn().mockResolvedValue(undefined),
+  notify = vi.fn().mockResolvedValue(undefined),
+) {
+  const monitor = new TelegramChannelMonitor(config, onBreakingNews, notify) as any;
+  monitor.channelMap = new Map([[CHANNEL_ID, 'marketfeed']]);
+  return { monitor, onBreakingNews, notify };
+}
+
+function makeEvent(text: string, channelId: bigint | null = CHANNEL_ID) {
+  return {
+    message: {
+      message: text,
+      peerId: channelId != null ? { channelId } : {},
     },
   };
 }
@@ -116,37 +144,9 @@ describe('TelegramChannelMonitor message handling', () => {
     storeIntelMock.mockReturnValue(true);
   });
 
-  async function simulateMessage(
-    text: string,
-    config: any = makeConfig(),
-  ): Promise<{ onBreakingNews: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> }> {
-    const onBreakingNews = vi.fn().mockResolvedValue(undefined);
-    const notify = vi.fn().mockResolvedValue(undefined);
-    const monitor = new TelegramChannelMonitor(config, onBreakingNews, notify);
-
-    // Access the private handleMessage via cast
-    const m = monitor as any;
-    m.client = {
-      getEntity: vi.fn().mockResolvedValue({ username: 'marketfeed' }),
-    };
-
-    const fakeEvent = {
-      message: {
-        message: text,
-        peerId: { channelId: 123 },
-      },
-    };
-
-    await m.handleMessage(fakeEvent, ['marketfeed'], new Set([
-      'blockad', 'sanction', 'war', 'nuclear', 'crash', 'default', 'emergency',
-      'breaking', 'tariff', 'invad', 'attack', 'missile',
-    ]));
-
-    return { onBreakingNews, notify };
-  }
-
-  it('stores intel for any new message', async () => {
-    await simulateMessage('Oil markets update: WTI up 0.5%');
+  it('stores intel for any new message from a monitored channel', async () => {
+    const { monitor } = makeMonitor();
+    await monitor.handleMessage(makeEvent('Oil markets update: WTI up 0.5%'), TEST_KEYWORDS);
     expect(storeIntelMock).toHaveBeenCalledOnce();
     const arg = storeIntelMock.mock.calls[0][0];
     expect(arg.sourceType).toBe('social');
@@ -155,34 +155,42 @@ describe('TelegramChannelMonitor message handling', () => {
   });
 
   it('does NOT call onBreakingNews for routine market update', async () => {
-    const { onBreakingNews, notify } = await simulateMessage('Gold up 0.3% in early trading');
+    const { monitor, onBreakingNews, notify } = makeMonitor();
+    await monitor.handleMessage(makeEvent('Gold up 0.3% in early trading'), TEST_KEYWORDS);
     expect(onBreakingNews).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
   });
 
   it('calls onBreakingNews when text contains "blockad" stem (matches blockade/blockading)', async () => {
-    const { onBreakingNews } = await simulateMessage(
-      'US Navy will begin blockading all ships entering Strait of Hormuz',
+    const { monitor, onBreakingNews } = makeMonitor();
+    await monitor.handleMessage(
+      makeEvent('US Navy will begin blockading all ships entering Strait of Hormuz'),
+      TEST_KEYWORDS,
     );
     expect(onBreakingNews).toHaveBeenCalledWith(1);
   });
 
   it('calls onBreakingNews for "tariff" keyword', async () => {
-    const { onBreakingNews } = await simulateMessage(
-      'Trump announces 145% tariff on all Chinese imports effective immediately',
+    const { monitor, onBreakingNews } = makeMonitor();
+    await monitor.handleMessage(
+      makeEvent('Trump announces 145% tariff on all Chinese imports effective immediately'),
+      TEST_KEYWORDS,
     );
     expect(onBreakingNews).toHaveBeenCalledWith(1);
   });
 
   it('calls onBreakingNews for "sanctions" keyword', async () => {
-    const { onBreakingNews } = await simulateMessage(
-      'EU imposes new sanctions on Russian energy exports',
+    const { monitor, onBreakingNews } = makeMonitor();
+    await monitor.handleMessage(
+      makeEvent('EU imposes new sanctions on Russian energy exports'),
+      TEST_KEYWORDS,
     );
     expect(onBreakingNews).toHaveBeenCalledWith(1);
   });
 
   it('calls notify with preview on breaking news', async () => {
-    const { notify } = await simulateMessage('Emergency: nuclear test detected');
+    const { monitor, notify } = makeMonitor();
+    await monitor.handleMessage(makeEvent('Emergency: nuclear test detected'), TEST_KEYWORDS);
     expect(notify).toHaveBeenCalledOnce();
     const msg: string = notify.mock.calls[0][0];
     expect(msg).toContain('📡');
@@ -190,33 +198,42 @@ describe('TelegramChannelMonitor message handling', () => {
   });
 
   it('is case-insensitive for keyword matching', async () => {
-    const { onBreakingNews } = await simulateMessage('BREAKING: market crash imminent');
+    const { monitor, onBreakingNews } = makeMonitor();
+    await monitor.handleMessage(makeEvent('BREAKING: market crash imminent'), TEST_KEYWORDS);
     expect(onBreakingNews).toHaveBeenCalledWith(1);
   });
 
   it('silently drops duplicate messages (storeIntel returns false)', async () => {
     storeIntelMock.mockReturnValue(false); // duplicate
-    const { onBreakingNews } = await simulateMessage('US sanctions on Iran widened');
+    const { monitor, onBreakingNews } = makeMonitor();
+    await monitor.handleMessage(makeEvent('US sanctions on Iran widened'), TEST_KEYWORDS);
     // Even though keyword matches, duplicate → no callback
     expect(onBreakingNews).not.toHaveBeenCalled();
   });
 
   it('skips empty messages', async () => {
-    await simulateMessage('   ');
+    const { monitor } = makeMonitor();
+    await monitor.handleMessage(makeEvent('   '), TEST_KEYWORDS);
     expect(storeIntelMock).not.toHaveBeenCalled();
   });
 
-  it('ignores messages from non-monitored sources (e.g. DMs)', async () => {
-    const onBreakingNews = vi.fn().mockResolvedValue(undefined);
-    const monitor = new TelegramChannelMonitor(makeConfig(), onBreakingNews, vi.fn()) as any;
-    monitor.client = {
-      // Resolves to a user DM, not the monitored channel
-      getEntity: vi.fn().mockResolvedValue({ username: 'someuser' }),
-    };
+  it('ignores messages with no channelId in peerId (DMs, groups)', async () => {
+    const { monitor, onBreakingNews } = makeMonitor();
+    // peerId has no channelId — simulates a DM or group message
     await monitor.handleMessage(
-      { message: { message: 'war breaking emergency sanctions', peerId: {} } },
-      ['marketfeed'],
-      new Set(['war', 'emergency', 'sanctions']),
+      makeEvent('war breaking emergency sanctions', null),
+      TEST_KEYWORDS,
+    );
+    expect(storeIntelMock).not.toHaveBeenCalled();
+    expect(onBreakingNews).not.toHaveBeenCalled();
+  });
+
+  it('ignores messages from an unknown channel ID', async () => {
+    const { monitor, onBreakingNews } = makeMonitor();
+    // Different channel ID — not in channelMap
+    await monitor.handleMessage(
+      makeEvent('war breaking emergency sanctions', BigInt(999)),
+      TEST_KEYWORDS,
     );
     expect(storeIntelMock).not.toHaveBeenCalled();
     expect(onBreakingNews).not.toHaveBeenCalled();
@@ -225,19 +242,11 @@ describe('TelegramChannelMonitor message handling', () => {
   it('respects custom breakingNewsKeywords from config', async () => {
     const config = makeConfig({ breakingNewsKeywords: ['fomc', 'rate hike'] });
     const onBreakingNews = vi.fn().mockResolvedValue(undefined);
-    const notify = vi.fn().mockResolvedValue(undefined);
-    const monitor = new TelegramChannelMonitor(config, onBreakingNews, notify) as any;
-    monitor.client = { getEntity: vi.fn().mockResolvedValue({ username: 'marketfeed' }) };
+    const monitor = new TelegramChannelMonitor(config, onBreakingNews, vi.fn().mockResolvedValue(undefined)) as any;
+    monitor.channelMap = new Map([[CHANNEL_ID, 'marketfeed']]);
 
-    const keywords = new Set([
-      'blockade', 'sanctions', 'war',
-      'fomc', 'rate hike', // custom
-    ]);
-    await monitor.handleMessage(
-      { message: { message: 'FOMC surprises with 50bps cut', peerId: {} } },
-      ['marketfeed'],
-      keywords,
-    );
+    const keywords = new Set(['blockade', 'sanctions', 'war', 'fomc', 'rate hike']);
+    await monitor.handleMessage(makeEvent('FOMC surprises with 50bps cut'), keywords);
     expect(onBreakingNews).toHaveBeenCalledWith(1);
   });
 });
