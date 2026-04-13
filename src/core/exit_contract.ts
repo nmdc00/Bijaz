@@ -133,6 +133,7 @@ export function buildLegacyExitContract(params: {
   thesis: string;
   invalidationPrice?: number | null;
   side: 'long' | 'short';
+  tradeType?: 'scalp' | 'tactical' | 'structural';
 }): ExitContract {
   const hardRules: ExitHardRule[] = [];
   if (params.invalidationPrice != null && Number.isFinite(params.invalidationPrice)) {
@@ -147,7 +148,7 @@ export function buildLegacyExitContract(params: {
 
   return {
     thesis: params.thesis.trim() || 'Trade thesis',
-    tradeType: 'tactical' as const,
+    tradeType: params.tradeType ?? 'tactical',
     hardRules,
     reviewGuidance: [
       'Hold as long as the original thesis narrative remains intact — slow momentum is not invalidation.',
