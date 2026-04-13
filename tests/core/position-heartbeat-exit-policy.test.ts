@@ -79,7 +79,9 @@ function makeService(
   config: any,
   positions: unknown[],
   mid = 100,
-  notified: string[] = []
+  notified: string[] = [],
+  exitConsultant?: any,
+  getBookEntry?: (sym: string) => any,
 ) {
   const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
   const toolExec = async (toolName: string, toolInput: Record<string, unknown>) => {
@@ -97,10 +99,17 @@ function makeService(
     config,
     { config } as any,
     new Logger('error'),
-    { client, toolExec: toolExec as any, notify: async (m) => { notified.push(m); } }
+    { client, toolExec: toolExec as any, notify: async (m) => { notified.push(m); }, exitConsultant, getBookEntry }
   );
   return { service, calls };
 }
+
+const STUB_BOOK_ENTRY = {
+  symbol: 'ETH', side: 'long', size: 1, entryPrice: 100,
+  thesisExpiresAtMs: Date.now() + 3_600_000,
+  entryReasoningText: 'test thesis',
+  lastConsultAtMs: 0, lastConsultDecision: null,
+} as any;
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -109,8 +118,9 @@ describe('position heartbeat — per-position exit policy', () => {
     vi.clearAllMocks();
   });
 
-  it('closes position when timeStopAtMs is in the past', async () => {
-    // Policy says close this position 1 second ago
+  it('extends TTL and does NOT close when timeStopAtMs is in the past and no exit consultant', async () => {
+    // TTL is a review prompt, not a thesis invalidation. Without an exit consultant,
+    // the position should extend its TTL by 4 h and hold.
     mockGetPolicy.mockReturnValue({
       symbol: 'ETH',
       side: 'long',
@@ -127,13 +137,95 @@ describe('position heartbeat — per-position exit policy', () => {
     await service.tickOnce();
     service.stop();
 
+    expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
+    expect(mockUpsertPolicy).toHaveBeenCalledOnce();
+    const [sym, side, newTtl] = mockUpsertPolicy.mock.calls[0];
+    expect(sym).toBe('ETH');
+    expect(side).toBe('long');
+    expect(newTtl).toBeGreaterThan(Date.now()); // extended into the future
+    expect(mockClearPolicy).not.toHaveBeenCalled();
+  });
+
+  it('closes when TTL fires and exit consultant says close', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: Date.now() - 1000,
+      invalidationPrice: null,
+      notes: null,
+    });
+
+    const exitConsultant = {
+      shouldConsult: vi.fn().mockReturnValue(false),
+      consult: vi.fn().mockResolvedValue({ action: 'close' }),
+    };
+
+    const config = makeSafeConfig();
+    const notified: string[] = [];
+    const { service, calls } = makeService(config, [makePosition()], 100, notified, exitConsultant, () => STUB_BOOK_ENTRY);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
     const orders = calls.filter((c) => c.tool === 'perp_place_order');
     expect(orders.length).toBe(1);
+    expect(orders[0]!.input.side).toBe('sell');
     expect(orders[0]!.input.reduce_only).toBe(true);
-    expect(orders[0]!.input.side).toBe('sell'); // close long → sell
-    expect(notified[0]).toContain('ETH');
     expect(notified[0]).toContain('🎯');
     expect(mockClearPolicy).toHaveBeenCalledWith('ETH');
+  });
+
+  it('extends TTL when TTL fires and exit consultant says hold', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: Date.now() - 1000,
+      invalidationPrice: null,
+      notes: null,
+    });
+
+    const exitConsultant = {
+      shouldConsult: vi.fn().mockReturnValue(false),
+      consult: vi.fn().mockResolvedValue({ action: 'hold' }),
+    };
+
+    const config = makeSafeConfig();
+    const { service, calls } = makeService(config, [makePosition()], 100, [], exitConsultant, () => STUB_BOOK_ENTRY);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
+    expect(mockUpsertPolicy).toHaveBeenCalledOnce();
+    expect(mockClearPolicy).not.toHaveBeenCalled();
+  });
+
+  it('extends TTL when TTL fires and exit consultant LLM is unavailable', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: Date.now() - 1000,
+      invalidationPrice: null,
+      notes: null,
+    });
+
+    const exitConsultant = {
+      shouldConsult: vi.fn().mockReturnValue(false),
+      consult: vi.fn().mockRejectedValue(new Error('LLM unavailable')),
+    };
+
+    const config = makeSafeConfig();
+    const { service, calls } = makeService(config, [makePosition()], 100, [], exitConsultant, () => STUB_BOOK_ENTRY);
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
+    expect(mockUpsertPolicy).toHaveBeenCalledOnce();
+    expect(mockClearPolicy).not.toHaveBeenCalled();
   });
 
   it('does not close when timeStopAtMs is in the future', async () => {
