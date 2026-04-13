@@ -167,10 +167,49 @@ export class PositionHeartbeatService {
       })();
       const exitContract = parseExitContract(policy?.notes ?? null);
 
-      // Thesis time stop: absolute timestamp set at entry.
+      // Thesis time stop: TTL has elapsed — consult the exit consultant rather than
+      // closing unconditionally.  The TTL is a review prompt, not a thesis invalidation.
+      // Only the invalidationPrice (below) or an explicit LLM "close" decision should
+      // cause an unconditional close.  If the LLM is unavailable, extend and hold.
       if (policy?.timeStopAtMs != null && nowMs >= policy.timeStopAtMs) {
-        await this.executePolicyClose(pos, 'thesis_time_stop', liqDistPct, nowIso);
-        try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+        const bookEntry = this.getBookEntry(pos.symbol);
+        const roe = (pos.roePct ?? 0) / 100;
+        let handled = false;
+        if (this.exitConsultant && this.config.heartbeat?.llmExitConsult?.enabled !== false && bookEntry) {
+          try {
+            const freshContextSnapshot = await gatherMarketContext(
+              { message: `${pos.symbol} perpetual market context`, signalSymbols: [pos.symbol], marketLimit: 20 },
+              (toolName, toolInput) => this.toolExec(toolName, toolInput, this.toolContext)
+            );
+            const freshContext = summarizeMarketContext(freshContextSnapshot);
+            const decision = await this.exitConsultant.consult(bookEntry, mid ?? 0, roe, freshContext);
+            bookEntry.lastConsultAtMs = nowMs;
+            bookEntry.lastConsultDecision = JSON.stringify({ ...decision, roeAtConsult: roe, trigger: 'ttl_expired' });
+
+            if (decision.action === 'close') {
+              await this.executePolicyClose(pos, 'thesis_time_stop → llm_exit_consultant: close', liqDistPct, nowIso);
+              try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+            } else if (decision.action === 'extend_ttl' && decision.newTimeStopAtMs != null) {
+              upsertPositionExitPolicy(pos.symbol, pos.side, decision.newTimeStopAtMs, policy.invalidationPrice ?? null, policy.notes ?? null);
+            } else if (decision.action === 'update_invalidation' && decision.newInvalidationPrice != null) {
+              const extendMs = nowMs + 4 * 60 * 60 * 1000;
+              upsertPositionExitPolicy(pos.symbol, pos.side, extendMs, decision.newInvalidationPrice, policy.notes ?? null);
+            } else {
+              // hold or reduce — extend TTL by 4 h so the next tick doesn't re-fire immediately
+              const extendMs = nowMs + 4 * 60 * 60 * 1000;
+              upsertPositionExitPolicy(pos.symbol, pos.side, extendMs, policy.invalidationPrice ?? null, policy.notes ?? null);
+            }
+            handled = true;
+          } catch (err) {
+            this.logger.warn(`PositionHeartbeat: TTL fired for ${pos.symbol} but exit consultant failed — extending TTL 4 h`, err);
+          }
+        }
+        if (!handled) {
+          // No consultant or LLM unavailable — extend TTL rather than closing.
+          const extendMs = nowMs + 4 * 60 * 60 * 1000;
+          try { upsertPositionExitPolicy(pos.symbol, pos.side, extendMs, policy.invalidationPrice ?? null, policy.notes ?? null); } catch { /* best-effort */ }
+          this.logger.info(`PositionHeartbeat: TTL expired for ${pos.symbol} — no consultant available, extended TTL 4 h`);
+        }
         continue;
       }
 

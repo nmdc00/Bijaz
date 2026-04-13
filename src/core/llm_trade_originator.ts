@@ -85,6 +85,7 @@ Return null ONLY when there is genuinely nothing: no clear narrative, no identif
 Respond with ONLY valid JSON matching this schema OR the literal string "null":
 {"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number,"suggestedTtlMinutes":number,"confidence":number,"leverage":number,"expectedRMultiple":number,"tradeType":"scalp"|"tactical"|"structural"}`;
 
+
 const logger = new Logger('info');
 
 function formatBookLines(book: BookEntry[]): string {
