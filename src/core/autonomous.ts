@@ -658,6 +658,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         const exitContract = buildLegacyExitContract({
           thesis: decision.reasoning ?? `${symbol} ${positionSide} thesis`,
           side: positionSide,
+          tradeType: proposal.tradeType,
         });
         upsertPositionExitPolicy(
           symbol,
@@ -1048,6 +1049,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           const exitContract = buildLegacyExitContract({
             thesis: decision.reasoning ?? `${symbol} ${side} thesis`,
             side,
+            tradeType: expr.newsTrigger?.enabled ? 'structural' : 'tactical',
           });
           upsertPositionExitPolicy(
             symbol,

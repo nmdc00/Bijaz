@@ -18,6 +18,7 @@ export interface TradeProposal {
   confidence: number;
   leverage: number;
   expectedRMultiple: number;
+  tradeType: 'scalp' | 'tactical' | 'structural';
 }
 
 export interface OriginationInputBundle {
@@ -40,6 +41,7 @@ const ProposalSchema = z.object({
   confidence: z.number(),
   leverage: z.number().min(1).default(1),
   expectedRMultiple: z.number().min(0),
+  tradeType: z.enum(['scalp', 'tactical', 'structural']).default('tactical'),
 });
 
 const SYSTEM_PROMPT = `You are Thufir. Your singular obsession is wealth — not comfort, not safety theatre, not the appearance of discipline. You are here to compound capital into an amount so obscene it defies comprehension. Every scan is an opportunity. Your job is to find it and take it.
@@ -66,17 +68,23 @@ confidence must reflect your genuine conviction based on the specific setup in f
 
 ## Required fields
 
-A valid proposal requires ALL of: symbol, side, thesisText, invalidationCondition, invalidationPrice, suggestedTtlMinutes, confidence, leverage, expectedRMultiple.
+A valid proposal requires ALL of: symbol, side, thesisText, invalidationCondition, invalidationPrice, suggestedTtlMinutes, confidence, leverage, expectedRMultiple, tradeType.
 
 - invalidationPrice: REQUIRED. This is what separates you from a gambler — you know exactly where you are wrong before you enter. Name the specific price. If you cannot, you do not have a trade, you have a hope. Do not propose hopes.
 - suggestedTtlMinutes: how long until the market proves you right or wrong? Be specific and thesis-derived. A news spike may be 30min. A structural breakout may be 4h. Do not default to 120.
 - expectedRMultiple: hunt asymmetry. If the setup is exceptional, what does it actually pay? Be honest but be aggressive.
 - leverage: match your conviction. When the setup is exceptional, use it. When genuinely uncertain, protect capital so you can fight the next battle.
+- tradeType: classify the thesis horizon before you commit.
+  - "structural": macro or geopolitical thesis with a multi-hour to multi-day resolution horizon. The position survives intraday noise; only contradicted narrative or price closing beyond invalidation justifies exit. Review cadence 4h minimum.
+  - "tactical": momentum or technical setup with an intraday to short-term horizon (hours, not days). Exits when momentum stalls or structure breaks.
+  - "scalp": pure short-term price action, sub-hour duration. Exit fast if the move doesn't materialise.
+  Be honest. A Hormuz blockade thesis is structural. A funding-rate squeeze is tactical. A breakout fade is scalp.
 
 Return null ONLY when there is genuinely nothing: no clear narrative, no identifiable invalidation level, no asymmetry worth capturing. That is the exception, not the rule.
 
 Respond with ONLY valid JSON matching this schema OR the literal string "null":
-{"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number,"suggestedTtlMinutes":number,"confidence":number,"leverage":number,"expectedRMultiple":number}`;
+{"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number,"suggestedTtlMinutes":number,"confidence":number,"leverage":number,"expectedRMultiple":number,"tradeType":"scalp"|"tactical"|"structural"}`;
+
 
 const logger = new Logger('info');
 
@@ -181,6 +189,7 @@ function parseProposal(raw: string): TradeProposal | null {
       confidence: validated.confidence,
       leverage: validated.leverage,
       expectedRMultiple: validated.expectedRMultiple,
+      tradeType: validated.tradeType,
     };
   } catch (error) {
     if (error instanceof SyntaxError) {
