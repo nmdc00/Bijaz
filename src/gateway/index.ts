@@ -1148,15 +1148,6 @@ if (telegram) {
 // Telegram channel monitor — reads public channels via MTProto user session.
 // Only starts when channels.telegram.monitor.enabled = true and sessionString is set.
 if (config.channels?.telegram?.monitor?.enabled) {
-  const monitorNotify = async (msg: string) => {
-    if (!telegram) return;
-    for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
-      try {
-        await telegram.sendMessage(String(chatId), msg);
-      } catch { /* best-effort */ }
-    }
-  };
-
   const channelMonitor = new TelegramChannelMonitor(
     config,
     async (itemCount) => {
@@ -1164,7 +1155,6 @@ if (config.channels?.telegram?.monitor?.enabled) {
         await maybeRunEventDrivenScan('intel', itemCount);
       }
     },
-    monitorNotify,
   );
 
   channelMonitor.start().catch((err) => {
