@@ -7,7 +7,6 @@
  * - Breaking-news keywords trigger onBreakingNews callback
  * - Non-breaking messages are stored but do NOT trigger callback
  * - Duplicate messages (same title+url) are silently dropped
- * - notify() is called on breaking-news events
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -81,27 +80,27 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 
 describe('TelegramChannelMonitor.isConfigured', () => {
   it('returns false when monitor is disabled', () => {
-    const m = new TelegramChannelMonitor(makeConfig({ enabled: false }), vi.fn(), vi.fn());
+    const m = new TelegramChannelMonitor(makeConfig({ enabled: false }), vi.fn());
     expect(m.isConfigured()).toBe(false);
   });
 
   it('returns false when sessionString is empty', () => {
-    const m = new TelegramChannelMonitor(makeConfig({ sessionString: '' }), vi.fn(), vi.fn());
+    const m = new TelegramChannelMonitor(makeConfig({ sessionString: '' }), vi.fn());
     expect(m.isConfigured()).toBe(false);
   });
 
   it('returns false when channels is empty', () => {
-    const m = new TelegramChannelMonitor(makeConfig({ channels: [] }), vi.fn(), vi.fn());
+    const m = new TelegramChannelMonitor(makeConfig({ channels: [] }), vi.fn());
     expect(m.isConfigured()).toBe(false);
   });
 
   it('returns false when apiId is missing', () => {
-    const m = new TelegramChannelMonitor(makeConfig({ apiId: undefined }), vi.fn(), vi.fn());
+    const m = new TelegramChannelMonitor(makeConfig({ apiId: undefined }), vi.fn());
     expect(m.isConfigured()).toBe(false);
   });
 
   it('returns true when all required fields are present', () => {
-    const m = new TelegramChannelMonitor(makeConfig(), vi.fn(), vi.fn());
+    const m = new TelegramChannelMonitor(makeConfig(), vi.fn());
     expect(m.isConfigured()).toBe(true);
   });
 });
@@ -119,10 +118,9 @@ describe('TelegramChannelMonitor message handling', () => {
   async function simulateMessage(
     text: string,
     config: any = makeConfig(),
-  ): Promise<{ onBreakingNews: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> }> {
+  ): Promise<{ onBreakingNews: ReturnType<typeof vi.fn> }> {
     const onBreakingNews = vi.fn().mockResolvedValue(undefined);
-    const notify = vi.fn().mockResolvedValue(undefined);
-    const monitor = new TelegramChannelMonitor(config, onBreakingNews, notify);
+    const monitor = new TelegramChannelMonitor(config, onBreakingNews);
 
     // Access the private handleMessage via cast
     const m = monitor as any;
@@ -142,7 +140,7 @@ describe('TelegramChannelMonitor message handling', () => {
       'breaking', 'tariff', 'invad', 'attack', 'missile',
     ]));
 
-    return { onBreakingNews, notify };
+    return { onBreakingNews };
   }
 
   it('stores intel for any new message', async () => {
@@ -155,9 +153,8 @@ describe('TelegramChannelMonitor message handling', () => {
   });
 
   it('does NOT call onBreakingNews for routine market update', async () => {
-    const { onBreakingNews, notify } = await simulateMessage('Gold up 0.3% in early trading');
+    const { onBreakingNews } = await simulateMessage('Gold up 0.3% in early trading');
     expect(onBreakingNews).not.toHaveBeenCalled();
-    expect(notify).not.toHaveBeenCalled();
   });
 
   it('calls onBreakingNews when text contains "blockad" stem (matches blockade/blockading)', async () => {
@@ -181,14 +178,6 @@ describe('TelegramChannelMonitor message handling', () => {
     expect(onBreakingNews).toHaveBeenCalledWith(1);
   });
 
-  it('calls notify with preview on breaking news', async () => {
-    const { notify } = await simulateMessage('Emergency: nuclear test detected');
-    expect(notify).toHaveBeenCalledOnce();
-    const msg: string = notify.mock.calls[0][0];
-    expect(msg).toContain('📡');
-    expect(msg).toContain('@marketfeed');
-  });
-
   it('is case-insensitive for keyword matching', async () => {
     const { onBreakingNews } = await simulateMessage('BREAKING: market crash imminent');
     expect(onBreakingNews).toHaveBeenCalledWith(1);
@@ -209,8 +198,7 @@ describe('TelegramChannelMonitor message handling', () => {
   it('respects custom breakingNewsKeywords from config', async () => {
     const config = makeConfig({ breakingNewsKeywords: ['fomc', 'rate hike'] });
     const onBreakingNews = vi.fn().mockResolvedValue(undefined);
-    const notify = vi.fn().mockResolvedValue(undefined);
-    const monitor = new TelegramChannelMonitor(config, onBreakingNews, notify) as any;
+    const monitor = new TelegramChannelMonitor(config, onBreakingNews) as any;
     monitor.client = { getEntity: vi.fn().mockResolvedValue({ username: 'marketfeed' }) };
 
     const keywords = new Set([

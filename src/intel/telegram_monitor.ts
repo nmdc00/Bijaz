@@ -58,8 +58,6 @@ export class TelegramChannelMonitor {
     private config: ThufirConfig,
     /** Called with itemCount=1 when a breaking-news message is stored. */
     private onBreakingNews: (itemCount: number) => Promise<void>,
-    /** Optional: send a Telegram notification to the user's chat. */
-    private notify?: (msg: string) => Promise<void>,
   ) {}
 
   isConfigured(): boolean {
@@ -153,14 +151,7 @@ export class TelegramChannelMonitor {
     const matched = [...keywords].find((k) => lowerText.includes(k));
     if (!matched) return;
 
-    const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
     this.logger.info(`TelegramChannelMonitor: breaking keyword "${matched}" → triggering event scan`);
-
-    if (this.notify) {
-      await this.notify(
-        `📡 [Channel Monitor] Breaking: @${source}\n${preview}`,
-      ).catch(() => {});
-    }
 
     await this.onBreakingNews(1).catch((err) =>
       this.logger.warn('TelegramChannelMonitor: event scan callback failed', err),
