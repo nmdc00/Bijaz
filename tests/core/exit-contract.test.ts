@@ -12,6 +12,7 @@ describe('exit_contract', () => {
   it('round-trips valid contracts', () => {
     const contract = {
       thesis: 'Hold while BTC trend structure remains intact',
+      tradeType: 'tactical' as const,
       hardRules: [
         { metric: 'mark_price', op: '<=', value: 84000, action: 'close', reason: 'structure lost' },
       ],
@@ -20,6 +21,25 @@ describe('exit_contract', () => {
 
     const parsed = parseExitContract(serializeExitContract(contract));
     expect(parsed).toEqual(contract);
+  });
+
+  it('defaults tradeType to tactical when omitted', () => {
+    const contract = parseExitContract({
+      thesis: 'BTC trend',
+      hardRules: [],
+      reviewGuidance: [],
+    });
+    expect(contract?.tradeType).toBe('tactical');
+  });
+
+  it('preserves structural tradeType through round-trip', () => {
+    const contract = parseExitContract({
+      thesis: 'Hormuz blockade → oil',
+      tradeType: 'structural',
+      hardRules: [],
+      reviewGuidance: [],
+    });
+    expect(contract?.tradeType).toBe('structural');
   });
 
   it('evaluates deterministic hard rules against heartbeat state', () => {
@@ -56,6 +76,7 @@ describe('exit_contract', () => {
       }),
     ]);
     expect(summarizeExitContract(contract)).toContain('ETH breakout continuation');
+    expect(summarizeExitContract(contract)).toContain('trade_type=tactical');
   });
 
   it('returns null for malformed contracts instead of throwing', () => {

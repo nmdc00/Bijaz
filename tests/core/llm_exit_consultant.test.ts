@@ -176,6 +176,106 @@ describe('LlmExitConsultant.shouldConsult', () => {
     });
     expect(consultant.shouldConsult(entry, 50000, 0.01, NOW)).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // Structural trade behaviour
+  // -------------------------------------------------------------------------
+
+  it('structural: does not trigger at 20 min (suppressed until 4h)', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      entryAtMs: NOW - 21 * 60 * 1000,           // 21 min old
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+      lastConsultAtMs: null,
+      exitContract: { tradeType: 'structural', thesis: 'Hormuz blockade → oil', hardRules: [], reviewGuidance: [] },
+    });
+    expect(consultant.shouldConsult(entry, 97, 0.023, NOW)).toBe(false);
+  });
+
+  it('structural: triggers after 4h first-consult window', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      entryAtMs: NOW - 4 * 60 * 60 * 1000 - 1000, // just over 4h old
+      thesisExpiresAtMs: NOW + 24 * 60 * 60 * 1000,
+      lastConsultAtMs: null,
+      exitContract: { tradeType: 'structural', thesis: 'Hormuz blockade → oil', hardRules: [], reviewGuidance: [] },
+    });
+    expect(consultant.shouldConsult(entry, 97, 0.023, NOW)).toBe(true);
+  });
+
+  it('structural: positive ROE threshold crossings do not trigger consultation', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      lastConsultAtMs: NOW - 1 * 60 * 1000,
+      lastConsultDecision: JSON.stringify({ roeAtConsult: 0.01 }),
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+      exitContract: { tradeType: 'structural', thesis: 'Hormuz blockade → oil', hardRules: [], reviewGuidance: [] },
+    });
+    // ROE just crossed 3% — should NOT trigger for structural
+    expect(consultant.shouldConsult(entry, 97, 0.035, NOW)).toBe(false);
+  });
+
+  it('structural: triggers on significant drawdown (ROE ≤ -5%)', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      lastConsultAtMs: NOW - 1 * 60 * 1000,
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+      exitContract: { tradeType: 'structural', thesis: 'Hormuz blockade → oil', hardRules: [], reviewGuidance: [] },
+    });
+    expect(consultant.shouldConsult(entry, 93, -0.05, NOW)).toBe(true);
+  });
+
+  it('structural: small drawdown below 5% does not trigger', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      lastConsultAtMs: NOW - 1 * 60 * 1000,
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+      exitContract: { tradeType: 'structural', thesis: 'Hormuz blockade → oil', hardRules: [], reviewGuidance: [] },
+    });
+    expect(consultant.shouldConsult(entry, 96, -0.02, NOW)).toBe(false);
+  });
+
+  it('structural: triggers when price within 2% of invalidation level', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      lastConsultAtMs: NOW - 1 * 60 * 1000,
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+      exitContract: {
+        tradeType: 'structural',
+        thesis: 'Hormuz blockade → oil',
+        hardRules: [{ metric: 'mark_price', op: '<=', value: 94, action: 'close', reason: 'thesis invalidation' }],
+        reviewGuidance: [],
+      },
+    });
+    // Current price 95.5 — invalidation at 94 — proximity = (95.5-94)/95.5 = 1.57% < 2%
+    expect(consultant.shouldConsult(entry, 95.5, 0.01, NOW)).toBe(true);
+  });
+
+  it('structural: does not trigger when price far from invalidation level', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      lastConsultAtMs: NOW - 1 * 60 * 1000,
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+      exitContract: {
+        tradeType: 'structural',
+        thesis: 'Hormuz blockade → oil',
+        hardRules: [{ metric: 'mark_price', op: '<=', value: 90, action: 'close', reason: 'thesis invalidation' }],
+        reviewGuidance: [],
+      },
+    });
+    // Current price 97 — invalidation at 90 — proximity = 7.2% > 2%
+    expect(consultant.shouldConsult(entry, 97, 0.023, NOW)).toBe(false);
+  });
+
+  it('structural: TTL approach still triggers regardless of trade type', () => {
+    const consultant = makeConsultant(makeLlm({ action: 'hold', reasoning: 'ok' }), makeLlm({ action: 'hold', reasoning: 'ok' }));
+    const entry = makeBookEntry({
+      thesisExpiresAtMs: NOW + 10 * 60 * 1000, // 10 min remaining
+      lastConsultAtMs: NOW - 1 * 60 * 1000,
+      exitContract: { tradeType: 'structural', thesis: 'Hormuz blockade → oil', hardRules: [], reviewGuidance: [] },
+    });
+    expect(consultant.shouldConsult(entry, 97, 0.023, NOW)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -485,6 +585,7 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
       exitContractSummary: null,
       lastConsultAtMs: null,
       lastConsultDecision: null,
+      entryAtMs: Date.now() - 30 * 60 * 1000,
       ...bookEntryOverrides,
     };
 
