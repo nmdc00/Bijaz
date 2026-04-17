@@ -71,6 +71,27 @@ describe('HyperliquidLiveExecutor', () => {
     });
   });
 
+  it('uses the requested leverage up to the market max when no local cap is configured', async () => {
+    const config: ThufirConfig = {
+      hyperliquid: { defaultSlippageBps: 10 },
+    } as ThufirConfig;
+    const executor = new HyperliquidLiveExecutor({ config });
+
+    const result = await executor.execute(market, {
+      action: 'buy',
+      size: 1,
+      leverage: 8,
+      orderType: 'market',
+    });
+
+    expect(result.executed).toBe(true);
+    expect(updateLeverageMock).toHaveBeenCalledWith({
+      asset: 0,
+      isCross: true,
+      leverage: 8,
+    });
+  });
+
   it('rejects limit orders without a price', async () => {
     const config: ThufirConfig = {
       hyperliquid: { defaultSlippageBps: 10 },
