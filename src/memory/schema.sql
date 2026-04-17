@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     -- PLIL v1.99: clean probability separation and outcome integrity
     model_probability REAL,    -- Thufir's raw probability estimate (never market price)
     market_probability REAL,   -- market-implied price at decision time
+    learning_comparable INTEGER NOT NULL DEFAULT 0 CHECK(learning_comparable IN (0, 1)),
     outcome_basis TEXT DEFAULT 'legacy'
         CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))
         -- 'final'    = confirmed market resolution (use for learning)
@@ -103,6 +104,7 @@ FROM predictions
 WHERE outcome_basis     = 'final'
   AND model_probability  IS NOT NULL
   AND market_probability IS NOT NULL
+  AND learning_comparable = 1
   AND outcome            IS NOT NULL;
 
 -- ============================================================================

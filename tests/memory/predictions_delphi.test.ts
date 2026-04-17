@@ -8,6 +8,7 @@ import {
   getPrediction,
   listDuePredictionsForResolution,
 } from '../../src/memory/predictions.js';
+import { countFinalPredictions, recordOutcome } from '../../src/memory/calibration.js';
 
 function useTempDb(): void {
   const dir = mkdtempSync(join(tmpdir(), 'thufir-delphi-predictions-'));
@@ -64,5 +65,28 @@ describe('delphi prediction storage', () => {
     const due = listDuePredictionsForResolution('2026-02-17T01:15:00.000Z', 10);
     expect(due).toHaveLength(1);
     expect(due[0]?.marketId).toBe('m-delphi-due');
+  });
+
+  it('counts only final rows marked comparable for learning', () => {
+    const usableId = createPrediction({
+      marketId: 'm-delphi-learning',
+      marketTitle: 'Comparable prediction',
+      predictedOutcome: 'YES',
+      modelProbability: 0.68,
+      marketProbability: 0.57,
+    });
+    const unusableId = createPrediction({
+      marketId: 'BTC',
+      marketTitle: 'Perp-like non-comparable row',
+      predictedOutcome: 'NO',
+      modelProbability: 0.72,
+    });
+
+    recordOutcome({ id: usableId, outcome: 'YES', outcomeBasis: 'final' });
+    recordOutcome({ id: unusableId, outcome: 'NO', outcomeBasis: 'final' });
+
+    expect(getPrediction(usableId)?.learningComparable).toBe(true);
+    expect(getPrediction(unusableId)?.learningComparable).toBe(false);
+    expect(countFinalPredictions()).toBe(1);
   });
 });
