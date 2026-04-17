@@ -10,13 +10,16 @@ export interface HyperliquidLiveExecutorOptions {
 
 export class HyperliquidLiveExecutor implements ExecutionAdapter {
   private client: HyperliquidClient;
-  private maxLeverage: number;
+  private maxLeverage: number | null;
   private defaultSlippageBps: number;
   private maxQuoteAgeMs: number;
 
   constructor(options: HyperliquidLiveExecutorOptions) {
     this.client = new HyperliquidClient(options.config);
-    this.maxLeverage = options.config.hyperliquid?.maxLeverage ?? 5;
+    this.maxLeverage =
+      typeof options.config.hyperliquid?.maxLeverage === 'number'
+        ? Number(options.config.hyperliquid.maxLeverage)
+        : null;
     this.defaultSlippageBps = options.config.hyperliquid?.defaultSlippageBps ?? 10;
     this.maxQuoteAgeMs = Math.max(100, Number(options.config.hyperliquid?.maxQuoteAgeMs ?? 2_000));
   }
@@ -33,10 +36,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       return { executed: false, message: 'Invalid decision: missing symbol/side/size.' };
     }
 
-    const leverage = Math.min(
-      decision.leverage ?? this.maxLeverage,
-      this.maxLeverage
-    );
+    const requestedLeverage = Number.isFinite(decision.leverage) ? Number(decision.leverage) : null;
     const marketSlippageBps = Number.isFinite(decision.marketSlippageBps)
       ? Math.max(0, Number(decision.marketSlippageBps))
       : this.defaultSlippageBps;
@@ -52,13 +52,20 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
         return { executed: false, message: `Unknown Hyperliquid symbol: ${symbol}` };
       }
 
-      const leverageCap = marketMeta.maxLeverage ?? this.maxLeverage;
-      const appliedLeverage = Math.min(leverage, leverageCap);
-      if (decision.leverage != null) {
+      const leverageCap = Number.isFinite(marketMeta.maxLeverage)
+        ? Number(marketMeta.maxLeverage)
+        : this.maxLeverage;
+      const appliedLeverage =
+        requestedLeverage == null
+          ? null
+          : leverageCap == null
+            ? requestedLeverage
+            : Math.min(requestedLeverage, leverageCap);
+      if (requestedLeverage != null) {
         await exchange.updateLeverage({
           asset: marketMeta.assetId,
           isCross: true,
-          leverage: appliedLeverage,
+          leverage: appliedLeverage ?? requestedLeverage,
         });
       }
 

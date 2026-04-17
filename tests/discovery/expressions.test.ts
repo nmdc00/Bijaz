@@ -70,4 +70,28 @@ describe('mapExpressionPlan', () => {
     expect(exprNeutral.expectedEdge).toBeGreaterThan(0);
     expect(exprNeutral.expectedEdge).toBeCloseTo(exprDirectional.expectedEdge * 0.4, 5);
   });
+
+  it('does not default discovery leverage to 5x when no cap is configured', () => {
+    const cluster: SignalCluster = {
+      id: 'cluster_2',
+      symbol: 'SOL/USDT',
+      signals: [],
+      directionalBias: 'up',
+      confidence: 0.7,
+      timeHorizon: 'hours',
+    };
+    const hypothesis: Hypothesis = {
+      id: 'hyp_2',
+      clusterId: 'cluster_2',
+      pressureSource: 'flow',
+      expectedExpression: 'Price drifts up',
+      timeHorizon: 'hours',
+      invalidation: 'Flow fades',
+      tradeMap: 'Directional long perp',
+      riskNotes: [],
+    };
+
+    const expr = mapExpressionPlan({} as any, cluster, hypothesis);
+    expect(expr.leverage).toBe(1);
+  });
 });

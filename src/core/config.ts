@@ -292,7 +292,7 @@ const ConfigSchema = z.object({
       wsUrl: z.string().default('wss://api.hyperliquid.xyz/ws'),
       accountAddress: z.string().optional(),
       privateKey: z.string().optional(),
-      maxLeverage: z.number().default(5),
+      maxLeverage: z.number().optional(),
       defaultSlippageBps: z.number().default(10),
       maxQuoteAgeMs: z.number().default(2000),
       symbols: z.array(z.string()).default([]),
