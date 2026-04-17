@@ -51,9 +51,25 @@ function migratePredictionsForPlil(db: Database.Database): void {
   addColumnIfMissing('model_probability', 'model_probability REAL');
   addColumnIfMissing('market_probability', 'market_probability REAL');
   addColumnIfMissing(
+    'learning_comparable',
+    "learning_comparable INTEGER NOT NULL DEFAULT 0 CHECK(learning_comparable IN (0, 1))"
+  );
+  addColumnIfMissing(
     'outcome_basis',
     "outcome_basis TEXT DEFAULT 'legacy' CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))"
   );
+
+  db.exec(`
+    UPDATE predictions
+    SET learning_comparable = CASE
+      WHEN predicted_outcome IN ('YES', 'NO')
+       AND model_probability IS NOT NULL
+       AND market_probability IS NOT NULL
+      THEN 1
+      ELSE 0
+    END
+    WHERE learning_comparable IS NULL OR learning_comparable NOT IN (0, 1)
+  `);
 }
 
 function migrateCausalEventReasoning(db: Database.Database): void {

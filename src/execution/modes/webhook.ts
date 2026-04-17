@@ -25,7 +25,8 @@ export class WebhookExecutor implements ExecutionAdapter {
       confidenceLevel: decision.confidence,
       reasoning: decision.reasoning,
       modelProbability: decision.modelProbability ?? undefined,
-      marketProbability: market.prices?.[decision.outcome] ?? undefined,
+      marketProbability: getComparableMarketProbability(market, decision),
+      learningComparable: isComparablePredictionTrade(market, decision),
     });
 
     const response = await fetch(this.webhookUrl, {
@@ -87,4 +88,19 @@ export class WebhookExecutor implements ExecutionAdapter {
   async cancelOrder(_id: string, _options?: { symbol?: string }): Promise<void> {
     throw new Error('Order cancellation is not supported for webhook execution.');
   }
+}
+
+function isComparablePredictionTrade(market: Market, decision: TradeDecision): boolean {
+  return (
+    market.kind !== 'perp' &&
+    decision.outcome != null &&
+    Number.isFinite(Number(market.prices?.[decision.outcome]))
+  );
+}
+
+function getComparableMarketProbability(market: Market, decision: TradeDecision): number | undefined {
+  if (!isComparablePredictionTrade(market, decision)) {
+    return undefined;
+  }
+  return Number(market.prices[decision.outcome!]);
 }
