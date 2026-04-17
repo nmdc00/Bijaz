@@ -578,6 +578,18 @@ export function listDuePredictionsForResolution(
   }));
 }
 
+export function findOpenPerpPrediction(symbol: string): string | null {
+  const db = openDatabase();
+  const row = db
+    .prepare(
+      `SELECT id FROM predictions
+       WHERE symbol = ? AND domain = 'perp' AND outcome IS NULL
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(symbol) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 export function markPredictionResolutionError(params: {
   id: string;
   error: string;
