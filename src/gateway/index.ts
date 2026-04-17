@@ -1150,9 +1150,42 @@ if (telegram) {
 if (config.channels?.telegram?.monitor?.enabled) {
   const channelMonitor = new TelegramChannelMonitor(
     config,
-    async (itemCount) => {
+    async (itemCount, text, source) => {
       if (config.channels.telegram.monitor?.eventDrivenScanEnabled !== false) {
         await maybeRunEventDrivenScan('intel', itemCount);
+      }
+
+      // Pre-screen with local trivial LLM — skip if not market-relevant.
+      const infoLlm = primaryAgent.getInfoLlm() ?? primaryAgent.getLlm();
+      let relevant = false;
+      try {
+        const screen = await infoLlm.complete([
+          {
+            role: 'user',
+            content:
+              `Relevance filter for a trading system. Does this news have a direct, immediate impact on tradeable assets (crypto perps, oil, gold, FX)?\n\nNews: ${text.slice(0, 500)}\n\nReply YES or NO only.`,
+          },
+        ], { temperature: 0 });
+        relevant = screen.content.trim().toUpperCase().startsWith('YES');
+      } catch {
+        return;
+      }
+
+      if (!relevant || !telegram) return;
+
+      const prompt =
+        `Breaking news from @${source}:\n\n${text}\n\n` +
+        `Analyse the market impact. Use intel_recent for context. ` +
+        `If there is a concrete implication for an open position or watchlist market, state it clearly. ` +
+        `If not actionable, reply BREAKING_OK.`;
+      try {
+        const response = await primaryAgent.handleMessage('__channel_monitor__', prompt);
+        if (!response?.trim() || response.trim().toUpperCase().startsWith('BREAKING_OK')) return;
+        for (const chatId of config.channels.telegram.allowedChatIds ?? []) {
+          await telegram.sendMessage(String(chatId), response).catch(() => {});
+        }
+      } catch (err) {
+        logger.warn('TelegramChannelMonitor: briefing call failed', err);
       }
     },
   );
