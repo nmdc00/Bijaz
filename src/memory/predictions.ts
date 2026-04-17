@@ -38,6 +38,7 @@ export interface PredictionInput {
   // PLIL v1.99: clean probability separation
   modelProbability?: number;    // Thufir's raw estimate — never market price
   marketProbability?: number;   // market-implied price at decision time
+  learningComparable?: boolean;
 }
 
 export interface PredictionRecord {
@@ -73,6 +74,7 @@ export interface PredictionRecord {
   pnl?: number | null;
   modelProbability?: number | null;
   marketProbability?: number | null;
+  learningComparable?: boolean;
   outcomeBasis?: 'final' | 'estimated' | 'legacy' | null;
 }
 
@@ -164,6 +166,12 @@ export function createPrediction(input: PredictionInput): string {
       ? new Date(Date.parse(createdAt) + horizonMinutes * 60_000).toISOString()
       : null);
 
+  const learningComparable =
+    input.learningComparable ??
+    (input.predictedOutcome != null &&
+      input.modelProbability != null &&
+      input.marketProbability != null);
+
   const stmt = db.prepare(`
     INSERT INTO predictions (
       id,
@@ -191,7 +199,8 @@ export function createPrediction(input: PredictionInput): string {
       execution_price,
       position_size,
       model_probability,
-      market_probability
+      market_probability,
+      learning_comparable
     ) VALUES (
       @id,
       @marketId,
@@ -218,7 +227,8 @@ export function createPrediction(input: PredictionInput): string {
       @executionPrice,
       @positionSize,
       @modelProbability,
-      @marketProbability
+      @marketProbability,
+      @learningComparable
     )
   `);
 
@@ -249,6 +259,7 @@ export function createPrediction(input: PredictionInput): string {
     positionSize: input.positionSize ?? null,
     modelProbability: input.modelProbability ?? null,
     marketProbability: input.marketProbability ?? null,
+    learningComparable: learningComparable ? 1 : 0,
   });
 
   return id;
@@ -295,6 +306,7 @@ export function listPredictions(options?: {
       pnl,
       model_probability as modelProbability,
       market_probability as marketProbability,
+      learning_comparable as learningComparable,
       outcome_basis as outcomeBasis
     FROM predictions
   `;
@@ -347,6 +359,7 @@ export function listPredictions(options?: {
     pnl: row.pnl as number | null,
     modelProbability: row.modelProbability as number | null,
     marketProbability: row.marketProbability as number | null,
+    learningComparable: Boolean(row.learningComparable),
     outcomeBasis: (row.outcomeBasis as 'final' | 'estimated' | 'legacy' | null) ?? null,
   }));
 }
@@ -388,6 +401,7 @@ export function getPrediction(id: string): PredictionRecord | null {
         pnl,
         model_probability as modelProbability,
         market_probability as marketProbability,
+        learning_comparable as learningComparable,
         outcome_basis as outcomeBasis
       FROM predictions
       WHERE id = ?
@@ -437,6 +451,7 @@ export function getPrediction(id: string): PredictionRecord | null {
     pnl: row.pnl as number | null,
     modelProbability: row.modelProbability as number | null,
     marketProbability: row.marketProbability as number | null,
+    learningComparable: Boolean(row.learningComparable),
     outcomeBasis: (row.outcomeBasis as 'final' | 'estimated' | 'legacy' | null) ?? null,
   };
 }
