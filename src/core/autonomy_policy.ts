@@ -668,10 +668,20 @@ export function applyReflectionMutation(config: ThufirConfig, entries: PerpTrade
     recent.length > 0 ? recent.filter((entry) => entry.outcome === 'failed').length / recent.length : 0;
   if (recent.length >= 6 && failedRatio >= 0.5) {
     const current = getAutonomyPolicyState();
+    const configuredLeverageCap =
+      typeof current.leverageCapOverride === 'number' && Number.isFinite(current.leverageCapOverride)
+        ? current.leverageCapOverride
+        : typeof (config.hyperliquid as any)?.maxLeverage === 'number' &&
+            Number.isFinite((config.hyperliquid as any)?.maxLeverage)
+          ? Number((config.hyperliquid as any)?.maxLeverage)
+          : typeof (config.wallet?.perps as { maxLeverage?: unknown } | undefined)?.maxLeverage === 'number' &&
+              Number.isFinite((config.wallet?.perps as { maxLeverage?: unknown }).maxLeverage)
+            ? Number((config.wallet?.perps as { maxLeverage?: unknown }).maxLeverage)
+            : null;
     const state = upsertAutonomyPolicyState({
       minEdgeOverride: clamp((current.minEdgeOverride ?? Number(config.autonomy?.minEdge ?? 0.05)) + 0.01, 0.03, 0.2),
       maxTradesPerScanOverride: Math.max(1, (current.maxTradesPerScanOverride ?? Number(config.autonomy?.maxTradesPerScan ?? 3)) - 1),
-      leverageCapOverride: Math.max(1, (current.leverageCapOverride ?? Number((config.hyperliquid as any)?.maxLeverage ?? 5)) - 1),
+      leverageCapOverride: configuredLeverageCap != null ? Math.max(1, configuredLeverageCap - 1) : null,
       reason: `recent failed ratio ${(failedRatio * 100).toFixed(0)}% triggered adaptive tightening`,
     });
     return { mutated: true, reason: state.reason ?? undefined, state };
