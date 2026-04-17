@@ -348,10 +348,11 @@ function buildPaperPerpSnapshot(initialCashUsdc: number, mids: Record<string, nu
     };
   });
   const totalNotionalUsdc = positions.reduce((sum, position) => sum + Number(position.position_value ?? 0), 0);
+  const totalUnrealizedPnlUsdc = positions.reduce((sum, p) => sum + (p.unrealized_pnl ?? 0), 0);
   return {
     cashBalanceUsdc: book.cashBalanceUsdc,
     totalNotionalUsdc,
-    accountValueUsdc: book.cashBalanceUsdc + totalNotionalUsdc,
+    accountValueUsdc: book.cashBalanceUsdc + totalUnrealizedPnlUsdc,
     positions,
   };
 }

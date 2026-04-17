@@ -912,7 +912,7 @@ describe('tool-executor perps', () => {
     expect((portfolio as any).data?.summary?.perp_mode).toBe('paper');
     expect((portfolio as any).data?.perp_summary?.source).toBe('paper');
     expect(((portfolio as any).data?.perp_positions ?? []).length).toBeGreaterThan(0);
-    expect(Number((portfolio as any).data?.perp_summary?.account_value)).toBeGreaterThan(
+    expect(Number((portfolio as any).data?.perp_summary?.account_value)).toBe(
       Number((portfolio as any).data?.perp_summary?.withdrawable)
     );
     expect(Number((portfolio as any).data?.summary?.available_balance)).toBeGreaterThan(0);
