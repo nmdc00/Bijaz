@@ -1,7 +1,8 @@
 import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../executor.js';
 import type { Market } from '../markets.js';
 import { logWalletOperation } from '../../memory/audit.js';
-import { createPrediction, recordExecution } from '../../memory/predictions.js';
+import { createPrediction, findOpenPerpPrediction, recordExecution } from '../../memory/predictions.js';
+import { recordOutcome } from '../../memory/calibration.js';
 import { recordTrade } from '../../memory/trades.js';
 import { recordPerpTrade } from '../../memory/perp_trades.js';
 import { cancelPaperPerpOrder, getPaperPerpBookSummary, listPaperPerpOpenOrders, placePaperPerpOrder } from '../../memory/paper_perps.js';
@@ -80,6 +81,35 @@ export class PaperExecutor implements ExecutionAdapter {
           realized_pnl_usdc: fill.realizedPnlUsd,
         },
       });
+
+      // PLIL: track LLM-originated perp trades through the predictions table
+      if (!decision.reduceOnly && decision.modelProbability != null) {
+        try {
+          createPrediction({
+            marketId: symbol,
+            marketTitle: `${symbol} ${side === 'buy' ? 'long' : 'short'}`,
+            predictedOutcome: 'YES',
+            symbol,
+            domain: 'perp',
+            modelProbability: decision.modelProbability,
+            reasoning: decision.reasoning ?? undefined,
+          });
+        } catch { /* best-effort */ }
+      }
+      if (fill.realizedPnlUsd !== 0) {
+        try {
+          const predId = findOpenPerpPrediction(symbol);
+          if (predId) {
+            recordOutcome({
+              id: predId,
+              outcome: fill.realizedPnlUsd > 0 ? 'YES' : 'NO',
+              outcomeBasis: 'final',
+              outcomeTimestamp: new Date().toISOString(),
+            });
+          }
+        } catch { /* best-effort */ }
+      }
+
       return {
         executed: true,
         message: `${fill.message} symbol=${symbol} side=${side} size=${size}`,
