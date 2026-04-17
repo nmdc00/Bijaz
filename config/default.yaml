@@ -119,7 +119,6 @@ wallet:
 
   # Perp risk controls
   perps:
-    maxLeverage: 5              # Max leverage allowed on perps
     maxOrderNotionalUsd: 250    # Max notional per perp order (USD)
     maxTotalNotionalUsd: 1000   # Max total perp notional across positions (USD)
     minLiquidationDistanceBps: 500 # Minimum liquidation distance (bps) when data available
@@ -579,6 +578,5 @@ hyperliquid:
   wsUrl: wss://api.hyperliquid.xyz/ws
   accountAddress: ""
   privateKey: ""
-  maxLeverage: 5
   defaultSlippageBps: 10
   symbols: []  # Full-universe discovery: selectDiscoveryMarkets ranks all perps by OI/volume/spread
