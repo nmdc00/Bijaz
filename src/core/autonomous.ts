@@ -17,6 +17,7 @@ import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { selectDiscoveryMarkets } from '../discovery/market_selector.js';
 import { countFinalPredictions } from '../memory/calibration.js';
+import { createPrediction } from '../memory/predictions.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
 import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
@@ -649,6 +650,24 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     }
     if (tradeResult.executed) {
       this.limiter.confirm(probeUsd);
+
+      // Record learning prediction — resolved when position closes
+      try {
+        const predictedOutcome = side === 'buy' ? 'YES' : 'NO';
+        createPrediction({
+          marketId: `perp:${symbol}`,
+          marketTitle: `${symbol} ${side === 'buy' ? 'long' : 'short'}: ${proposal.thesisText.slice(0, 100)}`,
+          predictedOutcome,
+          predictedProbability: proposal.confidence,
+          modelProbability: proposal.confidence,
+          marketProbability: 0.5,
+          symbol,
+          domain: 'perp',
+          learningComparable: true,
+          horizonMinutes: proposal.suggestedTtlMinutes,
+          reasoning: proposal.thesisText,
+        });
+      } catch { }
 
       // Write exit policy using proposal TTL and invalidation price
       const ttlMs = proposal.suggestedTtlMinutes * 60_000;
