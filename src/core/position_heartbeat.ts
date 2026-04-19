@@ -21,6 +21,8 @@ import {
 import type { LlmExitConsultant } from './llm_exit_consultant.js';
 import { PositionBook, type BookEntry } from './position_book.js';
 import { evaluateExitContract, parseExitContract } from './exit_contract.js';
+import { findOpenPerpPrediction } from '../memory/predictions.js';
+import { recordOutcome } from '../memory/calibration.js';
 
 type ToolExecutorFn = (
   toolName: string,
@@ -468,6 +470,17 @@ export class PositionHeartbeatService {
       error: tool.success ? null : tool.error,
     });
 
+    if (action === 'close' && tool.success) {
+      try {
+        const openPred = findOpenPerpPrediction(pos.symbol);
+        if (openPred) {
+          const correct = (pos.unrealizedPnl ?? 0) > 0;
+          const outcome = correct ? openPred.predictedOutcome : (openPred.predictedOutcome === 'YES' ? 'NO' : 'YES');
+          recordOutcome({ id: openPred.id, outcome, outcomeBasis: 'final' });
+        }
+      } catch { }
+    }
+
     if (this.notify) {
       try {
         const notifyMsg = tool.success
@@ -508,6 +521,17 @@ export class PositionHeartbeatService {
       snapshot: { liqDistPct },
       error: tool.success ? null : tool.error,
     });
+
+    if (tool.success) {
+      try {
+        const openPred = findOpenPerpPrediction(pos.symbol);
+        if (openPred) {
+          const correct = (pos.unrealizedPnl ?? 0) > 0;
+          const outcome = correct ? openPred.predictedOutcome : (openPred.predictedOutcome === 'YES' ? 'NO' : 'YES');
+          recordOutcome({ id: openPred.id, outcome, outcomeBasis: 'final' });
+        }
+      } catch { }
+    }
     if (this.notify) {
       try {
         await this.notify(
