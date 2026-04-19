@@ -10,8 +10,20 @@ feat/<release>-<slug>  →  release/v.x.xx  →  develop  →  main
 - Feature PRs target their `release/*` base
 - After all features merge into release, open one PR: `release/*` → `develop`
 - After develop is green, open one PR: `develop` → `main`
-- **Never open a PR directly from a feature branch or release branch to `main`**
-- Hotfix exception: only with explicit user approval, clearly labelled
+- **Never open a PR directly from any branch to `main` — always promote through `develop` first**
+
+### Hotfix flow
+
+Hotfixes follow the same promotion path — no shortcuts:
+
+```
+hotfix/<slug>  →  develop  →  main  →  deploy
+```
+
+1. Cut `hotfix/<slug>` from `develop`
+2. PR `hotfix/<slug>` → `develop`, run full test suite
+3. After develop is green, PR `develop` → `main`
+4. Deploy from `main`
 
 ### Conflict resolution
 
@@ -23,6 +35,7 @@ feat/<release>-<slug>  →  release/v.x.xx  →  develop  →  main
 
 - Feature branches: `feat/<release>-<task-slug>` (e.g. `feat/v1.91-signal-cache-layer`)
 - Release branches: `release/v.x.xx` (e.g. `release/v1.91`)
+- Hotfix branches: `hotfix/<slug>` (e.g. `hotfix/leverage-defaults`) — cut from `develop`, promote via `develop` → `main`
 - Reconcile branches: `fix/reconcile-<target>-<source>`
 - Temp/revert branches: `temp/<description>`
 
