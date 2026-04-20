@@ -307,7 +307,7 @@ function resolveInfraTimeoutMs(
       const localSoftTimeoutMs =
         typeof trivial?.localSoftTimeoutMs === 'number'
           ? Math.max(500, trivial.localSoftTimeoutMs)
-          : 6_000;
+          : 15_000;
       return Math.min(timeoutMs, localSoftTimeoutMs);
     }
     if (typeof trivial?.fallbackTimeoutMs === 'number') {
@@ -531,7 +531,7 @@ export function createTrivialTaskClient(config: ThufirConfig): LlmClient | null 
     const localSoftTimeoutMs =
       typeof trivialConfig.localSoftTimeoutMs === 'number'
         ? Math.max(500, trivialConfig.localSoftTimeoutMs)
-        : 6_000;
+        : 15_000;
     const inner = new LocalClient(config, model, 'trivial');
     const guarded = new LocalHealthGuard(inner, {
       baseUrl,

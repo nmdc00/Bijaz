@@ -71,7 +71,7 @@ function resolveTtlApproachMs(config: ThufirConfig): number {
 }
 
 function resolveTimeoutMs(config: ThufirConfig): number {
-  return Math.max(1, Number(config.heartbeat?.llmExitConsult?.timeoutMs ?? 8_000));
+  return Math.max(1, Number(config.heartbeat?.llmExitConsult?.timeoutMs ?? 25_000));
 }
 
 function resolveRoeThresholds(config: ThufirConfig): number[] {

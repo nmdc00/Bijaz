@@ -1175,9 +1175,10 @@ if (config.channels?.telegram?.monitor?.enabled) {
 
       const prompt =
         `Breaking news from @${source}:\n\n${text}\n\n` +
-        `Analyse the market impact. Use intel_recent for context. ` +
-        `If there is a concrete implication for an open position or watchlist market, state it clearly. ` +
-        `If not actionable, reply BREAKING_OK.`;
+        `You are a trader managing your own book. Assess this headline against YOUR open positions using get_positions and intel_recent. ` +
+        `For each position you hold, state whether this headline changes your thesis and what you intend to do about it. ` +
+        `Do not suggest trades for others — reason from your actual book. ` +
+        `If you hold no positions and the headline has no direct implication for your watchlist, reply BREAKING_OK.`;
       try {
         const response = await primaryAgent.handleMessage('__channel_monitor__', prompt);
         if (!response?.trim() || response.trim().toUpperCase().startsWith('BREAKING_OK')) return;
