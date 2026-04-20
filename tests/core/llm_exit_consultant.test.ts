@@ -64,7 +64,7 @@ function makeBookEntry(overrides: Partial<BookEntry> = {}): BookEntry {
 }
 
 function makeConfig() {
-  return { agent: { promptBudget: { trivial: 10000 } } } as any;
+  return { agent: { promptBudget: { trivial: 10000 } }, heartbeat: { llmExitConsult: { timeoutMs: 500 } } } as any;
 }
 
 function makeLlm(responseJson: object): { complete: ReturnType<typeof vi.fn> } {
