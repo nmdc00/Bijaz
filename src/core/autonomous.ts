@@ -53,6 +53,7 @@ import { OriginationTrigger } from './origination_trigger.js';
 import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { listEvents } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
+import { recordDecisionAudit } from '../memory/decision_audit.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -666,6 +667,23 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           learningComparable: true,
           horizonMinutes: proposal.suggestedTtlMinutes,
           reasoning: proposal.thesisText,
+        });
+      } catch { }
+
+      try {
+        recordDecisionAudit({
+          source: 'autonomous',
+          mode: 'autonomous',
+          marketId: symbol,
+          tradeAction: `${side} open ${symbol}`,
+          tradeOutcome: 'executed',
+          confidence: proposal.confidence,
+          notes: {
+            tradeType: proposal.tradeType,
+            expectedRMultiple: proposal.expectedRMultiple,
+            thesisText: proposal.thesisText.slice(0, 200),
+            suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+          },
         });
       } catch { }
 
