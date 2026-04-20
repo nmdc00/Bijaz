@@ -17,6 +17,7 @@ export function recordOutcome(params: {
   outcomeBasis?: 'final' | 'estimated';
   outcomeTimestamp?: string;
   resolutionMetadata?: Record<string, unknown> | null;
+  pnl?: number | null;
 }): void {
   const db = openDatabase();
   const prediction = db
@@ -96,6 +97,10 @@ export function recordOutcome(params: {
     } else {
       pnl = -positionSize;
     }
+  }
+
+  if (typeof params.pnl === 'number' && Number.isFinite(params.pnl)) {
+    pnl = params.pnl;
   }
 
   db.prepare(

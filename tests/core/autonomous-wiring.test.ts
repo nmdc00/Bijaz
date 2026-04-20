@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
   const originatorPropose = vi.fn();
   const upsertExitPolicy = vi.fn();
   const updateTradeProposalOutcome = vi.fn();
+  const createPrediction = vi.fn(() => 'pred-mock-id');
 
   // Stable mock objects — replaced entirely on each TaSurface/OriginationTrigger/LlmTradeOriginator construction
   // by capturing via the constructor mock
@@ -43,6 +44,7 @@ const mocks = vi.hoisted(() => {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
     upsertExitPolicy, updateTradeProposalOutcome,
+    createPrediction,
     taSurfaceInstance, triggerInstance, originatorInstance,
   };
 });
@@ -51,6 +53,11 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('../../src/memory/db.js', () => ({
   openDatabase: () => ({ exec: mocks.dbExec, prepare: mocks.dbPrepare }),
+}));
+
+vi.mock('../../src/memory/predictions.js', () => ({
+  createPrediction: (...args: unknown[]) => mocks.createPrediction(...args),
+  findOpenPerpPrediction: vi.fn(() => null),
 }));
 
 vi.mock('../../src/core/ta_surface.js', () => ({
@@ -267,6 +274,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     mocks.taComputeAll.mockResolvedValue([BASE_SNAPSHOT]);
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'ta_alert', alertedSymbols: ['BTC'] });
     mocks.originatorPropose.mockResolvedValue(BASE_PROPOSAL);
+    mocks.createPrediction.mockReturnValue('pred-mock-id');
   });
 
   it('1. proposal → gate approve → executor called, exit policy written with LLM TTL and invalidation price', async () => {
@@ -441,5 +449,41 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     const expectedMax = after + 45 * 60 * 1000;
     expect(timeStop).toBeGreaterThanOrEqual(expectedMin);
     expect(timeStop).toBeLessThanOrEqual(expectedMax);
+  });
+
+  it('9. originator path: createPrediction called with executed=true, executionPrice, positionSize after gate approve', async () => {
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('approve');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'paper ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    await manager.runScan({ forceExecute: true });
+
+    expect(mocks.createPrediction).toHaveBeenCalledTimes(1);
+    const call = mocks.createPrediction.mock.calls[0]![0] as any;
+    expect(call.symbol).toBe('BTC');
+    expect(call.domain).toBe('perp');
+    expect(call.learningComparable).toBe(true);
+    expect(call.modelProbability).toBe(0.72);
+    expect(call.marketProbability).toBe(0.5);
+    expect(call.executed).toBe(true);
+    expect(call.executionPrice).toBeGreaterThan(0);
+    expect(typeof call.positionSize).toBe('number');
+  });
+
+  it('10. originator path: createPrediction NOT called when gate rejects', async () => {
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('reject');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    await manager.runScan({ forceExecute: true });
+
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(mocks.createPrediction).not.toHaveBeenCalled();
   });
 });

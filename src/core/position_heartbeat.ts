@@ -476,7 +476,7 @@ export class PositionHeartbeatService {
         if (openPred) {
           const correct = (pos.unrealizedPnl ?? 0) > 0;
           const outcome = correct ? openPred.predictedOutcome : (openPred.predictedOutcome === 'YES' ? 'NO' : 'YES');
-          recordOutcome({ id: openPred.id, outcome, outcomeBasis: 'final' });
+          recordOutcome({ id: openPred.id, outcome, outcomeBasis: 'final', pnl: pos.unrealizedPnl ?? null });
         }
       } catch { }
     }
@@ -528,7 +528,7 @@ export class PositionHeartbeatService {
         if (openPred) {
           const correct = (pos.unrealizedPnl ?? 0) > 0;
           const outcome = correct ? openPred.predictedOutcome : (openPred.predictedOutcome === 'YES' ? 'NO' : 'YES');
-          recordOutcome({ id: openPred.id, outcome, outcomeBasis: 'final' });
+          recordOutcome({ id: openPred.id, outcome, outcomeBasis: 'final', pnl: pos.unrealizedPnl ?? null });
         }
       } catch { }
     }

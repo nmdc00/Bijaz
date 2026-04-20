@@ -667,6 +667,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           learningComparable: true,
           horizonMinutes: proposal.suggestedTtlMinutes,
           reasoning: proposal.thesisText,
+          executed: true,
+          executionPrice: markPrice || undefined,
+          positionSize: size,
         });
       } catch { }
 
@@ -1095,6 +1098,24 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             null,
             serializeExitContract(exitContract)
           );
+        } catch { }
+        try {
+          const predictedOutcome = expr.side === 'buy' ? 'YES' : 'NO';
+          createPrediction({
+            marketId: `perp:${symbol}`,
+            marketTitle: `${symbol} ${expr.side === 'buy' ? 'long' : 'short'}: quant scan`,
+            predictedOutcome,
+            predictedProbability: confidenceWeighted,
+            modelProbability: confidenceWeighted,
+            marketProbability: 0.5,
+            symbol,
+            domain: 'perp',
+            learningComparable: true,
+            horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
+            executed: true,
+            executionPrice: markPrice || undefined,
+            positionSize: size,
+          });
         } catch { }
         // Notify on position open.
         if (this.notify) {
