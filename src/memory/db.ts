@@ -59,17 +59,19 @@ function migratePredictionsForPlil(db: Database.Database): void {
     "outcome_basis TEXT DEFAULT 'legacy' CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))"
   );
 
-  db.exec(`
-    UPDATE predictions
-    SET learning_comparable = CASE
-      WHEN predicted_outcome IN ('YES', 'NO')
-       AND model_probability IS NOT NULL
-       AND market_probability IS NOT NULL
-      THEN 1
-      ELSE 0
-    END
-    WHERE learning_comparable IS NULL OR learning_comparable NOT IN (0, 1)
-  `);
+  if (columnNames.has('predicted_outcome')) {
+    db.exec(`
+      UPDATE predictions
+      SET learning_comparable = CASE
+        WHEN predicted_outcome IN ('YES', 'NO')
+         AND model_probability IS NOT NULL
+         AND market_probability IS NOT NULL
+        THEN 1
+        ELSE 0
+      END
+      WHERE learning_comparable IS NULL OR learning_comparable NOT IN (0, 1)
+    `);
+  }
 }
 
 function migrateCausalEventReasoning(db: Database.Database): void {
