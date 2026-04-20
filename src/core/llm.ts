@@ -275,6 +275,8 @@ class LlmQueue {
 }
 
 class LimitedLlmClient implements LlmClient {
+  get meta() { return this.inner.meta; }
+
   constructor(private inner: LlmClient, private limiter: LlmQueue) {}
 
   complete(messages: ChatMessage[], options?: LlmClientOptions): Promise<LlmResponse> {
