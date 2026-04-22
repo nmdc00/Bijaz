@@ -1983,18 +1983,20 @@ export async function executeToolCall(
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
           }
-          try {
-            recordDecisionAudit({
-              source: 'tool_executor',
-              mode: bookMode,
-              marketId: symbol,
-              tradeAction: `${String(side)} ${reduceOnly ? 'close' : 'open'} ${symbol}`,
-              tradeOutcome: 'failed',
-              tradeAmount: feeEstimate.estimated_notional_usd ?? null,
-              edge: typeof expectedEdge === 'number' ? expectedEdge : null,
-              notes: { signalClass, marketRegime, exitMode, hypothesisId, reason: result.message },
-            });
-          } catch { }
+          if (!reduceOnly) {
+            try {
+              recordDecisionAudit({
+                source: 'tool_executor',
+                mode: bookMode,
+                marketId: symbol,
+                tradeAction: `${String(side)} open ${symbol}`,
+                tradeOutcome: 'failed',
+                tradeAmount: feeEstimate.estimated_notional_usd ?? null,
+                edge: typeof expectedEdge === 'number' ? expectedEdge : null,
+                notes: { signalClass, marketRegime, exitMode, hypothesisId, reason: result.message },
+              });
+            } catch { }
+          }
           return { success: false, error: `${result.message}${retrySummary}` };
         }
         const paperReduceOnlyPostcondition =
@@ -2150,26 +2152,28 @@ export async function executeToolCall(
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
         }
-        try {
-          recordDecisionAudit({
-            source: 'tool_executor',
-            mode: bookMode,
-            marketId: symbol,
-            tradeAction: `${String(side)} ${reduceOnly ? 'close' : 'open'} ${symbol}`,
-            tradeOutcome: 'executed',
-            tradeAmount: feeEstimate.estimated_notional_usd ?? null,
-            edge: typeof expectedEdge === 'number' ? expectedEdge : null,
-            notes: {
-              signalClass,
-              marketRegime,
-              exitMode: exitAssessment.exitMode,
-              thesisCorrect: exitAssessment.thesisCorrect,
-              hypothesisId,
-              capturedR: componentScores?.capturedR ?? null,
-              reasoning: policyReasoning,
-            },
-          });
-        } catch { }
+        if (!reduceOnly) {
+          try {
+            recordDecisionAudit({
+              source: 'tool_executor',
+              mode: bookMode,
+              marketId: symbol,
+              tradeAction: `${String(side)} open ${symbol}`,
+              tradeOutcome: 'executed',
+              tradeAmount: feeEstimate.estimated_notional_usd ?? null,
+              edge: typeof expectedEdge === 'number' ? expectedEdge : null,
+              notes: {
+                signalClass,
+                marketRegime,
+                exitMode: exitAssessment.exitMode,
+                thesisCorrect: exitAssessment.thesisCorrect,
+                hypothesisId,
+                capturedR: componentScores?.capturedR ?? null,
+                reasoning: policyReasoning,
+              },
+            });
+          } catch { }
+        }
         // Maintain per-position exit policy for heartbeat.
         if (!reduceOnly) {
           const effectiveTimeStopAtMs = resolvedContract?.timeStopAtMs ?? thesisExpiresAtMs ?? timeStopAtMs;
