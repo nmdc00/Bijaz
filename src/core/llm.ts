@@ -1254,7 +1254,16 @@ function parseProxyError(detail: string): string {
   }
 }
 
-async function fetchWithRetry(factory: () => Promise<FetchResponse>): Promise<FetchResponse> {
+async function fetchWithRetry(factory: () => Promise<FetchResponse>, maxAttempts = 3): Promise<FetchResponse> {
+  const retryable = new Set([502, 503, 504]);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await factory();
+    if (response.ok || !retryable.has(response.status) || attempt === maxAttempts) {
+      return response;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+  }
+  // unreachable but satisfies TS
   return factory();
 }
 
