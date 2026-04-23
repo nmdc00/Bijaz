@@ -200,8 +200,7 @@ export function createPrediction(input: PredictionInput): string {
       position_size,
       model_probability,
       market_probability,
-      learning_comparable,
-      outcome_basis
+      learning_comparable
     ) VALUES (
       @id,
       @marketId,
@@ -229,8 +228,7 @@ export function createPrediction(input: PredictionInput): string {
       @positionSize,
       @modelProbability,
       @marketProbability,
-      @learningComparable,
-      @outcomeBasis
+      @learningComparable
     )
   `);
 
@@ -262,7 +260,6 @@ export function createPrediction(input: PredictionInput): string {
     modelProbability: input.modelProbability ?? null,
     marketProbability: input.marketProbability ?? null,
     learningComparable: learningComparable ? 1 : 0,
-    outcomeBasis: 'estimated',
   });
 
   return id;
