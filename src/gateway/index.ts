@@ -55,6 +55,7 @@ import { createAgentRegistry } from './agent_router.js';
 import { createLlmClient } from '../core/llm.js';
 import { installConsoleFileMirror } from '../core/unified-logging.js';
 import { PositionHeartbeatService } from '../core/position_heartbeat.js';
+import { resolveOutcomes } from '../core/resolver.js';
 import { LlmExitConsultant } from '../core/llm_exit_consultant.js';
 import { SchedulerControlPlane } from '../core/scheduler_control_plane.js';
 import type { ScheduleDefinition } from '../core/scheduler_control_plane.js';
@@ -776,6 +777,25 @@ if (heartbeatConfig?.enabled) {
       } catch (error) {
         logger.error('Heartbeat failed', error);
         throw error;
+      }
+    }
+  );
+  hasSchedulerJobs = true;
+}
+
+const resolverConfig = config.notifications?.resolver;
+if (resolverConfig?.enabled) {
+  const resolverIntervalMs = Math.max(60_000, (resolverConfig.intervalSeconds ?? 900) * 1000);
+  scheduler.registerJob(
+    {
+      name: `gateway:${schedulerNamespace}:resolver`,
+      schedule: { kind: 'interval', intervalMs: resolverIntervalMs },
+      leaseMs: 60_000,
+    },
+    async () => {
+      const updated = await resolveOutcomes(config, resolverConfig.limit ?? 50);
+      if (updated > 0) {
+        logger.info(`Resolver: resolved ${updated} prediction(s).`);
       }
     }
   );
