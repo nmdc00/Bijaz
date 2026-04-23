@@ -72,6 +72,19 @@ function migratePredictionsForPlil(db: Database.Database): void {
       WHERE learning_comparable IS NULL OR learning_comparable NOT IN (0, 1)
     `);
   }
+
+  // Fix rows written with the wrong default ('legacy') before the INSERT bug was
+  // corrected. Unresolved rows that have model_probability are new predictions,
+  // not legacy rows — reclassify them as 'estimated'.
+  if (columnNames.has('outcome_basis')) {
+    db.exec(`
+      UPDATE predictions
+      SET outcome_basis = 'estimated'
+      WHERE outcome_basis = 'legacy'
+        AND model_probability IS NOT NULL
+        AND outcome IS NULL
+    `);
+  }
 }
 
 function migrateCausalEventReasoning(db: Database.Database): void {

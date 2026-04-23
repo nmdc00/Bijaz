@@ -76,7 +76,7 @@ describe('PLIL predictions — data integrity', () => {
     expect(pred!.executed).toBe(true);
     expect(pred!.executionPrice).toBeCloseTo(150.5, 4);
     expect(pred!.positionSize).toBeCloseTo(0.667, 4);
-    expect(pred!.outcomeBasis).toBe('legacy');
+    expect(pred!.outcomeBasis).toBe('estimated');
     expect(pred!.resolutionStatus).toBe('open');
   });
 
@@ -125,6 +125,69 @@ describe('PLIL predictions — data integrity', () => {
     const row = db.prepare('SELECT pnl, outcome FROM predictions WHERE id = ?').get(id) as any;
     expect(row.pnl).toBeCloseTo(-8.25, 4);
     expect(row.outcome).toBe('YES');
+  });
+
+  it('createPrediction inserts outcome_basis as estimated, not legacy', () => {
+    const id = createPrediction({
+      marketId: 'perp:BTC',
+      marketTitle: 'BTC short: thesis test',
+      predictedOutcome: 'NO',
+      modelProbability: 0.7,
+      marketProbability: 0.5,
+      domain: 'perp',
+      symbol: 'BTC',
+    });
+
+    const db = openDatabase();
+    const row = db.prepare('SELECT outcome_basis FROM predictions WHERE id = ?').get(id) as any;
+    expect(row.outcome_basis).toBe('estimated');
+  });
+
+  it('createPrediction without modelProbability still inserts outcome_basis as estimated', () => {
+    const id = createPrediction({
+      marketId: 'perp:ETH',
+      marketTitle: 'ETH long: no model prob',
+      domain: 'perp',
+    });
+
+    const db = openDatabase();
+    const row = db.prepare('SELECT outcome_basis FROM predictions WHERE id = ?').get(id) as any;
+    expect(row.outcome_basis).toBe('estimated');
+  });
+
+  it('migration reclassifies legacy+model_probability+no outcome rows to estimated', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'thufir-migrate-')), 'thufir.sqlite');
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE predictions (
+        id TEXT PRIMARY KEY,
+        market_id TEXT NOT NULL,
+        market_title TEXT NOT NULL,
+        model_probability REAL,
+        market_probability REAL,
+        learning_comparable INTEGER NOT NULL DEFAULT 0,
+        outcome TEXT,
+        outcome_basis TEXT DEFAULT 'legacy' CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))
+      )
+    `);
+    // Unresolved row with model_probability — wrong 'legacy' default from the bug
+    raw.exec(`INSERT INTO predictions VALUES ('new-1', 'm1', 'T1', 0.7, 0.5, 1, NULL, 'legacy')`);
+    // Truly legacy row — no model_probability
+    raw.exec(`INSERT INTO predictions VALUES ('old-1', 'm2', 'T2', NULL, NULL, 0, NULL, 'legacy')`);
+    // Already-resolved row — should not be touched even if legacy
+    raw.exec(`INSERT INTO predictions VALUES ('res-1', 'm3', 'T3', 0.6, 0.5, 1, 'YES', 'legacy')`);
+    raw.close();
+
+    process.env.THUFIR_DB_PATH = dbPath;
+    openDatabase(); // triggers migration
+
+    const db = new Database(dbPath);
+    const rows = db.prepare('SELECT id, outcome_basis FROM predictions').all() as Array<{ id: string; outcome_basis: string }>;
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r.outcome_basis]));
+
+    expect(byId['new-1']).toBe('estimated'); // fixed by migration
+    expect(byId['old-1']).toBe('legacy');    // truly legacy — untouched
+    expect(byId['res-1']).toBe('legacy');    // resolved — untouched
   });
 
   it('recordOutcome without explicit pnl falls back to positionSize-based computation', () => {
