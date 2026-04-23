@@ -365,6 +365,10 @@ notifications:
   dailyReport:
     enabled: false
     channels: []
+  resolver:
+    enabled: true
+    intervalSeconds: 900
+    limit: 50
   intelFetch:
     enabled: false
     time: "06:00"

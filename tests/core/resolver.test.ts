@@ -85,6 +85,49 @@ describe('resolveOutcomes', () => {
     expect(future?.outcome).toBeNull();
   });
 
+  it('sets outcomeBasis=final when market has a confirmed resolution', async () => {
+    const id = createPrediction({
+      marketId: 'm-confirmed',
+      marketTitle: 'Confirmed market',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.7,
+      modelProbability: 0.7,
+      marketProbability: 0.5,
+      horizonMinutes: 60,
+      createdAt: '2026-02-17T00:00:00.000Z',
+    });
+
+    marketFixtures.set('m-confirmed', {
+      id: 'm-confirmed',
+      question: 'Confirmed',
+      outcomes: ['YES', 'NO'],
+      resolution: 'YES',
+      prices: { YES: 1, NO: 0 },
+      platform: 'test',
+    });
+
+    await resolveOutcomes({} as any, 25, new Date('2026-02-17T01:30:00.000Z'));
+
+    const pred = getPrediction(id);
+    expect(pred?.outcome).toBe('YES');
+    expect(pred?.outcomeBasis).toBe('final');
+    expect(pred?.resolutionMetadata?.basis).toBe('market_resolution');
+  });
+
+  it('returns 0 and skips resolution when market client is unavailable', async () => {
+    availability.value = false;
+    createPrediction({
+      marketId: 'm-unavailable',
+      marketTitle: 'Unavailable market',
+      predictedOutcome: 'YES',
+      horizonMinutes: 60,
+      createdAt: '2026-02-17T00:00:00.000Z',
+    });
+
+    const updated = await resolveOutcomes({} as any, 25, new Date('2026-02-17T02:00:00.000Z'));
+    expect(updated).toBe(0);
+  });
+
   it('marks unresolved_error when snapshot outcome cannot be derived', async () => {
     const id = createPrediction({
       marketId: 'm-missing-price',

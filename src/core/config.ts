@@ -967,7 +967,7 @@ const ConfigSchema = z.object({
       resolver: z
         .object({
           enabled: z.boolean().default(false),
-          time: z.string().default('02:00'),
+          intervalSeconds: z.number().default(900),
           limit: z.number().default(50),
         })
         .default({}),
