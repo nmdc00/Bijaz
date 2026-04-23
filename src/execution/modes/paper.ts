@@ -83,6 +83,9 @@ export class PaperExecutor implements ExecutionAdapter {
       return {
         executed: true,
         message: `${fill.message} symbol=${symbol} side=${side} size=${size}`,
+        realizedPnlUsd: fill.realizedPnlUsd,
+        feeUsd: fill.feeUsd,
+        orderId: fill.orderId,
       };
     }
 
