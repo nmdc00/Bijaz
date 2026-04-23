@@ -135,6 +135,7 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
       return {
         executed: true,
         message: statusMessage.message,
+        orderId: extractOrderId(statusMessage.message),
       };
     } catch (error) {
       return {
@@ -263,6 +264,11 @@ export class HyperliquidLiveExecutor implements ExecutionAdapter {
     const px = await this.estimateMarketPrice(symbol, side, slippageBps);
     return { priceStr: formatPerpPrice(px, szDecimals), quoteTsMs: Date.now(), source: 'mid' };
   }
+}
+
+function extractOrderId(message: string): string | null {
+  const match = message.match(/oid=(\d+)/i);
+  return match?.[1] ?? null;
 }
 
 function formatPerpPrice(price: number, szDecimals: number): string {

@@ -7,13 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeToolCall } from '../../src/core/tool-executor.js';
 import { HyperliquidClient } from '../../src/execution/hyperliquid/client.js';
 import { PaperExecutor } from '../../src/execution/modes/paper.js';
+import { countFinalPredictions } from '../../src/memory/calibration.js';
+import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
 
 describe('tool-executor perps', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
+  let currentMarkPrice = 50000;
 
   beforeEach(() => {
     const tempDir = mkdtempSync(join(tmpdir(), 'thufir-tool-executor-perps-'));
     process.env.THUFIR_DB_PATH = join(tempDir, 'thufir.sqlite');
+    currentMarkPrice = 50000;
   });
 
   afterEach(() => {
@@ -38,7 +42,7 @@ describe('tool-executor perps', () => {
       platform: 'hyperliquid',
       kind: 'perp',
       symbol,
-      markPrice: 50000,
+      markPrice: currentMarkPrice,
       metadata: { maxLeverage: 10 },
     }),
     listMarkets: async () => [],
@@ -93,6 +97,116 @@ describe('tool-executor perps', () => {
       expect(post?.close_complete).toBe(true);
       expect(post?.after_size).toBe(0);
     }
+  });
+
+  it('resolves an open perp prediction on full close using realized net pnl', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+    const symbol = 'BTCRESOLVE';
+    const predictionId = createPrediction({
+      marketId: symbol,
+      marketTitle: `Perp: ${symbol}`,
+      domain: 'perp',
+      symbol,
+      predictedOutcome: 'YES',
+      predictedProbability: 0.62,
+      modelProbability: 0.62,
+      marketProbability: 0.5,
+      learningComparable: true,
+      executed: true,
+      executionPrice: 50000,
+      positionSize: 500,
+    });
+
+    currentMarkPrice = 50000;
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        { symbol, side: 'buy', size: 0.01, mode: 'paper' },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    currentMarkPrice = 51000;
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        { symbol, side: 'sell', size: 0.01, reduce_only: true, mode: 'paper' },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    const prediction = getPrediction(predictionId);
+    expect(prediction?.outcome).toBe('YES');
+    expect(prediction?.outcomeBasis).toBe('final');
+    expect(prediction?.resolutionStatus).toBe('resolved_true');
+    expect(prediction?.pnl).toBeCloseTo(8.9900025, 6);
+    expect(prediction?.resolutionMetadata?.basis).toBe('realized_net_pnl_close');
+    expect(countFinalPredictions()).toBe(1);
+  });
+
+  it('does not resolve a perp prediction on partial reduce-only close', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+    const symbol = 'BTCPARTIAL';
+    const predictionId = createPrediction({
+      marketId: symbol,
+      marketTitle: `Perp: ${symbol}`,
+      domain: 'perp',
+      symbol,
+      predictedOutcome: 'YES',
+      predictedProbability: 0.62,
+      modelProbability: 0.62,
+      marketProbability: 0.5,
+      learningComparable: true,
+      executed: true,
+      executionPrice: 50000,
+      positionSize: 500,
+    });
+
+    currentMarkPrice = 50000;
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        { symbol, side: 'buy', size: 0.02, mode: 'paper' },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    currentMarkPrice = 50500;
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        { symbol, side: 'sell', size: 0.01, reduce_only: true, mode: 'paper' },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    const prediction = getPrediction(predictionId);
+    expect(prediction?.outcome).toBeNull();
+    expect(prediction?.outcomeBasis).toBe('legacy');
+    expect(prediction?.resolutionStatus).toBe('open');
+    expect(countFinalPredictions()).toBe(0);
   });
 
   it('reuses one tradeId across a full paper position lifecycle', async () => {
