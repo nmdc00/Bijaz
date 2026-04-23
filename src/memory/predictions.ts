@@ -593,19 +593,27 @@ export function listDuePredictionsForResolution(
   }));
 }
 
-export function findOpenPerpPrediction(symbol: string): { id: string; predictedOutcome: Outcome } | null {
+export function findOpenPerpPrediction(symbol: string): {
+  id: string;
+  predictedOutcome: Outcome;
+  createdAt: string;
+} | null {
   const db = openDatabase();
   const normalized = symbol.trim().toUpperCase();
   const row = db
     .prepare(
-      `SELECT id, predicted_outcome as predictedOutcome
+      `SELECT id, predicted_outcome as predictedOutcome, created_at as createdAt
        FROM predictions
        WHERE symbol = ? AND domain = 'perp' AND resolution_status = 'open'
        ORDER BY created_at DESC LIMIT 1`
     )
-    .get(normalized) as { id: string; predictedOutcome: string } | undefined;
+    .get(normalized) as { id: string; predictedOutcome: string; createdAt: string } | undefined;
   if (!row || (row.predictedOutcome !== 'YES' && row.predictedOutcome !== 'NO')) return null;
-  return { id: row.id, predictedOutcome: row.predictedOutcome as Outcome };
+  return {
+    id: row.id,
+    predictedOutcome: row.predictedOutcome as Outcome,
+    createdAt: row.createdAt,
+  };
 }
 
 export function markPredictionResolutionError(params: {

@@ -20,6 +20,9 @@ export interface TradeDecision {
 export interface TradeResult {
   executed: boolean;
   message: string;
+  realizedPnlUsd?: number | null;
+  feeUsd?: number | null;
+  orderId?: string | null;
 }
 
 export interface Order {
