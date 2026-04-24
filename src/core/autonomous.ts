@@ -653,9 +653,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       this.limiter.confirm(probeUsd);
 
       // Record learning prediction — resolved when position closes
+      let predictionId: string | null = null;
       try {
         const predictedOutcome = side === 'buy' ? 'YES' : 'NO';
-        createPrediction({
+        predictionId = createPrediction({
           marketId: `perp:${symbol}`,
           marketTitle: `${symbol} ${side === 'buy' ? 'long' : 'short'}: ${proposal.thesisText.slice(0, 100)}`,
           predictedOutcome,
@@ -705,7 +706,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           positionSide,
           timeStopAtMs,
           proposal.invalidationPrice,
-          serializeExitContract(exitContract)
+          serializeExitContract(exitContract),
+          predictionId
         );
       } catch { }
 
@@ -1084,24 +1086,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         const defaultThesisTtlMs =
           ((this.thufirConfig.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120) * 60_000;
         const timeStopAtMs = expr.newsTrigger?.expiresAtMs ?? Date.now() + defaultThesisTtlMs;
-        try {
-          const side = expr.side === 'buy' ? 'long' : 'short';
-          const exitContract = buildLegacyExitContract({
-            thesis: decision.reasoning ?? `${symbol} ${side} thesis`,
-            side,
-            tradeType: expr.newsTrigger?.enabled ? 'structural' : 'tactical',
-          });
-          upsertPositionExitPolicy(
-            symbol,
-            side,
-            timeStopAtMs,
-            null,
-            serializeExitContract(exitContract)
-          );
-        } catch { }
+        let predictionId: string | null = null;
         try {
           const predictedOutcome = expr.side === 'buy' ? 'YES' : 'NO';
-          createPrediction({
+          predictionId = createPrediction({
             marketId: `perp:${symbol}`,
             marketTitle: `${symbol} ${expr.side === 'buy' ? 'long' : 'short'}: quant scan`,
             predictedOutcome,
@@ -1116,6 +1104,22 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             executionPrice: markPrice || undefined,
             positionSize: size,
           });
+        } catch { }
+        try {
+          const side = expr.side === 'buy' ? 'long' : 'short';
+          const exitContract = buildLegacyExitContract({
+            thesis: decision.reasoning ?? `${symbol} ${side} thesis`,
+            side,
+            tradeType: expr.newsTrigger?.enabled ? 'structural' : 'tactical',
+          });
+          upsertPositionExitPolicy(
+            symbol,
+            side,
+            timeStopAtMs,
+            null,
+            serializeExitContract(exitContract),
+            predictionId
+          );
         } catch { }
         // Notify on position open.
         if (this.notify) {

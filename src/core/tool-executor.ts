@@ -25,7 +25,7 @@ import {
   setActivePerpPositionLifecycle,
 } from '../memory/perp_trades.js';
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
-import { findOpenPerpPrediction } from '../memory/predictions.js';
+import { findOpenPerpPrediction, findOpenPerpPredictionById } from '../memory/predictions.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
@@ -57,6 +57,7 @@ import {
 } from './exit_contract.js';
 import {
   clearPositionExitPolicy,
+  getPositionExitPolicy,
   upsertPositionExitPolicy,
 } from '../memory/position_exit_policy.js';
 
@@ -594,6 +595,7 @@ async function maybeResolvePerpPredictionFromClose(params: {
   reduceOnly: boolean;
   positionBefore: ReduceOnlyPositionSnapshot | null;
   positionAfter: ReduceOnlyPositionSnapshot | null;
+  linkedPredictionId?: string | null;
 }): Promise<void> {
   if (!params.reduceOnly || params.positionBefore == null) {
     return;
@@ -602,7 +604,10 @@ async function maybeResolvePerpPredictionFromClose(params: {
     return;
   }
 
-  const openPrediction = findOpenPerpPrediction(params.symbol);
+  const openPrediction =
+    (params.linkedPredictionId
+      ? findOpenPerpPredictionById(params.linkedPredictionId, params.symbol)
+      : null) ?? findOpenPerpPrediction(params.symbol);
   if (!openPrediction) {
     return;
   }
@@ -2299,6 +2304,7 @@ export async function executeToolCall(
           } catch { }
         }
         // Maintain per-position exit policy for heartbeat.
+        const activeExitPolicy = reduceOnly ? getPositionExitPolicy(symbol) : null;
         if (!reduceOnly) {
           const effectiveTimeStopAtMs = resolvedContract?.timeStopAtMs ?? thesisExpiresAtMs ?? timeStopAtMs;
           const effectiveInvalidationPrice = resolvedContract?.invalidationPrice ?? invalidationPrice;
@@ -2313,9 +2319,6 @@ export async function executeToolCall(
               );
             } catch { }
           }
-        } else if (positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0)) {
-          // Reduce-only that fully closed the position: clear the policy.
-          try { clearPositionExitPolicy(symbol); } catch { }
         }
         try {
           await maybeResolvePerpPredictionFromClose({
@@ -2325,9 +2328,14 @@ export async function executeToolCall(
             reduceOnly,
             positionBefore,
             positionAfter,
+            linkedPredictionId: activeExitPolicy?.predictionId ?? null,
           });
         } catch {
           // Best-effort resolution: never block trading on prediction write failures.
+        }
+        if (reduceOnly && positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0)) {
+          // Reduce-only that fully closed the position: clear the policy after best-effort finalization.
+          try { clearPositionExitPolicy(symbol); } catch { }
         }
         return {
           success: true,
