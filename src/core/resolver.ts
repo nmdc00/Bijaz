@@ -39,6 +39,9 @@ export async function resolveOutcomes(
   const asOfIso = asOf.toISOString();
   const due = listDuePredictionsForResolution(asOfIso, limit);
   for (const prediction of due) {
+    if (prediction.domain === 'perp') {
+      continue;
+    }
     try {
       if (!prediction.predictedOutcome) {
         markPredictionResolutionError({

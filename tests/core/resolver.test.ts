@@ -128,6 +128,46 @@ describe('resolveOutcomes', () => {
     expect(updated).toBe(0);
   });
 
+  it('skips due perp predictions and leaves them unresolved', async () => {
+    const perpId = createPrediction({
+      marketId: 'perp:SOL',
+      marketTitle: 'SOL long',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.67,
+      domain: 'perp',
+      symbol: 'SOL',
+      horizonMinutes: 60,
+      createdAt: '2026-02-17T00:00:00.000Z',
+    });
+    const eventId = createPrediction({
+      marketId: 'm-event',
+      marketTitle: 'Event market',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.62,
+      horizonMinutes: 60,
+      createdAt: '2026-02-17T00:00:00.000Z',
+    });
+
+    marketFixtures.set('m-event', {
+      id: 'm-event',
+      question: 'Event',
+      outcomes: ['YES', 'NO'],
+      prices: { YES: 0.81, NO: 0.19 },
+      platform: 'test',
+    });
+
+    const updated = await resolveOutcomes(
+      {} as any,
+      25,
+      new Date('2026-02-17T01:30:00.000Z')
+    );
+
+    expect(updated).toBe(1);
+    expect(getPrediction(perpId)?.resolutionStatus).toBe('open');
+    expect(getPrediction(perpId)?.outcome).toBeNull();
+    expect(getPrediction(eventId)?.outcome).toBe('YES');
+  });
+
   it('marks unresolved_error when snapshot outcome cannot be derived', async () => {
     const id = createPrediction({
       marketId: 'm-missing-price',
