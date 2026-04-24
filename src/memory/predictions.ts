@@ -548,6 +548,7 @@ export function listDuePredictionsForResolution(
 ): Array<{
   id: string;
   marketId: string;
+  domain?: string | null;
   predictedOutcome?: Outcome | null;
   predictedProbability?: number | null;
   createdAt: string;
@@ -561,6 +562,7 @@ export function listDuePredictionsForResolution(
         SELECT
           id,
           market_id as marketId,
+          domain,
           predicted_outcome as predictedOutcome,
           predicted_probability as predictedProbability,
           created_at as createdAt,
@@ -579,6 +581,7 @@ export function listDuePredictionsForResolution(
   return rows.map((row) => ({
     id: String(row.id),
     marketId: String(row.marketId),
+    domain: (row.domain as string | null) ?? null,
     predictedOutcome: (row.predictedOutcome as Outcome | null) ?? null,
     predictedProbability:
       row.predictedProbability === null || row.predictedProbability === undefined
@@ -608,6 +611,35 @@ export function findOpenPerpPrediction(symbol: string): {
        ORDER BY created_at DESC LIMIT 1`
     )
     .get(normalized) as { id: string; predictedOutcome: string; createdAt: string } | undefined;
+  if (!row || (row.predictedOutcome !== 'YES' && row.predictedOutcome !== 'NO')) return null;
+  return {
+    id: row.id,
+    predictedOutcome: row.predictedOutcome as Outcome,
+    createdAt: row.createdAt,
+  };
+}
+
+export function findOpenPerpPredictionById(
+  id: string,
+  symbol: string
+): {
+  id: string;
+  predictedOutcome: Outcome;
+  createdAt: string;
+} | null {
+  const db = openDatabase();
+  const normalized = symbol.trim().toUpperCase();
+  const row = db
+    .prepare(
+      `SELECT id, predicted_outcome as predictedOutcome, created_at as createdAt
+       FROM predictions
+       WHERE id = ?
+         AND symbol = ?
+         AND domain = 'perp'
+         AND resolution_status = 'open'
+       LIMIT 1`
+    )
+    .get(id, normalized) as { id: string; predictedOutcome: string; createdAt: string } | undefined;
   if (!row || (row.predictedOutcome !== 'YES' && row.predictedOutcome !== 'NO')) return null;
   return {
     id: row.id,

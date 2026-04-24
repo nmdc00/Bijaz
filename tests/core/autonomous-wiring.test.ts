@@ -295,10 +295,11 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
 
     // Exit policy: invalidationPrice = 68000, TTL = 45 min
     expect(mocks.upsertExitPolicy).toHaveBeenCalledTimes(1);
-    const [sym, side, timeStop, invPrice] = mocks.upsertExitPolicy.mock.calls[0]!;
+    const [sym, side, timeStop, invPrice, , predictionId] = mocks.upsertExitPolicy.mock.calls[0]!;
     expect(sym).toBe('BTC');
     expect(side).toBe('long');
     expect(invPrice).toBe(68000);
+    expect(predictionId).toBe('pred-mock-id');
     expect(timeStop).toBeGreaterThan(Date.now());
     expect(timeStop).toBeLessThanOrEqual(Date.now() + 45 * 60 * 1000 + 1000);
 
