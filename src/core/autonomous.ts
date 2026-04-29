@@ -54,6 +54,7 @@ import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { listEvents } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
+import { isSuppressed } from '../memory/signal_class_suppression.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -494,6 +495,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     // Fetch market context (10-min cached)
     const marketContext = await this.getMarketContextCached();
+
+    if (isSuppressed('llm_originator')) {
+      this.logger.info('Originator skipped: signal class llm_originator is currently suppressed.');
+      return null;
+    }
 
     // Assemble bundle and propose
     const perfByClass = summarizeAllSignalClasses(listPerpTradeJournals({ limit: 200 }));
