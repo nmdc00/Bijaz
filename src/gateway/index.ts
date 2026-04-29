@@ -763,7 +763,7 @@ if (heartbeatConfig?.enabled) {
           await whatsapp.sendMessage(number, response);
           logger.info(`WhatsApp heartbeat sent to ${number}`);
         } catch (error) {
-          logger.error(`WhatsApp heartbeat failed for ${number}`);
+          logger.error(`WhatsApp heartbeat failed for ${number}`, error);
         }
       }
     }
