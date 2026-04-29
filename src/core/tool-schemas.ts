@@ -741,7 +741,7 @@ export const THUFIR_TOOLS: Tool[] = [
   },
   {
     name: 'perp_place_order',
-    description: 'Place a perp order on the configured exchange.',
+    description: 'Place a perp order on the configured exchange. IMPORTANT: When closing a position (reduce_only=true), you MUST include exit_mode — the call will be rejected without it. Use exit_mode="manual" for any discretionary close where the thesis is not formally invalidated.',
     input_schema: {
       type: 'object',
       properties: {
@@ -756,7 +756,7 @@ export const THUFIR_TOOLS: Tool[] = [
         order_type: { type: 'string', enum: ['market', 'limit'], description: 'Order type' },
         price: { type: 'number', description: 'Limit price (required for limit orders)' },
         leverage: { type: 'number', description: 'Leverage to apply' },
-        reduce_only: { type: 'boolean', description: 'Reduce-only order' },
+        reduce_only: { type: 'boolean', description: 'Reduce-only order (closes/reduces an existing position). When true, exit_mode is required or the order will be rejected.' },
         signal_class: { type: 'string', description: 'Optional signal class for policy and journaling' },
         market_regime: {
           type: 'string',
@@ -826,7 +826,7 @@ export const THUFIR_TOOLS: Tool[] = [
         exit_mode: {
           type: 'string',
           enum: ['thesis_invalidation', 'take_profit', 'time_exit', 'risk_reduction', 'manual', 'unknown'],
-          description: 'For reduce-only exits: deterministic exit mode',
+          description: 'REQUIRED when reduce_only=true. Pick the closest reason: thesis_invalidation (price invalidation level hit), take_profit (target reached), time_exit (TTL expired), risk_reduction (cutting exposure), manual (discretionary decision — use this when none of the above apply).',
         },
         entry_price: {
           type: 'number',
