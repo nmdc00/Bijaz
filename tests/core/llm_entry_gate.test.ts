@@ -68,7 +68,8 @@ function makeCandidate(overrides?: Partial<EntryGateCandidate>): EntryGateCandid
     symbol: 'BTC',
     side: 'buy',
     notionalUsd: 50,
-    leverage: 3,
+    leverage: 1,
+    leverageMax: 5,
     edge: 0.08,
     confidence: 0.65,
     signalClass: 'momentum_breakout',
@@ -620,6 +621,116 @@ describe('LlmEntryGate', () => {
       expect(userContent).toContain('conc%');
       expect(userContent).toContain('$4000');
       expect(userContent).toContain('$500');
+    });
+  });
+
+  describe('suggestedLeverage', () => {
+    it('returns suggestedLeverage from LLM on approve', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'strong setup', suggestedLeverage: 3 });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate({ leverageMax: 5 }), markPrice);
+
+      expect(result.suggestedLeverage).toBe(3);
+    });
+
+    it('clamps suggestedLeverage to leverageMax', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'high conviction', suggestedLeverage: 10 });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate({ leverageMax: 5 }), markPrice);
+
+      expect(result.suggestedLeverage).toBe(5);
+    });
+
+    it('rounds suggestedLeverage to integer', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'ok', suggestedLeverage: 2.7 });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate({ leverageMax: 5 }), markPrice);
+
+      expect(result.suggestedLeverage).toBe(3);
+    });
+
+    it('omits suggestedLeverage when LLM does not return it', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'ok' });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.suggestedLeverage).toBeUndefined();
+    });
+
+    it('omits suggestedLeverage when LLM sends null', async () => {
+      const book = makeBook();
+      const mainLlm: LlmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: JSON.stringify({ verdict: 'approve', reasoning: 'ok', stopLevelPrice: 48000, equityAtRiskPct: 2, targetRR: 2, suggestedLeverage: null }),
+          model: 'test-main',
+        }),
+      } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.suggestedLeverage).toBeUndefined();
+    });
+
+    it('omits suggestedLeverage when LLM returns value below 1', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'ok', suggestedLeverage: 0.5 });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate(), markPrice);
+
+      expect(result.suggestedLeverage).toBeUndefined();
+    });
+
+    it('records suggestedLeverage in DB log', async () => {
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'ok', suggestedLeverage: 2 });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      const call = mockRecordEntryGateDecision.mock.calls[0][0];
+      expect(call.suggestedLeverage).toBe(2);
+    });
+
+    it('includes leverageMax range in user prompt', async () => {
+      const book = makeBook();
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate({ leverageMax: 4 }), markPrice);
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      expect(userContent).toContain('1x – 4x');
+    });
+
+    it('includes suggestedLeverage in system prompt schema', async () => {
+      const book = makeBook();
+      const completeFn = vi.fn().mockResolvedValue({
+        content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' }),
+        model: 'test-main',
+      });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      await gate.evaluate(makeCandidate(), markPrice);
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const systemContent = messages.find((m) => m.role === 'system')?.content ?? '';
+      expect(systemContent).toContain('suggestedLeverage');
     });
   });
 

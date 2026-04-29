@@ -575,7 +575,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       return `${symbol}: Skipped originator proposal (insufficient daily budget $${remainingDaily.toFixed(2)})`;
     }
 
-    const targetLeverage = proposal.leverage;
+    let targetLeverage = proposal.leverage;
 
     const riskCheck = await checkPerpRiskLimits({
       config: this.thufirConfig,
@@ -602,11 +602,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     }
 
     // LLM entry gate
+    const originatorLeverageMax =
+      typeof this.thufirConfig.hyperliquid?.maxLeverage === 'number' &&
+      Number.isFinite(this.thufirConfig.hyperliquid.maxLeverage)
+        ? Math.max(1, Number(this.thufirConfig.hyperliquid.maxLeverage))
+        : 50;
     const gateCandidate = {
       symbol,
       side: side as 'buy' | 'sell',
       notionalUsd: probeUsd,
       leverage: targetLeverage,
+      leverageMax: originatorLeverageMax,
       edge: 0.1,
       confidence: proposal.confidence,
       signalClass: 'llm_originator',
@@ -629,6 +635,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       }
       if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
         probeUsd = gateDecision.adjustedSizeUsd;
+      }
+      if (gateDecision.suggestedLeverage != null) {
+        targetLeverage = gateDecision.suggestedLeverage;
       }
     }
 
@@ -998,7 +1007,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         continue;
       }
       let size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
-      const targetLeverage = expr.leverage;
+      let targetLeverage = expr.leverage;
 
       const riskCheck = await checkPerpRiskLimits({
         config: this.thufirConfig,
@@ -1026,11 +1035,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       }
 
       // LLM entry gate — reviews candidate before execution
+      const leverageMax =
+        typeof this.thufirConfig.hyperliquid?.maxLeverage === 'number' &&
+        Number.isFinite(this.thufirConfig.hyperliquid.maxLeverage)
+          ? Math.max(1, Number(this.thufirConfig.hyperliquid.maxLeverage))
+          : 50;
       const gateCandidate = {
         symbol,
         side: expr.side,
         notionalUsd: probeUsd,
         leverage: targetLeverage,
+        leverageMax,
         edge: expr.expectedEdge,
         confidence: confidenceWeighted,
         signalClass,
@@ -1048,6 +1063,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
           probeUsd = gateDecision.adjustedSizeUsd;
           size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+        }
+        if (gateDecision.suggestedLeverage != null) {
+          targetLeverage = gateDecision.suggestedLeverage;
         }
       }
       // gate approved or was disabled; fall through to executor.execute()

@@ -13,6 +13,7 @@ export interface EntryGateCandidate {
   side: 'buy' | 'sell';
   notionalUsd: number;
   leverage: number;
+  leverageMax: number;
   edge: number;
   confidence: number;
   signalClass: string;
@@ -31,6 +32,7 @@ export interface EntryGateDecision {
   stopLevelPrice?: number | null;
   equityAtRiskPct?: number;
   targetRR?: number;
+  suggestedLeverage?: number;
 }
 
 const DecisionSchema = z.object({
@@ -40,6 +42,7 @@ const DecisionSchema = z.object({
   stopLevelPrice: z.number().nullable(),
   equityAtRiskPct: z.number(),
   targetRR: z.number(),
+  suggestedLeverage: z.number().optional(),
 });
 
 const logger = new Logger('info');
@@ -102,21 +105,22 @@ function buildPrompt(
   sameSideWarning: string | null,
   signalStats: SignalPerformanceSummary,
 ): { system: string; user: string } {
-  const system = `You are Thufir, an LLM-primary trading agent. Your job is to decide whether to approve, reject, or resize a trade candidate.
+  const system = `You are Thufir, an LLM-primary trading agent. Your job is to decide whether to approve, reject, or resize a trade candidate, and — if approving — what leverage to use.
 
 The default is no trade. You need a compelling reason to approve. When in doubt, reject.
 
 You are not a quant system. You reason about narrative, market context, and whether this setup makes sense right now.
 
 Respond ONLY with valid JSON matching this schema:
-{"verdict":"approve"|"reject"|"resize","reasoning":"...","adjustedSizeUsd":number|undefined,"stopLevelPrice":number|null,"equityAtRiskPct":number,"targetRR":number}
+{"verdict":"approve"|"reject"|"resize","reasoning":"...","adjustedSizeUsd":number|undefined,"stopLevelPrice":number|null,"equityAtRiskPct":number,"targetRR":number,"suggestedLeverage":number|undefined}
 
 Fields:
 - stopLevelPrice: the price at which the thesis is invalidated. If the candidate does not provide one, derive it yourself from market structure (nearest support/resistance, recent swing, or a 2–3% move against the position). Only set null if you genuinely cannot reason about a stop at all — a missing explicit level is NOT grounds for rejection.
 - equityAtRiskPct: estimated % of book equity lost if stop is hit (use candidate notional and leverage)
 - targetRR: your estimated reward-to-risk ratio for this setup
+- suggestedLeverage: only set when verdict is "approve" or "resize". Pick an integer from 1 to leverageMax. Use 1x by default. Scale up only when ALL of the following hold: high edge (>10%), high confidence (>70%), clear directional regime (trending or expansion), deep liquidity, and a well-defined stop. Use maximum leverage only for exceptional setups. Omit (or set to 1) if you have any doubt.
 
-All four fields (verdict, reasoning, stopLevelPrice, equityAtRiskPct, targetRR) are required. Derive stopLevelPrice from context if not supplied — do not reject solely because it was not provided.`;
+All five required fields (verdict, reasoning, stopLevelPrice, equityAtRiskPct, targetRR) are always required. suggestedLeverage is optional — omit it on reject, required on approve/resize.`;
 
   const bookTable = formatBookTable(bookEntries);
 
@@ -147,7 +151,7 @@ ${warningBlock}
 - Symbol: ${candidate.symbol}
 - Side: ${candidate.side}
 - Notional USD: $${candidate.notionalUsd.toFixed(2)}
-- Leverage: ${candidate.leverage}x
+- Leverage range: 1x – ${candidate.leverageMax}x (you decide)
 - Edge: ${(candidate.edge * 100).toFixed(2)}%
 - Confidence: ${(candidate.confidence * 100).toFixed(1)}%
 - Signal class: ${candidate.signalClass}
@@ -162,7 +166,7 @@ ${formatTrackRecord(signalStats)}
 ## Instruction
 
 Respond ONLY with valid JSON:
-{"verdict":"approve"|"reject"|"resize","reasoning":"<your reasoning>","adjustedSizeUsd":<number if resize, omit otherwise>,"stopLevelPrice":<price that invalidates thesis, or null>,"equityAtRiskPct":<% of book equity lost at stop>,"targetRR":<reward:risk ratio>}`;
+{"verdict":"approve"|"reject"|"resize","reasoning":"<your reasoning>","adjustedSizeUsd":<number if resize, omit otherwise>,"stopLevelPrice":<price that invalidates thesis, or null>,"equityAtRiskPct":<% of book equity lost at stop>,"targetRR":<reward:risk ratio>,"suggestedLeverage":<integer 1–${candidate.leverageMax} if approving, omit if rejecting>}`;
 
   return { system, user };
 }
@@ -186,13 +190,21 @@ async function callLlm(
 
   const normalized = normalizeOptionalFieldPseudoJson(
     response.content.trim(),
-    ['adjustedSizeUsd', 'stopLevelPrice']
+    ['adjustedSizeUsd', 'stopLevelPrice', 'suggestedLeverage']
   );
   const parsed = JSON.parse(normalized) as Record<string, unknown>;
   if (parsed.adjustedSizeUsd === null) {
     delete parsed.adjustedSizeUsd;
   }
+  if (parsed.suggestedLeverage === null) {
+    delete parsed.suggestedLeverage;
+  }
   const validated = DecisionSchema.parse(parsed);
+  const rawLeverage = validated.suggestedLeverage;
+  const clampedLeverage =
+    rawLeverage !== undefined && Number.isFinite(rawLeverage) && rawLeverage >= 1
+      ? Math.round(Math.min(rawLeverage, candidate.leverageMax))
+      : undefined;
   return {
     verdict: validated.verdict,
     reasoning: validated.reasoning,
@@ -200,6 +212,7 @@ async function callLlm(
     equityAtRiskPct: validated.equityAtRiskPct,
     targetRR: validated.targetRR,
     ...(validated.adjustedSizeUsd !== undefined ? { adjustedSizeUsd: validated.adjustedSizeUsd } : {}),
+    ...(clampedLeverage !== undefined ? { suggestedLeverage: clampedLeverage } : {}),
   };
 }
 
@@ -353,6 +366,7 @@ export class LlmEntryGate {
       stopLevelPrice: decision.stopLevelPrice,
       equityAtRiskPct: decision.equityAtRiskPct,
       targetRR: decision.targetRR,
+      suggestedLeverage: decision.suggestedLeverage,
     });
 
     return decision;

@@ -15,6 +15,7 @@ export interface EntryGateLogEntry {
   stopLevelPrice?: number | null;
   equityAtRiskPct?: number;
   targetRR?: number;
+  suggestedLeverage?: number;
 }
 
 function ensureSchema(): void {
@@ -53,6 +54,7 @@ function ensureSchema(): void {
   addColumnIfMissing('stop_level_price', 'stop_level_price REAL');
   addColumnIfMissing('equity_at_risk_pct', 'equity_at_risk_pct REAL');
   addColumnIfMissing('target_rr', 'target_rr REAL');
+  addColumnIfMissing('suggested_leverage', 'suggested_leverage REAL');
 }
 
 export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
@@ -60,9 +62,9 @@ export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
   const db = openDatabase();
   db.prepare(
     `INSERT INTO llm_entry_gate_log
-       (symbol, side, notional_usd, verdict, reasoning, adjusted_size_usd, used_fallback, signal_class, regime, session, edge, stop_level_price, equity_at_risk_pct, target_rr)
+       (symbol, side, notional_usd, verdict, reasoning, adjusted_size_usd, used_fallback, signal_class, regime, session, edge, stop_level_price, equity_at_risk_pct, target_rr, suggested_leverage)
      VALUES
-       (@symbol, @side, @notionalUsd, @verdict, @reasoning, @adjustedSizeUsd, @usedFallback, @signalClass, @regime, @session, @edge, @stopLevelPrice, @equityAtRiskPct, @targetRR)`
+       (@symbol, @side, @notionalUsd, @verdict, @reasoning, @adjustedSizeUsd, @usedFallback, @signalClass, @regime, @session, @edge, @stopLevelPrice, @equityAtRiskPct, @targetRR, @suggestedLeverage)`
   ).run({
     symbol: entry.symbol,
     side: entry.side,
@@ -78,5 +80,6 @@ export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
     stopLevelPrice: entry.stopLevelPrice ?? null,
     equityAtRiskPct: entry.equityAtRiskPct ?? null,
     targetRR: entry.targetRR ?? null,
+    suggestedLeverage: entry.suggestedLeverage ?? null,
   });
 }
