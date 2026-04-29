@@ -37,7 +37,7 @@ import {
   resolveVolatilityBucket,
 } from './autonomy_policy.js';
 import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
-import { summarizeSignalPerformance } from './signal_performance.js';
+import { summarizeSignalPerformance, summarizeAllSignalClasses } from './signal_performance.js';
 import { SchedulerControlPlane } from './scheduler_control_plane.js';
 import { resolveSessionWeightContext } from './session-weight.js';
 import { AutonomousScanTelemetry } from './performance_metrics.js';
@@ -496,6 +496,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     const marketContext = await this.getMarketContextCached();
 
     // Assemble bundle and propose
+    const perfByClass = summarizeAllSignalClasses(listPerpTradeJournals({ limit: 200 }));
+    const performanceSummary =
+      Object.entries(perfByClass)
+        .map(
+          ([cls, s]) =>
+            `${cls}: ${s.sampleCount} trades, winRate=${(s.thesisCorrectRate * 100).toFixed(0)}%, expectancy=${s.expectancy.toFixed(2)}`
+        )
+        .join('\n') || '(no history yet)';
+
     const bundle = {
       book: book.getAll(),
       taSnapshots,
@@ -503,6 +512,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       recentEvents,
       alertedSymbols: triggerResult.alertedSymbols,
       triggerReason: triggerResult.reason,
+      performanceSummary,
     };
 
     const proposal = await this.originator.propose(bundle);
