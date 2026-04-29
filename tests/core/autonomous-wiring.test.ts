@@ -122,6 +122,7 @@ vi.mock('../../src/core/autonomy_policy.js', () => ({
 
 vi.mock('../../src/core/signal_performance.js', () => ({
   summarizeSignalPerformance: vi.fn(() => ({ sampleCount: 0, expectancy: 0.5, variance: 0.5 })),
+  summarizeAllSignalClasses: vi.fn(() => ({})),
 }));
 
 vi.mock('../../src/memory/autonomy_policy_state.js', () => ({
