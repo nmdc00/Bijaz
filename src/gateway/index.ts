@@ -90,6 +90,9 @@ import { handleDashboardPageRequest } from './dashboard_page.js';
 import { handleDashboardApiRequest } from './dashboard_api.js';
 import { extractRecentIntelEvents } from '../events/extract.js';
 import { resolveExpiredForecasts } from '../events/outcomes.js';
+import { upsertSuppression, clearExpired as clearExpiredSuppressions } from '../memory/signal_class_suppression.js';
+import { summarizeAllSignalClasses } from '../core/signal_performance.js';
+import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 
 const config = loadConfig();
 try {
@@ -814,6 +817,34 @@ if (resolverConfig?.enabled) {
   );
   hasSchedulerJobs = true;
 }
+
+scheduler.registerJob(
+  {
+    name: `gateway:${schedulerNamespace}:signal-scoring`,
+    schedule: { kind: 'daily', time: '04:00' },
+    leaseMs: 60_000,
+  },
+  async () => {
+    const cleared = clearExpiredSuppressions();
+    const entries = listPerpTradeJournals({ limit: 500 });
+    const byClass = summarizeAllSignalClasses(entries);
+    let suppressed = 0;
+    for (const [cls, perf] of Object.entries(byClass)) {
+      if (perf.sampleCount >= 10 && perf.thesisCorrectRate < 0.40) {
+        upsertSuppression({
+          signalClass: cls,
+          suppressedUntilMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
+          reason: `winRate=${(perf.thesisCorrectRate * 100).toFixed(0)}% over ${perf.sampleCount} trades`,
+        });
+        suppressed++;
+      }
+    }
+    logger.info(
+      `Signal scoring: evaluated ${Object.keys(byClass).length} class(es), suppressed ${suppressed}, cleared ${cleared} expired.`
+    );
+  }
+);
+hasSchedulerJobs = true;
 
 if (hasSchedulerJobs) {
   scheduler.start();
