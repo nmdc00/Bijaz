@@ -88,6 +88,8 @@ import { enrichEscalationMessage } from './alert_enrichment.js';
 import { EventScanTriggerCoordinator } from '../core/event_scan_trigger.js';
 import { handleDashboardPageRequest } from './dashboard_page.js';
 import { handleDashboardApiRequest } from './dashboard_api.js';
+import { extractRecentIntelEvents } from '../events/extract.js';
+import { resolveExpiredForecasts } from '../events/outcomes.js';
 
 const config = loadConfig();
 try {
@@ -508,6 +510,11 @@ if (intelFetchConfig?.enabled) {
         const result = await runIntelPipelineDetailed(config);
         logger.info(`Intel fetch stored ${result.storedCount} item(s).`);
 
+        const extracted = extractRecentIntelEvents(50);
+        if (extracted.length > 0) {
+          logger.info(`Event extraction: normalized ${extracted.length} event(s) from intel.`);
+        }
+
         await maybeRunEventDrivenScan('intel', result.storedCount);
 
         const alertsConfig = config.notifications?.intelAlerts;
@@ -796,6 +803,12 @@ if (resolverConfig?.enabled) {
       const updated = await resolveOutcomes(config, resolverConfig.limit ?? 50);
       if (updated > 0) {
         logger.info(`Resolver: resolved ${updated} prediction(s).`);
+      }
+      const forecastBatch = await resolveExpiredForecasts({
+        resolveMove: async (_forecast) => null,
+      });
+      if (forecastBatch.resolved > 0) {
+        logger.info(`Forecast resolver: resolved ${forecastBatch.resolved}/${forecastBatch.checked} expired forecast(s).`);
       }
     }
   );
