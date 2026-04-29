@@ -38,10 +38,8 @@ export function mapExpressionPlan(
   cluster: SignalCluster,
   hypothesis: Hypothesis
 ): ExpressionPlan {
-  const leverage =
-    typeof config.hyperliquid?.maxLeverage === 'number' && Number.isFinite(config.hyperliquid.maxLeverage)
-      ? Number(config.hyperliquid.maxLeverage)
-      : 1;
+  // The LLM entry gate decides final leverage per trade. 1x is the floor until the gate sets it.
+  const leverage = 1;
   const dailyLimit = config.wallet?.limits?.daily ?? 100;
   const probeFraction = config.autonomy?.probeRiskFraction ?? 0.005;
   const probeBudget = Math.max(1, dailyLimit * probeFraction);
