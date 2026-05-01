@@ -213,7 +213,7 @@ export class LlmExitConsultant {
     freshContext: string,
   ): Promise<ExitConsultDecision> {
     const nowMs = Date.now();
-    const timeHeldMs = nowMs - (position.thesisExpiresAtMs - 2 * 60 * 60 * 1000);
+    const timeHeldMs = nowMs - getEntryMs(position);
     const timeHeldMin = Math.max(0, Math.round(timeHeldMs / 60_000));
     const remainingMs = position.thesisExpiresAtMs - nowMs;
     const remainingMin = Math.round(remainingMs / 60_000);
@@ -291,7 +291,7 @@ export class LlmExitConsultant {
     decision: ExitConsultDecision;
     usedFallback: boolean;
   }): Promise<void> {
-    const timeHeldMs = params.nowMs - (params.position.thesisExpiresAtMs - 2 * 60 * 60 * 1000);
+    const timeHeldMs = params.nowMs - getEntryMs(params.position);
     try {
       const { recordExitConsultDecision } = await import('../memory/llm_exit_consult_log.js');
       recordExitConsultDecision({
@@ -315,6 +315,10 @@ export class LlmExitConsultant {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function getEntryMs(position: BookEntry): number {
+  return position.entryAtMs ?? (position.thesisExpiresAtMs - 2 * 60 * 60 * 1000);
+}
 
 function buildMessages(
   position: BookEntry,
