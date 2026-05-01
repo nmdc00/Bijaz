@@ -407,6 +407,28 @@ describe('LlmExitConsultant.consult', () => {
     });
   });
 
+  it('uses entryAtMs for time-held prompt and log after TTL extensions', async () => {
+    const main = makeLlm({ action: 'hold', reasoning: 'still valid' });
+    const fallback = makeLlm({ action: 'hold', reasoning: 'fb' });
+    const consultant = makeConsultant(main, fallback);
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+    const entry = makeBookEntry({
+      entryAtMs: NOW - fourteenDaysMs,
+      thesisExpiresAtMs: NOW + 4 * 60 * 60 * 1000,
+    });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      await consultant.consult(entry, 50000, 0.02, 'context');
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const [messages] = main.complete.mock.calls[0]!;
+    expect(JSON.stringify(messages)).toContain(`time held: ${14 * 24 * 60} minutes`);
+    const logArg = recordExitConsultDecisionMock.mock.calls.at(-1)?.[0];
+    expect(logArg.timeHeldMs).toBe(fourteenDaysMs);
+  });
+
   it('includes exit contract summary in the LLM prompt', async () => {
     const main = makeLlm({ action: 'hold', reasoning: 'ok' });
     const fallback = makeLlm({ action: 'hold', reasoning: 'fb' });
