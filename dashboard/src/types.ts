@@ -55,6 +55,33 @@ export type DashboardPayload = {
       byRegime: Array<Record<string, unknown>>;
       bySession: Array<Record<string, unknown>>;
     };
+    predictionAccuracy: {
+      global: Array<{
+        windowSize: number;
+        sampleCount: number;
+        accuracy: number | null;
+        brierModel: number | null;
+        brierMarket: number | null;
+        brierDelta: number | null;
+        avgModelProbability: number | null;
+        avgMarketProbability: number | null;
+        avgEdge: number | null;
+        totalPnl: number | null;
+      }>;
+      byDomain: Record<string, Array<{
+        windowSize: number;
+        sampleCount: number;
+        accuracy: number | null;
+        brierModel: number | null;
+        brierMarket: number | null;
+        brierDelta: number | null;
+        avgModelProbability: number | null;
+        avgMarketProbability: number | null;
+        avgEdge: number | null;
+        totalPnl: number | null;
+      }>>;
+      totalFinalPredictions: number;
+    };
   };
 };
 

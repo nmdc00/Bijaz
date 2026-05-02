@@ -8,6 +8,8 @@ import { openDatabase } from '../../src/memory/db.js';
 import { storeDecisionArtifact } from '../../src/memory/decision_artifacts.js';
 import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
 import { recordPerpTradeJournal } from '../../src/memory/perp_trade_journal.js';
+import { recordOutcome } from '../../src/memory/calibration.js';
+import { createPrediction } from '../../src/memory/predictions.js';
 import {
   buildDashboardApiPayload,
   handleDashboardApiRequest,
@@ -78,8 +80,53 @@ describe('dashboard api payload', () => {
     expect(payload.sections.tradeLog.rows).toEqual([]);
     expect(payload.sections.promotionGates.rows).toEqual([]);
     expect(payload.sections.performanceBreakdown.bySignalClass).toEqual([]);
+    expect(payload.sections.predictionAccuracy.global).toHaveLength(5);
+    expect(payload.sections.predictionAccuracy.global.every((row) => row.accuracy === null)).toBe(true);
+    expect(payload.sections.predictionAccuracy.totalFinalPredictions).toBe(0);
     expect(typeof payload.meta.recordCounts.perpTrades).toBe('number');
     expect(typeof payload.meta.recordCounts.journals).toBe('number');
+  });
+
+  it('includes prediction-accuracy windows once final comparable rows exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-pred-accuracy-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    for (let index = 0; index < 20; index += 1) {
+      const id = createPrediction({
+        marketId: `market-${index}`,
+        marketTitle: `Market ${index}`,
+        predictedOutcome: 'YES',
+        predictedProbability: 0.65,
+        modelProbability: 0.65,
+        marketProbability: 0.55,
+        domain: 'binary',
+        executed: true,
+      });
+      recordOutcome({
+        id,
+        outcome: index % 5 === 0 ? 'NO' : 'YES',
+        outcomeBasis: 'final',
+        pnl: index % 5 === 0 ? -4 : 6,
+      });
+    }
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.predictionAccuracy.totalFinalPredictions).toBe(20);
+    expect(payload.sections.predictionAccuracy.global.find((row) => row.windowSize === 20)?.accuracy).not.toBeNull();
+    expect(payload.sections.predictionAccuracy.byDomain.binary?.find((row) => row.windowSize === 20)?.brierDelta).not.toBeNull();
   });
 
   it('computes equity curve points and summary from paper fills', () => {
