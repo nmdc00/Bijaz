@@ -169,6 +169,49 @@ function PerfTable({ rows }: { rows: Array<Record<string, unknown>> }) {
   );
 }
 
+function WindowMetricValue({
+  value,
+  formatter,
+}: {
+  value: number | null | undefined;
+  formatter: (value: number) => string;
+}) {
+  if (value == null || Number.isNaN(Number(value))) return <>-</>;
+  return <>{formatter(Number(value))}</>;
+}
+
+function PredictionAccuracyTable({
+  rows,
+}: {
+  rows: Array<{
+    windowSize: number;
+    sampleCount: number;
+    accuracy: number | null;
+    brierModel: number | null;
+    brierMarket: number | null;
+    brierDelta: number | null;
+    avgEdge: number | null;
+    totalPnl: number | null;
+  }>;
+}) {
+  return (
+    <DataTable
+      headers={['Window', 'Samples', 'Accuracy', 'Brier Δ', 'Model', 'Market', 'Avg Edge', 'PnL']}
+      empty="No prediction-accuracy windows yet."
+      rows={rows.map((row) => [
+        <span className="mono">{numberText(row.windowSize, 0)}</span>,
+        <span className="mono">{numberText(row.sampleCount, 0)}</span>,
+        <span className="mono"><WindowMetricValue value={row.accuracy} formatter={(value) => percent(value * 100)} /></span>,
+        <span className="mono"><WindowMetricValue value={row.brierDelta} formatter={(value) => numberText(value, 4)} /></span>,
+        <span className="mono"><WindowMetricValue value={row.brierModel} formatter={(value) => numberText(value, 4)} /></span>,
+        <span className="mono"><WindowMetricValue value={row.brierMarket} formatter={(value) => numberText(value, 4)} /></span>,
+        <span className="mono"><WindowMetricValue value={row.avgEdge} formatter={(value) => numberText(value, 4)} /></span>,
+        <span className="mono"><WindowMetricValue value={row.totalPnl} formatter={(value) => money(value)} /></span>,
+      ])}
+    />
+  );
+}
+
 function ConversationThread({ thread }: { thread: ConversationThreadResponse | null }) {
   if (!thread || thread.messages.length === 0) {
     return <div className="empty-state">No messages in this thread.</div>;
@@ -375,6 +418,7 @@ export default function App() {
   const promotionRows = payload?.sections.promotionGates.rows ?? [];
   const policy = payload?.sections.policyState;
   const performance = payload?.sections.performanceBreakdown;
+  const predictionAccuracy = payload?.sections.predictionAccuracy;
 
   return (
     <main className="app-shell">
@@ -442,10 +486,23 @@ export default function App() {
 
       {tab === 'performance' && (
         <section className="subgrid">
+          <article className="subpanel">
+            <h3>Prediction Accuracy</h3>
+            <div className="footnote">
+              Final comparable predictions: {numberText(predictionAccuracy?.totalFinalPredictions, 0)}
+            </div>
+            <PredictionAccuracyTable rows={predictionAccuracy?.global ?? []} />
+          </article>
           <article className="subpanel"><h3>By Signal Class</h3><PerfTable rows={performance?.bySignalClass ?? []} /></article>
           <article className="subpanel"><h3>By Regime</h3><PerfTable rows={performance?.byRegime ?? []} /></article>
           <article className="subpanel"><h3>By Session</h3><PerfTable rows={performance?.bySession ?? []} /></article>
           <article className="subpanel"><h3>Promotion Gates</h3><DataTable headers={['Setup', 'Samples', 'Hit Rate', 'Expectancy', 'Promoted']} empty="No promotion rows." rows={promotionRows.map((row) => [String(row.setupKey ?? '-'), <span className="mono">{numberText(Number(row.sampleCount ?? 0), 0)}</span>, <span className="mono">{percent(Number(row.hitRate ?? 0) * 100)}</span>, <span className="mono">{numberText(Number(row.expectancyR ?? 0), 3)}</span>, <span className={badgeClass(Boolean(row.promoted))}>{row.promoted ? 'yes' : 'no'}</span>])} /></article>
+          {Object.entries(predictionAccuracy?.byDomain ?? {}).map(([domain, rows]) => (
+            <article className="subpanel" key={domain}>
+              <h3>{domain} Calibration</h3>
+              <PredictionAccuracyTable rows={rows} />
+            </article>
+          ))}
         </section>
       )}
 

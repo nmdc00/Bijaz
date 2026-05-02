@@ -7,6 +7,11 @@ import { loadConfig, type ThufirConfig } from '../core/config.js';
 import { getDailyPnLRollup } from '../core/daily_pnl.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { openDatabase } from '../memory/db.js';
+import {
+  computeDomainWindowMetrics,
+  computeRollingWindowMetrics,
+  type WindowMetrics,
+} from '../memory/learning_metrics.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
 import { cached, cachedAsync } from './dashboard_cache.js';
 
@@ -811,6 +816,31 @@ function buildEmptyEquitySeries(): EquityCurveSection {
       maxDrawdownPct: null,
     },
   };
+}
+
+type PredictionAccuracySection = {
+  global: WindowMetrics[];
+  byDomain: Record<string, WindowMetrics[]>;
+  totalFinalPredictions: number;
+};
+
+function buildPredictionAccuracySection(db: Database.Database): PredictionAccuracySection {
+  try {
+    const total = (
+      db.prepare(`SELECT COUNT(*) AS c FROM learning_examples`).get() as { c?: number } | undefined
+    )?.c ?? 0;
+    return {
+      global: computeRollingWindowMetrics(),
+      byDomain: computeDomainWindowMetrics(),
+      totalFinalPredictions: Number(total),
+    };
+  } catch {
+    return {
+      global: [],
+      byDomain: {},
+      totalFinalPredictions: 0,
+    };
+  }
 }
 
 type LiveWalletSnapshot = {
@@ -1934,6 +1964,7 @@ export function buildDashboardApiPayload(params?: {
       byRegime: unknown[];
       bySession: unknown[];
     };
+    predictionAccuracy: PredictionAccuracySection;
   };
 } {
   const db = params?.db ?? openDatabase();
@@ -2014,6 +2045,7 @@ export function buildDashboardApiPayload(params?: {
         byRegime: performanceBreakdown.byRegime,
         bySession: performanceBreakdown.bySession,
       },
+      predictionAccuracy: buildPredictionAccuracySection(db),
     },
   };
 }
