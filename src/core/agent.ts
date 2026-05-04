@@ -87,7 +87,9 @@ export class ThufirAgent {
       this.executor,
       this.limiter,
       this.config,
-      this.logger
+      this.logger,
+      undefined,
+      this.toolContext
     );
 
     if (this.config.tradeManagement?.enabled) {
