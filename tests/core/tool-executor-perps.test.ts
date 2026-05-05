@@ -592,6 +592,98 @@ describe('tool-executor perps', () => {
     expect(typeof payload.createdAtMs).toBe('number');
   });
 
+  it('persists a normalized execution-learning artifact on full paper close', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    currentMarkPrice = 50000;
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        {
+          symbol: 'BTCLEARN',
+          side: 'buy',
+          size: 0.01,
+          mode: 'paper',
+          signal_class: 'mean_reversion',
+          market_regime: 'trending',
+          volatility_bucket: 'high',
+          liquidity_bucket: 'deep',
+          expected_edge: 0.08,
+          entry_trigger: 'technical',
+          invalidation_price: 49000,
+          plan_context: { setupKey: 'perp:execution-learning' },
+        },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    currentMarkPrice = 51000;
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        {
+          symbol: 'BTCLEARN',
+          side: 'sell',
+          size: 0.01,
+          reduce_only: true,
+          mode: 'paper',
+          thesis_invalidation_hit: false,
+          exit_mode: 'take_profit',
+        },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    const db = openDatabase();
+    const row = db.prepare(
+      `SELECT context_payload, action_payload, outcome_payload, quality_payload, policy_input_payload
+       FROM learning_cases
+       WHERE case_type = 'execution_quality' AND entity_id = 'BTCLEARN'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    ).get() as
+      | {
+          context_payload?: string;
+          action_payload?: string;
+          outcome_payload?: string;
+          quality_payload?: string;
+          policy_input_payload?: string;
+        }
+      | undefined;
+    expect(row).toBeTruthy();
+    const context = JSON.parse(String(row?.context_payload ?? '{}')) as Record<string, any>;
+    const action = JSON.parse(String(row?.action_payload ?? '{}')) as Record<string, any>;
+    const outcome = JSON.parse(String(row?.outcome_payload ?? '{}')) as Record<string, any>;
+    const quality = JSON.parse(String(row?.quality_payload ?? '{}')) as Record<string, any>;
+    const policyInputs = JSON.parse(String(row?.policy_input_payload ?? '{}')) as Record<string, any>;
+    expect(context.signalClass).toBe('mean_reversion');
+    expect(context.marketRegime).toBe('trending');
+    expect(action.entryPrice).not.toBeNull();
+    expect(outcome.exitMode).toBe('take_profit');
+    expect(quality.capturedR).not.toBeNull();
+    expect(policyInputs.planContext).toEqual({ setupKey: 'perp:execution-learning' });
+
+    const artifactRow = db.prepare(
+      `SELECT payload FROM decision_artifacts WHERE kind = 'execution_learning_case' AND market_id = 'BTCLEARN' ORDER BY id DESC LIMIT 1`
+    ).get() as { payload?: string } | undefined;
+    expect(artifactRow?.payload).toBeTruthy();
+    const payload = JSON.parse(String(artifactRow?.payload ?? '{}')) as Record<string, any>;
+    expect(payload.caseType).toBe('execution_quality');
+    expect(payload.comparable).toBe(false);
+    expect(payload.context.signalClass).toBe('mean_reversion');
+  });
+
   it('blocks reduce-only when no live position exists', async () => {
     vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
       assetPositions: [],
