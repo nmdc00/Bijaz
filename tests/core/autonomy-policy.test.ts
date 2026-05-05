@@ -6,6 +6,7 @@ import {
   evaluateCalibrationSegmentPolicy,
   evaluateDailyTradeCap,
   evaluateNewsEntryGate,
+  inferBroadMarketPosture,
   isSignalClassAllowedForRegime,
   shouldForceObservationMode,
 } from '../../src/core/autonomy_policy.js';
@@ -55,6 +56,42 @@ describe('autonomy_policy', () => {
     expect(isSignalClassAllowedForRegime('liquidation_cascade', 'choppy')).toBe(true);
     expect(isSignalClassAllowedForRegime('momentum_breakout', 'low_vol_compression')).toBe(true);
     expect(isSignalClassAllowedForRegime('unknown', 'trending')).toBe(false);
+  });
+
+  it('infers broad-market posture from BTC/ETH anchor clusters', () => {
+    expect(
+      inferBroadMarketPosture([
+        {
+          symbol: 'BTC/USDT',
+          directionalBias: 'up',
+          confidence: 0.9,
+          signals: [{ kind: 'price_vol_regime', metrics: { trend: 0.009 } }],
+        },
+        {
+          symbol: 'ETH/USDT',
+          directionalBias: 'neutral',
+          confidence: 0.7,
+          signals: [{ kind: 'price_vol_regime', metrics: { trend: 0.003 } }],
+        },
+      ] as any)
+    ).toBe('risk_on');
+
+    expect(
+      inferBroadMarketPosture([
+        {
+          symbol: 'BTC/USDT',
+          directionalBias: 'down',
+          confidence: 0.8,
+          signals: [{ kind: 'price_vol_regime', metrics: { trend: -0.008 } }],
+        },
+        {
+          symbol: 'ETH/USDT',
+          directionalBias: 'down',
+          confidence: 0.8,
+          signals: [{ kind: 'price_vol_regime', metrics: { trend: -0.004 } }],
+        },
+      ] as any)
+    ).toBe('risk_off');
   });
 
   it('gates news entries by novelty/confirmation/liquidity/volatility/expiry', () => {

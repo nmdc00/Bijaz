@@ -32,6 +32,7 @@ import {
   computeFractionalKellyFraction,
   evaluateGlobalTradeGate,
   evaluateNewsEntryGate,
+  inferBroadMarketPosture,
   isSignalClassAllowedForRegime,
   resolveLiquidityBucket,
   resolveVolatilityBucket,
@@ -793,6 +794,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     const result = await runDiscovery(this.thufirConfig);
     telemetry.markDiscoveryDone();
     const cycleSnapshot = createScanCycleSnapshot(result);
+    const broadMarketPosture = inferBroadMarketPosture(result.clusters);
     if (result.expressions.length === 0) {
       telemetry.markFilterDone();
       telemetry.markFinished();
@@ -820,7 +822,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             liquidityBucket: expr.contextPack?.regime.liquidityBucket ?? liquidityBucket,
             executionStatus: expr.contextPack?.executionQuality.status ?? 'unknown',
             eventKind: expr.contextPack?.event.kind ?? (expr.newsTrigger?.enabled ? 'news_event' : 'technical'),
-            portfolioPosture: expr.contextPack?.portfolioState.posture ?? 'unknown',
+            portfolioPosture:
+              expr.contextPack?.portfolioState.posture && expr.contextPack.portfolioState.posture !== 'unknown'
+                ? expr.contextPack.portfolioState.posture
+                : broadMarketPosture,
             missing: expr.contextPack?.missing ?? ['contextPack.provider'],
           });
           try {
@@ -872,7 +877,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             liquidityBucket: expr.contextPack?.regime.liquidityBucket ?? expr.liquidityBucket ?? 'normal',
             executionStatus: expr.contextPack?.executionQuality.status ?? 'unknown',
             eventKind: expr.contextPack?.event.kind ?? (expr.newsTrigger?.enabled ? 'news_event' : 'technical'),
-            portfolioPosture: expr.contextPack?.portfolioState.posture ?? 'unknown',
+            portfolioPosture:
+              expr.contextPack?.portfolioState.posture && expr.contextPack.portfolioState.posture !== 'unknown'
+                ? expr.contextPack.portfolioState.posture
+                : broadMarketPosture,
             missing: expr.contextPack?.missing ?? ['contextPack.provider'],
           });
           return `- ${expr.symbol} ${expr.side} probe=${expr.probeSizeUsd.toFixed(2)} leverage=${expr.leverage} (${expr.expectedMove}) ${contextTrace}`;
@@ -903,6 +911,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         signalClass,
         marketRegime: regime,
         expectedEdge: expr.expectedEdge,
+        tradeSide: expr.side,
+        broadMarketPosture,
       });
       if (!globalGate.allowed) {
         return false;
@@ -976,6 +986,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         signalClass,
         marketRegime: regime,
         expectedEdge: expr.expectedEdge,
+        tradeSide: expr.side,
+        broadMarketPosture,
       });
       if (!globalGate.allowed) {
         outputs.push(`${symbol}: Blocked (${globalGate.reason ?? 'policy gate'})`);
@@ -1058,6 +1070,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         reduceOnly: false,
         markPrice: markPrice || null,
         notionalUsd: Number.isFinite(probeUsd) ? probeUsd : undefined,
+        enforceAutonomousDefaults: true,
         marketMaxLeverage:
           typeof market.metadata?.maxLeverage === 'number'
             ? (market.metadata.maxLeverage as number)

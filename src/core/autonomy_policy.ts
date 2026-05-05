@@ -18,6 +18,7 @@ export type SignalClass =
 export type NewsGateResult = { allowed: boolean; reason?: string };
 export type VolatilityBucket = 'low' | 'medium' | 'high';
 export type LiquidityBucket = 'thin' | 'normal' | 'deep';
+export type BroadMarketPosture = 'risk_on' | 'risk_off' | 'neutral' | 'unknown';
 export type CalibrationPolicyReasonCode =
   | 'calibration.segment.block'
   | 'calibration.segment.downweight'
@@ -61,6 +62,8 @@ export type GlobalTradeGateResult = {
   sizeMultiplier: number;
   policyState: ReturnType<typeof getAutonomyPolicyState>;
 };
+
+type BroadMarketSignalSnapshot = Pick<SignalCluster, 'symbol' | 'directionalBias' | 'confidence' | 'signals'>;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -112,6 +115,38 @@ export function resolveLiquidityBucket(cluster: SignalCluster): 'thin' | 'normal
   if (count >= 18) return 'deep';
   if (count <= 4) return 'thin';
   return 'normal';
+}
+
+export function inferBroadMarketPosture(
+  clusters: BroadMarketSignalSnapshot[],
+  anchors: string[] = ['BTC/USDT', 'ETH/USDT']
+): BroadMarketPosture {
+  const anchorSet = new Set(anchors.map((symbol) => symbol.trim().toUpperCase()));
+  const relevant = clusters.filter((cluster) => anchorSet.has(cluster.symbol.trim().toUpperCase()));
+  if (relevant.length === 0) {
+    return 'unknown';
+  }
+
+  const directionalScore = relevant.reduce((acc, cluster) => {
+    if (cluster.directionalBias === 'up') return acc + 1;
+    if (cluster.directionalBias === 'down') return acc - 1;
+    return acc;
+  }, 0) / relevant.length;
+
+  const weightedTrend = relevant.reduce((acc, cluster) => {
+    const pv = cluster.signals.find((signal) => signal.kind === 'price_vol_regime');
+    const trend = typeof pv?.metrics?.trend === 'number' ? pv.metrics.trend : 0;
+    const confidence = Number.isFinite(cluster.confidence) ? clamp(cluster.confidence, 0, 1) : 0;
+    return acc + trend * Math.max(0.25, confidence);
+  }, 0) / relevant.length;
+
+  if (weightedTrend >= 0.004 || directionalScore >= 0.5) {
+    return 'risk_on';
+  }
+  if (weightedTrend <= -0.004 || directionalScore <= -0.5) {
+    return 'risk_off';
+  }
+  return 'neutral';
 }
 
 function normalizeSegmentValue(value: string | null | undefined): string {
@@ -495,6 +530,8 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
   volatilityBucket?: VolatilityBucket | null;
   liquidityBucket?: LiquidityBucket | null;
   expectedEdge?: number | null;
+  tradeSide?: 'buy' | 'sell' | null;
+  broadMarketPosture?: BroadMarketPosture | null;
 }): GlobalTradeGateResult {
   const autonomyEnabled = Boolean((config.autonomy as any)?.enabled);
   const fullAutoEnabled = Boolean((config.autonomy as any)?.fullAuto);
@@ -584,6 +621,23 @@ export function evaluateGlobalTradeGate(config: ThufirConfig, input?: {
         allowed: false,
         reasonCode: 'policy.signal_regime_matrix',
         reason: `signal_class ${input.signalClass} disallowed in regime ${input.marketRegime}`,
+        sizeMultiplier: 1,
+        policyState,
+      };
+    }
+
+    if (
+      input.signalClass === 'momentum_breakout' &&
+      input.tradeSide === 'sell' &&
+      input.broadMarketPosture != null &&
+      input.broadMarketPosture !== 'risk_off'
+    ) {
+      return {
+        allowed: false,
+        reasonCode: 'policy.broad_market_posture',
+        reason:
+          `momentum short blocked while broad market posture is ${input.broadMarketPosture}; ` +
+          'fresh downside continuation shorts require BTC/ETH posture to be risk_off',
         sizeMultiplier: 1,
         policyState,
       };

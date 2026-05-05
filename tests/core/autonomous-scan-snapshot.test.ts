@@ -63,6 +63,7 @@ vi.mock('../../src/core/autonomy_policy.js', () => ({
   computeFractionalKellyFraction: () => 0.25,
   evaluateGlobalTradeGate: () => ({ allowed: true, policyState: {} }),
   evaluateNewsEntryGate: () => ({ allowed: true }),
+  inferBroadMarketPosture: () => 'neutral',
   isSignalClassAllowedForRegime: () => true,
   resolveLiquidityBucket: () => 'normal',
   resolveVolatilityBucket: () => 'medium',
