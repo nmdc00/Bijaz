@@ -901,6 +901,13 @@ function listDomainCounts(
   }
 }
 
+function viewExists(db: Database.Database, viewName: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'view' AND name = ? LIMIT 1")
+    .get(viewName) as { name?: string } | undefined;
+  return Boolean(row?.name);
+}
+
 function listExecutionFallbackRows(db: Database.Database): Array<{ domain: string; payload: Record<string, unknown> }> {
   if (!tableExists(db, 'decision_artifacts')) {
     return [];
@@ -1207,13 +1214,24 @@ function buildLearningAuditSection(
   };
 
   if (tableExists(db, 'learning_cases')) {
+    const comparableSource = viewExists(db, 'comparable_learning_cases')
+      ? 'comparable_learning_cases'
+      : 'learning_cases';
+    const comparableWhere = comparableSource === 'learning_cases'
+      ? "WHERE case_type = 'comparable_forecast' AND comparable = 1"
+      : '';
+    const executionSource = viewExists(db, 'execution_learning_cases')
+      ? 'execution_learning_cases'
+      : 'learning_cases';
+    const executionWhere = executionSource === 'learning_cases'
+      ? "WHERE case_type = 'execution_quality'"
+      : '';
     const comparableByDomain = listDomainCounts(
       db,
       `
         SELECT domain, COUNT(*) AS count
-        FROM learning_cases
-        WHERE case_type = 'comparable_forecast'
-          AND comparable = 1
+        FROM ${comparableSource}
+        ${comparableWhere}
         GROUP BY domain
         ORDER BY count DESC, domain ASC
       `
@@ -1222,8 +1240,8 @@ function buildLearningAuditSection(
       db,
       `
         SELECT domain, COUNT(*) AS count
-        FROM learning_cases
-        WHERE case_type = 'execution_quality'
+        FROM ${executionSource}
+        ${executionWhere}
         GROUP BY domain
         ORDER BY count DESC, domain ASC
       `
