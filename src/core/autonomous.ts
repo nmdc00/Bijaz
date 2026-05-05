@@ -37,7 +37,7 @@ import {
   resolveVolatilityBucket,
 } from './autonomy_policy.js';
 import { getAutonomyPolicyState } from '../memory/autonomy_policy_state.js';
-import { summarizeSignalPerformance, summarizeAllSignalClasses } from './signal_performance.js';
+import { summarizeSignalPerformance } from './signal_performance.js';
 import { SchedulerControlPlane } from './scheduler_control_plane.js';
 import { resolveSessionWeightContext } from './session-weight.js';
 import { AutonomousScanTelemetry } from './performance_metrics.js';
@@ -54,7 +54,6 @@ import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { listEvents } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
-import { isSuppressed } from '../memory/signal_class_suppression.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -496,21 +495,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     // Fetch market context (10-min cached)
     const marketContext = await this.getMarketContextCached();
 
-    if (isSuppressed('llm_originator')) {
-      this.logger.info('Originator skipped: signal class llm_originator is currently suppressed.');
-      return null;
-    }
-
     // Assemble bundle and propose
-    const perfByClass = summarizeAllSignalClasses(listPerpTradeJournals({ limit: 200 }));
-    const performanceSummary =
-      Object.entries(perfByClass)
-        .map(
-          ([cls, s]) =>
-            `${cls}: ${s.sampleCount} trades, winRate=${(s.thesisCorrectRate * 100).toFixed(0)}%, expectancy=${s.expectancy.toFixed(2)}`
-        )
-        .join('\n') || '(no history yet)';
-
     const bundle = {
       book: book.getAll(),
       taSnapshots,
@@ -518,7 +503,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       recentEvents,
       alertedSymbols: triggerResult.alertedSymbols,
       triggerReason: triggerResult.reason,
-      performanceSummary,
     };
 
     const proposal = await this.originator.propose(bundle);

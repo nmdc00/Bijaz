@@ -146,9 +146,6 @@ function buildUserMessage(bundle: OriginationInputBundle): string {
     '## Recent Events (last 2h)',
     eventsSection,
     '',
-    '## Signal Class Track Record',
-    bundle.performanceSummary ?? '(no history yet)',
-    '',
     '## Instruction',
     'Find ONE compelling trade setup across ALL symbols above. Prefer symbols with no current book exposure. If you propose a symbol already in the book, you must name a specific new catalyst in thesisText that justifies adding to that position. Return null if nothing clears the bar.',
   ].join('\n');
