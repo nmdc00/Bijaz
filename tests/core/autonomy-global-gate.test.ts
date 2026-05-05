@@ -217,4 +217,48 @@ describe('evaluateGlobalTradeGate drawdown cap', () => {
     expect(result.sizeMultiplier).toBeCloseTo(0.5, 8);
     expect(result.reasonCode).toBe('policy.decision_quality');
   });
+
+  it('blocks momentum-breakout shorts when broad market posture is not risk_off', () => {
+    const result = evaluateGlobalTradeGate(
+      {
+        autonomy: {
+          enabled: true,
+          fullAuto: true,
+          maxTradesPerDay: 25,
+        },
+      } as any,
+      {
+        expectedEdge: 0.08,
+        signalClass: 'momentum_breakout',
+        marketRegime: 'trending',
+        tradeSide: 'sell',
+        broadMarketPosture: 'risk_on',
+      }
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasonCode).toBe('policy.broad_market_posture');
+    expect(result.reason).toMatch(/momentum short blocked/i);
+  });
+
+  it('allows momentum-breakout shorts when broad market posture is risk_off', () => {
+    const result = evaluateGlobalTradeGate(
+      {
+        autonomy: {
+          enabled: true,
+          fullAuto: true,
+          maxTradesPerDay: 25,
+        },
+      } as any,
+      {
+        expectedEdge: 0.08,
+        signalClass: 'momentum_breakout',
+        marketRegime: 'trending',
+        tradeSide: 'sell',
+        broadMarketPosture: 'risk_off',
+      }
+    );
+
+    expect(result.allowed).toBe(true);
+  });
 });
