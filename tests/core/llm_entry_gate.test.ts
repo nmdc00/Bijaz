@@ -26,6 +26,7 @@ vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
 
 const mockLoggerWarn = vi.fn();
 const mockListPerpTradeJournals = vi.fn(() => []);
+const mockComputeRollingWindowMetrics = vi.fn(() => []);
 const mockSummarizeSignalPerformance = vi.fn(
   (_entries: PerpTradeJournalEntry[], signalClass: string): SignalPerformanceSummary => ({
     signalClass,
@@ -53,6 +54,10 @@ vi.mock('../../src/memory/perp_trade_journal.js', () => ({
 
 vi.mock('../../src/core/signal_performance.js', () => ({
   summarizeSignalPerformance: (...args: unknown[]) => mockSummarizeSignalPerformance(...args),
+}));
+
+vi.mock('../../src/memory/learning_metrics.js', () => ({
+  computeRollingWindowMetrics: (...args: unknown[]) => mockComputeRollingWindowMetrics(...args),
 }));
 
 // ── Import after mocks ────────────────────────────────────────────────────────
@@ -120,6 +125,7 @@ describe('LlmEntryGate', () => {
     vi.clearAllMocks();
     notify = vi.fn().mockResolvedValue(undefined);
     mockListPerpTradeJournals.mockReturnValue([]);
+    mockComputeRollingWindowMetrics.mockReturnValue([]);
     mockSummarizeSignalPerformance.mockImplementation(
       (_entries: PerpTradeJournalEntry[], signalClass: string): SignalPerformanceSummary => ({
         signalClass,
@@ -167,6 +173,42 @@ describe('LlmEntryGate', () => {
       const call = mockRecordEntryGateDecision.mock.calls[0][0];
       expect(call.verdict).toBe('reject');
       expect(call.symbol).toBe('ETH');
+    });
+  });
+
+  describe('calibration enforcement', () => {
+    it('rejects immediately when domain calibration is below market over 50 samples', async () => {
+      mockComputeRollingWindowMetrics.mockReturnValue([
+        { windowSize: 10, sampleCount: 10, brierDelta: null },
+        { windowSize: 20, sampleCount: 20, brierDelta: 0.01 },
+        { windowSize: 50, sampleCount: 50, brierDelta: -0.01 },
+      ]);
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'Strong setup' });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate({ domain: 'crypto' }), markPrice);
+
+      expect(result.verdict).toBe('reject');
+      expect(result.reasoning).toBe('domain_calibration_below_market');
+      expect((mainLlm.complete as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    });
+
+    it('forces resize when 20-sample calibration is degrading', async () => {
+      mockComputeRollingWindowMetrics.mockReturnValue([
+        { windowSize: 10, sampleCount: 10, brierDelta: null },
+        { windowSize: 20, sampleCount: 20, brierDelta: -0.06 },
+        { windowSize: 50, sampleCount: 25, brierDelta: null },
+      ]);
+      const book = makeBook();
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'Strong setup' });
+      const gate = new LlmEntryGate(mainLlm, makeLlmClient(null), notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate({ domain: 'macro', notionalUsd: 50 }), markPrice);
+
+      expect(result.verdict).toBe('resize');
+      expect(result.adjustedSizeUsd).toBe(25);
+      expect(result.reasoning).toMatch(/domain_calibration_degrading/);
     });
   });
 

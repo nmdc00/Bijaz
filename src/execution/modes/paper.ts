@@ -2,6 +2,7 @@ import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../exe
 import type { Market } from '../markets.js';
 import { logWalletOperation } from '../../memory/audit.js';
 import { createPrediction, recordExecution } from '../../memory/predictions.js';
+import { createLearningCase } from '../../memory/learning_cases.js';
 import { recordTrade } from '../../memory/trades.js';
 import { recordPerpTrade } from '../../memory/perp_trades.js';
 import { cancelPaperPerpOrder, getPaperPerpBookSummary, listPaperPerpOpenOrders, placePaperPerpOrder } from '../../memory/paper_perps.js';
@@ -104,6 +105,31 @@ export class PaperExecutor implements ExecutionAdapter {
       marketProbability: getComparableMarketProbability(market, decision),
       learningComparable: isComparablePredictionTrade(market, decision),
     });
+    createLearningCase({
+      caseType: 'comparable_forecast',
+      domain: market.platform || 'prediction_market',
+      entityType: 'market',
+      entityId: market.id,
+      comparable: isComparablePredictionTrade(market, decision),
+      comparatorKind: isComparablePredictionTrade(market, decision) ? 'market_price' : null,
+      exclusionReason: isComparablePredictionTrade(market, decision)
+        ? null
+        : 'missing_model_probability',
+      sourcePredictionId: predictionId,
+      belief: {
+        modelProbability: decision.modelProbability ?? null,
+        predictedOutcome: decision.outcome,
+      },
+      baseline: {
+        marketProbability: getComparableMarketProbability(market, decision) ?? null,
+      },
+      action: {
+        action: decision.action,
+        amount: decision.amount,
+        executed: true,
+        executionPrice: market.prices?.[decision.outcome] ?? null,
+      },
+    });
 
     recordExecution({
       id: predictionId,
@@ -163,6 +189,7 @@ function isComparablePredictionTrade(market: Market, decision: TradeDecision): b
   return (
     market.kind !== 'perp' &&
     decision.outcome != null &&
+    Number.isFinite(Number(decision.modelProbability)) &&
     Number.isFinite(Number(market.prices?.[decision.outcome]))
   );
 }

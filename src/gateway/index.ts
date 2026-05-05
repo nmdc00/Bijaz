@@ -90,6 +90,10 @@ import { handleDashboardPageRequest } from './dashboard_page.js';
 import { handleDashboardApiRequest } from './dashboard_api.js';
 import { extractRecentIntelEvents } from '../events/extract.js';
 import { resolveExpiredForecasts } from '../events/outcomes.js';
+import {
+  materializeThoughtsAndForecastsForEvents,
+  resolveForecastMoveWithPriceService,
+} from '../events/runtime.js';
 import { upsertSuppression, clearExpired as clearExpiredSuppressions } from '../memory/signal_class_suppression.js';
 import { summarizeAllSignalClasses } from '../core/signal_performance.js';
 import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
@@ -516,6 +520,12 @@ if (intelFetchConfig?.enabled) {
         const extracted = extractRecentIntelEvents(50);
         if (extracted.length > 0) {
           logger.info(`Event extraction: normalized ${extracted.length} event(s) from intel.`);
+          const pipeline = await materializeThoughtsAndForecastsForEvents(config, extracted, {
+            llm: primaryAgent.getInfoLlm() ?? primaryAgent.getLlm(),
+          });
+          logger.info(
+            `Event pipeline: thoughts ${pipeline.thoughtsCreated}/${pipeline.eventsSeen}, forecasts +${pipeline.forecastsCreated}, skipped thoughts ${pipeline.thoughtsSkipped}, skipped forecasts ${pipeline.forecastsSkipped}.`
+          );
         }
 
         await maybeRunEventDrivenScan('intel', result.storedCount);
@@ -808,7 +818,7 @@ if (resolverConfig?.enabled) {
         logger.info(`Resolver: resolved ${updated} prediction(s).`);
       }
       const forecastBatch = await resolveExpiredForecasts({
-        resolveMove: async (_forecast) => null,
+        resolveMove: async (forecast) => resolveForecastMoveWithPriceService(config, forecast),
       });
       if (forecastBatch.resolved > 0) {
         logger.info(`Forecast resolver: resolved ${forecastBatch.resolved}/${forecastBatch.checked} expired forecast(s).`);

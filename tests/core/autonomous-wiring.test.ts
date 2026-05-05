@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
   const upsertExitPolicy = vi.fn();
   const updateTradeProposalOutcome = vi.fn();
   const createPrediction = vi.fn(() => 'pred-mock-id');
+  const createLearningCase = vi.fn(() => ({ id: 'case-mock-id' }));
 
   // Stable mock objects — replaced entirely on each TaSurface/OriginationTrigger/LlmTradeOriginator construction
   // by capturing via the constructor mock
@@ -44,7 +45,7 @@ const mocks = vi.hoisted(() => {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
     upsertExitPolicy, updateTradeProposalOutcome,
-    createPrediction,
+    createPrediction, createLearningCase,
     taSurfaceInstance, triggerInstance, originatorInstance,
   };
 });
@@ -58,6 +59,10 @@ vi.mock('../../src/memory/db.js', () => ({
 vi.mock('../../src/memory/predictions.js', () => ({
   createPrediction: (...args: unknown[]) => mocks.createPrediction(...args),
   findOpenPerpPrediction: vi.fn(() => null),
+}));
+
+vi.mock('../../src/memory/learning_cases.js', () => ({
+  createLearningCase: (...args: unknown[]) => mocks.createLearningCase(...args),
 }));
 
 vi.mock('../../src/core/ta_surface.js', () => ({
@@ -467,12 +472,22 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     const call = mocks.createPrediction.mock.calls[0]![0] as any;
     expect(call.symbol).toBe('BTC');
     expect(call.domain).toBe('perp');
-    expect(call.learningComparable).toBe(true);
     expect(call.modelProbability).toBe(0.72);
-    expect(call.marketProbability).toBe(0.5);
+    expect(call.learningComparable).toBe(false);
+    expect(call.marketProbability).toBeUndefined();
     expect(call.executed).toBe(true);
     expect(call.executionPrice).toBeGreaterThan(0);
     expect(typeof call.positionSize).toBe('number');
+    expect(mocks.createLearningCase).toHaveBeenCalledTimes(1);
+    expect(mocks.createLearningCase.mock.calls[0]![0]).toMatchObject({
+      caseType: 'comparable_forecast',
+      domain: 'perp',
+      entityType: 'symbol',
+      entityId: 'BTC',
+      comparable: false,
+      exclusionReason: 'missing_comparator',
+      sourcePredictionId: 'pred-mock-id',
+    });
   });
 
   it('10. originator path: createPrediction NOT called when gate rejects', async () => {

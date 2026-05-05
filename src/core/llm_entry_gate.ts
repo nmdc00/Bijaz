@@ -3,6 +3,7 @@ import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
 import type { PositionBook } from './position_book.js';
 import { recordEntryGateDecision } from '../memory/llm_entry_gate_log.js';
+import { computeRollingWindowMetrics } from '../memory/learning_metrics.js';
 import { listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { summarizeSignalPerformance, type SignalPerformanceSummary } from './signal_performance.js';
 import { Logger } from './logger.js';
@@ -17,6 +18,7 @@ export interface EntryGateCandidate {
   edge: number;
   confidence: number;
   signalClass: string;
+  domain?: string;
   regime: string;
   session: string;
   entryReasoning: string;
@@ -46,6 +48,30 @@ const DecisionSchema = z.object({
 });
 
 const logger = new Logger('info');
+
+export function calibrationBlock(domain: string | undefined): {
+  blocked: boolean;
+  sizeMultiplier: number;
+  reason: string | null;
+} {
+  if (!domain) {
+    return { blocked: false, sizeMultiplier: 1, reason: null };
+  }
+
+  const windows = computeRollingWindowMetrics(domain);
+  const w50 = windows.find((window) => window.windowSize === 50);
+  const w20 = windows.find((window) => window.windowSize === 20);
+
+  if (w50 && w50.sampleCount >= 50 && w50.brierDelta != null && w50.brierDelta < 0) {
+    return { blocked: true, sizeMultiplier: 0, reason: 'domain_calibration_below_market' };
+  }
+
+  if (w20 && w20.sampleCount >= 20 && w20.brierDelta != null && w20.brierDelta < -0.05) {
+    return { blocked: false, sizeMultiplier: 0.5, reason: 'domain_calibration_degrading' };
+  }
+
+  return { blocked: false, sizeMultiplier: 1, reason: null };
+}
 
 function normalizeOptionalFieldPseudoJson(
   raw: string,
@@ -287,6 +313,35 @@ export class LlmEntryGate {
       return decision;
     }
 
+    const calibration = calibrationBlock(candidate.domain);
+    if (calibration.blocked) {
+      const decision: EntryGateDecision = {
+        verdict: 'reject',
+        reasoning: calibration.reason ?? 'domain_calibration_below_market',
+      };
+      recordEntryGateDecision({
+        symbol: candidate.symbol,
+        side: candidate.side,
+        notionalUsd: candidate.notionalUsd,
+        verdict: decision.verdict,
+        reasoning: decision.reasoning,
+        adjustedSizeUsd: undefined,
+        usedFallback: false,
+        signalClass: candidate.signalClass,
+        regime: candidate.regime,
+        session: candidate.session,
+        edge: candidate.edge,
+      });
+      try {
+        await this.notify(
+          `⚠️ Entry gate blocked ${candidate.symbol} ${candidate.side}: ${decision.reasoning}`
+        );
+      } catch {
+        // Best effort only.
+      }
+      return decision;
+    }
+
     const bookEntries = this.book.getAll();
     const signalStats = summarizeSignalPerformance(
       listPerpTradeJournals({ limit: 200 }),
@@ -349,6 +404,19 @@ export class LlmEntryGate {
               reasoning: 'LLM unavailable and rejectOnBothFail=false — allowing execution',
             };
       }
+    }
+
+    if (calibration.sizeMultiplier < 1) {
+      const adjustedSizeUsd =
+        decision.adjustedSizeUsd != null
+          ? Number((decision.adjustedSizeUsd * calibration.sizeMultiplier).toFixed(2))
+          : Number((candidate.notionalUsd * calibration.sizeMultiplier).toFixed(2));
+      decision = {
+        ...decision,
+        verdict: 'resize',
+        adjustedSizeUsd: Math.max(1, adjustedSizeUsd),
+        reasoning: calibration.reason ? `${decision.reasoning} | ${calibration.reason}` : decision.reasoning,
+      };
     }
 
     recordEntryGateDecision({

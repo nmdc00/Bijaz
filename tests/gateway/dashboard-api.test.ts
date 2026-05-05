@@ -8,6 +8,8 @@ import { openDatabase } from '../../src/memory/db.js';
 import { storeDecisionArtifact } from '../../src/memory/decision_artifacts.js';
 import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
 import { recordPerpTradeJournal } from '../../src/memory/perp_trade_journal.js';
+import { recordOutcome } from '../../src/memory/calibration.js';
+import { createPrediction } from '../../src/memory/predictions.js';
 import {
   buildDashboardApiPayload,
   handleDashboardApiRequest,
@@ -78,8 +80,265 @@ describe('dashboard api payload', () => {
     expect(payload.sections.tradeLog.rows).toEqual([]);
     expect(payload.sections.promotionGates.rows).toEqual([]);
     expect(payload.sections.performanceBreakdown.bySignalClass).toEqual([]);
+    expect(payload.sections.predictionAccuracy.global).toHaveLength(5);
+    expect(payload.sections.predictionAccuracy.global.every((row) => row.accuracy === null)).toBe(true);
+    expect(payload.sections.predictionAccuracy.totalFinalPredictions).toBe(0);
+    expect(payload.sections.learningAudit.comparable.totalCaseCount).toBe(0);
+    expect(payload.sections.learningAudit.execution.totalCaseCount).toBe(0);
+    expect(payload.sections.learningAudit.exclusions.totalCaseCount).toBe(0);
+    expect(payload.sections.learningAudit.policyOutputs).toEqual([]);
     expect(typeof payload.meta.recordCounts.perpTrades).toBe('number');
     expect(typeof payload.meta.recordCounts.journals).toBe('number');
+  });
+
+  it('includes prediction-accuracy windows once final comparable rows exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-pred-accuracy-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    for (let index = 0; index < 20; index += 1) {
+      const id = createPrediction({
+        marketId: `market-${index}`,
+        marketTitle: `Market ${index}`,
+        predictedOutcome: 'YES',
+        predictedProbability: 0.65,
+        modelProbability: 0.65,
+        marketProbability: 0.55,
+        domain: 'binary',
+        executed: true,
+      });
+      recordOutcome({
+        id,
+        outcome: index % 5 === 0 ? 'NO' : 'YES',
+        outcomeBasis: 'final',
+        pnl: index % 5 === 0 ? -4 : 6,
+      });
+    }
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.predictionAccuracy.totalFinalPredictions).toBe(20);
+    expect(payload.sections.predictionAccuracy.global.find((row) => row.windowSize === 20)?.accuracy).not.toBeNull();
+    expect(payload.sections.predictionAccuracy.byDomain.binary?.find((row) => row.windowSize === 20)?.brierDelta).not.toBeNull();
+    expect(payload.sections.learningAudit.comparable.totalCaseCount).toBe(20);
+    expect(payload.sections.learningAudit.comparable.byDomain).toEqual([{ domain: 'binary', count: 20 }]);
+  });
+
+  it('derives learning audit surfaces from legacy comparable rows, journals, and policy state', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-learning-audit-fallback-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    for (let index = 0; index < 20; index += 1) {
+      const id = createPrediction({
+        marketId: `binary-${index}`,
+        marketTitle: `Binary ${index}`,
+        predictedOutcome: 'YES',
+        predictedProbability: 0.65,
+        modelProbability: 0.65,
+        marketProbability: 0.55,
+        domain: 'binary',
+        executed: true,
+      });
+      recordOutcome({
+        id,
+        outcome: index < 15 ? 'NO' : 'YES',
+        outcomeBasis: 'final',
+        pnl: index < 15 ? -5 : 5,
+      });
+    }
+
+    createPrediction({
+      marketId: 'perp-btc',
+      marketTitle: 'BTC perp short',
+      predictedOutcome: 'NO',
+      predictedProbability: 0.58,
+      modelProbability: 0.58,
+      domain: 'perp',
+      learningComparable: false,
+      executed: true,
+    });
+    createPrediction({
+      marketId: 'event-estimated',
+      marketTitle: 'Estimated event',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.52,
+      modelProbability: 0.52,
+      marketProbability: 0.49,
+      domain: 'events',
+      learningComparable: false,
+      executed: true,
+    });
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'BTC',
+      outcome: 'executed',
+      capturedR: 1.1,
+      marketRegime: 'trending',
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'ETH',
+      outcome: 'executed',
+      capturedR: -0.4,
+      marketRegime: 'choppy',
+    });
+
+    db.exec(`
+      DROP TABLE IF EXISTS autonomy_policy_state;
+      CREATE TABLE autonomy_policy_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        payload TEXT NOT NULL,
+        updated_at TEXT
+      );
+    `);
+    db.prepare(
+      `
+        INSERT INTO autonomy_policy_state (payload, updated_at)
+        VALUES (?, ?)
+      `
+    ).run(
+      JSON.stringify({
+        observationOnlyUntilMs: Date.now() + 120_000,
+        leverageCapOverride: 1.5,
+        reason: 'quality.segment.downweight: score soft-failed',
+      }),
+      '2026-05-05T12:00:00.000Z'
+    );
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.learningAudit.comparable.totalCaseCount).toBe(20);
+    expect(payload.sections.learningAudit.execution.totalCaseCount).toBe(2);
+    expect(payload.sections.learningAudit.execution.byDomain).toEqual([{ domain: 'perp', count: 2 }]);
+    expect(payload.sections.learningAudit.exclusions.byReason).toEqual([
+      { reason: 'outcome_not_final', count: 1 },
+      { reason: 'perp_without_real_comparator', count: 1 },
+    ]);
+    expect(payload.sections.learningAudit.policyOutputs.some((row) => row.sourceTrack === 'comparable_forecast' && row.action === 'resize' && row.scope === 'binary')).toBe(true);
+    expect(payload.sections.learningAudit.policyOutputs.some((row) => row.sourceTrack === 'combined' && row.action === 'suppress')).toBe(true);
+    expect(payload.sections.learningAudit.policyOutputs.some((row) => row.sourceTrack === 'execution_quality' && row.reason === 'leverage_cap_override')).toBe(true);
+  });
+
+  it('prefers canonical learning_cases audit rows when the foundation table exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-learning-cases-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS learning_cases (
+        id TEXT PRIMARY KEY,
+        case_type TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        comparable INTEGER NOT NULL,
+        comparator_kind TEXT,
+        source_prediction_id TEXT,
+        source_trade_id INTEGER,
+        source_artifact_id INTEGER,
+        belief_payload TEXT,
+        baseline_payload TEXT,
+        context_payload TEXT,
+        action_payload TEXT,
+        outcome_payload TEXT,
+        quality_payload TEXT,
+        policy_input_payload TEXT,
+        exclusion_reason TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+    `);
+    db.exec(`DELETE FROM learning_cases;`);
+
+    db.prepare(
+      `
+        INSERT INTO learning_cases (
+          id, case_type, domain, entity_type, entity_id, comparable, policy_input_payload, exclusion_reason, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    ).run(
+      'cf-1',
+      'comparable_forecast',
+      'binary',
+      'market',
+      'm1',
+      1,
+      JSON.stringify({ sourceTrack: 'comparable_forecast', action: 'resize', sizeMultiplier: 0.5, reason: 'domain_calibration_degrading', scope: 'binary' }),
+      null,
+      '2026-05-05T13:00:00.000Z'
+    );
+    db.prepare(
+      `
+        INSERT INTO learning_cases (
+          id, case_type, domain, entity_type, entity_id, comparable, policy_input_payload, exclusion_reason, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    ).run(
+      'eq-1',
+      'execution_quality',
+      'perp',
+      'trade',
+      't1',
+      0,
+      JSON.stringify({ sourceTrack: 'execution_quality', blocked: true, reason: 'quality.segment.block', scope: 'perp' }),
+      'perp_without_real_comparator',
+      '2026-05-05T13:05:00.000Z'
+    );
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.learningAudit.comparable.totalCaseCount).toBe(1);
+    expect(payload.sections.learningAudit.execution.totalCaseCount).toBe(1);
+    expect(payload.sections.learningAudit.exclusions.totalCaseCount).toBe(1);
+    expect(payload.sections.learningAudit.policyOutputs).toEqual([
+      expect.objectContaining({
+        sourceTrack: 'execution_quality',
+        action: 'block',
+        scope: 'perp',
+        reason: 'quality.segment.block',
+      }),
+      expect.objectContaining({
+        sourceTrack: 'comparable_forecast',
+        action: 'resize',
+        scope: 'binary',
+        sizeMultiplier: 0.5,
+      }),
+    ]);
   });
 
   it('computes equity curve points and summary from paper fills', () => {

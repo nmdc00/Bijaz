@@ -27,6 +27,8 @@ import {
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { findOpenPerpPrediction, findOpenPerpPredictionById } from '../memory/predictions.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
+import { storeDecisionArtifact } from '../memory/decision_artifacts.js';
+import { createLearningCase } from '../memory/learning_cases.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
 import {
@@ -60,6 +62,10 @@ import {
   getPositionExitPolicy,
   upsertPositionExitPolicy,
 } from '../memory/position_exit_policy.js';
+import {
+  buildPerpExecutionLearningCase,
+  toPerpExecutionLearningCaseInput,
+} from './perp_lifecycle.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -525,6 +531,123 @@ function inferSignalClass(params: {
 function toFiniteNumberOrNull(input: unknown): number | null {
   const value = Number(input);
   return Number.isFinite(value) ? value : null;
+}
+
+function buildPerpTradeSnapshot(params: {
+  capturedAtMs: number;
+  bookMode: PerpBookMode;
+  symbol: string;
+  side: 'buy' | 'sell';
+  size: number;
+  requestedSize: number;
+  reduceOnly: boolean;
+  markPrice: number | null;
+  hypothesisId: string | null;
+  signalClass: string | null;
+  marketRegime: string | null;
+  volatilityBucket: string | null;
+  liquidityBucket: string | null;
+  expectedEdge: number | null;
+  entryTrigger: 'news' | 'technical' | 'hybrid' | null;
+  newsSubtype: string | null;
+  newsSources: string[] | null;
+  noveltyScore: number | null;
+  marketConfirmationScore: number | null;
+  thesisExpiresAtMs: number | null;
+  invalidationPrice: number | null;
+  timeStopAtMs: number | null;
+  tradeArchetype: TradeArchetype | null;
+  planContext: Record<string, unknown> | null;
+  reasoning: string | null;
+  estimatedNotionalUsd: number | null;
+  estimatedFeeUsd: number | null;
+  lifecycleTradeId?: number | null;
+  entryPrice?: number | null;
+  exitPrice?: number | null;
+  pricePathHigh?: number | null;
+  pricePathLow?: number | null;
+  capturedR?: number | null;
+  leftOnTableR?: number | null;
+}): Record<string, unknown> {
+  return {
+    createdAtMs: params.capturedAtMs,
+    createdAtIso: new Date(params.capturedAtMs).toISOString(),
+    executionMode: params.bookMode,
+    symbol: params.symbol,
+    side: params.side,
+    requestedSize: params.requestedSize,
+    effectiveSize: params.size,
+    reduceOnly: params.reduceOnly,
+    tradeId: params.lifecycleTradeId ?? null,
+    markPrice: params.markPrice,
+    hypothesisId: params.hypothesisId,
+    signalClass: params.signalClass,
+    marketRegime: params.marketRegime,
+    volatilityBucket: params.volatilityBucket,
+    liquidityBucket: params.liquidityBucket,
+    expectedEdge: params.expectedEdge,
+    entryTrigger: params.entryTrigger,
+    newsSubtype: params.newsSubtype,
+    newsSources: params.newsSources,
+    noveltyScore: params.noveltyScore,
+    marketConfirmationScore: params.marketConfirmationScore,
+    thesisExpiresAtMs: params.thesisExpiresAtMs,
+    invalidationPrice: params.invalidationPrice,
+    timeStopAtMs: params.timeStopAtMs,
+    tradeArchetype: params.tradeArchetype,
+    entryPrice: params.entryPrice ?? null,
+    exitPrice: params.exitPrice ?? null,
+    pricePathHigh: params.pricePathHigh ?? null,
+    pricePathLow: params.pricePathLow ?? null,
+    capturedR: params.capturedR ?? null,
+    leftOnTableR: params.leftOnTableR ?? null,
+    estimatedNotionalUsd: params.estimatedNotionalUsd,
+    estimatedFeeUsd: params.estimatedFeeUsd,
+    reasoning: params.reasoning,
+    planContext: params.planContext,
+  };
+}
+
+function persistPerpTradeEvidence(params: {
+  symbol: string;
+  fingerprint: string;
+  outcome: 'executed' | 'failed' | 'blocked';
+  snapshot: Record<string, unknown>;
+  signalClass: string | null;
+  confidence: number | null;
+}): void {
+  storeDecisionArtifact({
+    source: 'perps',
+    kind: 'perp_trade_snapshot',
+    marketId: params.symbol,
+    fingerprint: params.fingerprint,
+    outcome: params.outcome,
+    confidence: params.confidence,
+    payload: params.snapshot,
+    notes: { signalClass: params.signalClass },
+  });
+}
+
+function persistExecutionLearningCase(params: {
+  symbol: string;
+  fingerprint: string;
+  learningCase: ReturnType<typeof buildPerpExecutionLearningCase>;
+  signalClass: string | null;
+}): void {
+  createLearningCase(toPerpExecutionLearningCaseInput(params.learningCase));
+  storeDecisionArtifact({
+    source: 'perps',
+    kind: 'execution_learning_case',
+    marketId: params.symbol,
+    fingerprint: params.fingerprint,
+    outcome: 'executed',
+    payload: params.learningCase,
+    notes: {
+      signalClass: params.signalClass,
+      track: 'execution_quality',
+      persistence: 'decision_artifacts_compat',
+    },
+  });
 }
 
 type ReduceOnlyPositionSnapshot = {
@@ -1666,6 +1789,10 @@ export async function executeToolCall(
           marketRegimeRaw === 'low_vol_compression'
             ? marketRegimeRaw
             : null;
+        const tradeEvidenceBaseFingerprint =
+          hypothesisId != null
+            ? `${symbol}:${hypothesisId}:${Date.now()}`
+            : `${symbol}:${Date.now()}:${randomUUID().slice(0, 8)}`;
         if (!symbol || !requestedSize || (side !== 'buy' && side !== 'sell')) {
           return { success: false, error: 'Missing or invalid order fields' };
         }
@@ -1824,6 +1951,35 @@ export async function executeToolCall(
           expectedEdge,
         });
         if (!policyGate.allowed) {
+          const blockedSnapshot = buildPerpTradeSnapshot({
+            capturedAtMs: Date.now(),
+            bookMode,
+            symbol,
+            side: side as 'buy' | 'sell',
+            size: requestedSize,
+            requestedSize,
+            reduceOnly,
+            markPrice: market.markPrice ?? null,
+            hypothesisId,
+            signalClass: effectiveSignalClass,
+            marketRegime,
+            volatilityBucket,
+            liquidityBucket,
+            expectedEdge,
+            entryTrigger,
+            newsSubtype,
+            newsSources,
+            noveltyScore,
+            marketConfirmationScore,
+            thesisExpiresAtMs,
+            invalidationPrice,
+            timeStopAtMs,
+            tradeArchetype,
+            planContext,
+            reasoning: policyGate.reason ?? 'policy constraints active',
+            estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+            estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+          });
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
@@ -1860,9 +2016,18 @@ export async function executeToolCall(
               estimatedFeeRate: feeEstimate.estimated_fee_rate,
               estimatedFeeType: feeEstimate.estimated_fee_type,
               estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              snapshot: blockedSnapshot,
               planContext,
               outcome: 'blocked',
               error: policyGate.reason ?? 'policy constraints active',
+            });
+            persistPerpTradeEvidence({
+              symbol,
+              fingerprint: tradeEvidenceBaseFingerprint,
+              outcome: 'blocked',
+              snapshot: blockedSnapshot,
+              signalClass: effectiveSignalClass,
+              confidence: null,
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
@@ -1895,6 +2060,35 @@ export async function executeToolCall(
               : null,
         });
         if (!riskCheck.allowed) {
+          const blockedSnapshot = buildPerpTradeSnapshot({
+            capturedAtMs: Date.now(),
+            bookMode,
+            symbol,
+            side: side as 'buy' | 'sell',
+            size,
+            requestedSize,
+            reduceOnly,
+            markPrice: market.markPrice ?? null,
+            hypothesisId,
+            signalClass: effectiveSignalClass,
+            marketRegime,
+            volatilityBucket,
+            liquidityBucket,
+            expectedEdge,
+            entryTrigger,
+            newsSubtype,
+            newsSources,
+            noveltyScore,
+            marketConfirmationScore,
+            thesisExpiresAtMs,
+            invalidationPrice,
+            timeStopAtMs,
+            tradeArchetype,
+            planContext,
+            reasoning: riskCheck.reason ?? 'perp risk limits exceeded',
+            estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+            estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+          });
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
@@ -1933,9 +2127,18 @@ export async function executeToolCall(
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              snapshot: blockedSnapshot,
               planContext,
               outcome: 'blocked',
               error: riskCheck.reason ?? 'perp risk limits exceeded',
+            });
+            persistPerpTradeEvidence({
+              symbol,
+              fingerprint: tradeEvidenceBaseFingerprint,
+              outcome: 'blocked',
+              snapshot: blockedSnapshot,
+              signalClass: effectiveSignalClass,
+              confidence: null,
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
@@ -1967,6 +2170,35 @@ export async function executeToolCall(
           }
           const limitCheck = await ctx.limiter.checkAndReserve(size);
           if (!limitCheck.allowed) {
+            const blockedSnapshot = buildPerpTradeSnapshot({
+              capturedAtMs: Date.now(),
+              bookMode,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              requestedSize,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              hypothesisId,
+              signalClass: effectiveSignalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              newsSources,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
+              invalidationPrice,
+              timeStopAtMs,
+              tradeArchetype,
+              planContext,
+              reasoning: limitCheck.reason ?? 'limit exceeded',
+              estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+            });
             try {
               recordPerpTradeJournal({
                 kind: 'perp_trade_journal',
@@ -2005,9 +2237,18 @@ export async function executeToolCall(
                 exitMode: exitAssessment.exitMode,
                 emotionalExitFlag: exitAssessment.emotionalExitFlag,
                 thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+                snapshot: blockedSnapshot,
                 planContext,
                 outcome: 'blocked',
                 error: limitCheck.reason ?? 'limit exceeded',
+              });
+              persistPerpTradeEvidence({
+                symbol,
+                fingerprint: tradeEvidenceBaseFingerprint,
+                outcome: 'blocked',
+                snapshot: blockedSnapshot,
+                signalClass: effectiveSignalClass,
+                confidence: null,
               });
             } catch {
               // Best-effort journaling: never block trading due to local DB issues.
@@ -2069,6 +2310,36 @@ export async function executeToolCall(
               orderType,
               status: 'failed',
             });
+            const failedSnapshot = buildPerpTradeSnapshot({
+              capturedAtMs: executionStartMs,
+              bookMode,
+              symbol,
+              side: side as 'buy' | 'sell',
+              size,
+              requestedSize,
+              reduceOnly,
+              markPrice: market.markPrice ?? null,
+              hypothesisId,
+              signalClass: effectiveSignalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge,
+              entryTrigger,
+              newsSubtype,
+              newsSources,
+              noveltyScore,
+              marketConfirmationScore,
+              thesisExpiresAtMs,
+              invalidationPrice,
+              timeStopAtMs,
+              tradeArchetype,
+              planContext,
+              reasoning: policyReasoning,
+              estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+              lifecycleTradeId: tradeId,
+            });
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
               execution_mode: bookMode,
@@ -2105,9 +2376,18 @@ export async function executeToolCall(
               exitMode: exitAssessment.exitMode,
               emotionalExitFlag: exitAssessment.emotionalExitFlag,
               thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              snapshot: failedSnapshot,
               planContext,
               outcome: 'failed',
               error: `${result.message}${retrySummary}`,
+            });
+            persistPerpTradeEvidence({
+              symbol,
+              fingerprint: `perp:${tradeId}`,
+              outcome: 'failed',
+              snapshot: failedSnapshot,
+              signalClass: effectiveSignalClass,
+              confidence: 0.5,
             });
           } catch {
             // Best-effort journaling: never block trading due to local DB issues.
@@ -2152,6 +2432,8 @@ export async function executeToolCall(
           isNativePaperExecutor,
           paperInitialCashUsdc,
         });
+        const closedPositionCompletely =
+          reduceOnly && positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0);
         let lifecycleTradeId: number | null = null;
         try {
           lifecycleTradeId = await resolvePerpLifecycleTradeId({
@@ -2215,6 +2497,58 @@ export async function executeToolCall(
             });
           }
         }
+        const closeSummary =
+          closedPositionCompletely
+            ? await resolvePerpCloseSummary({
+                ctx,
+                mode: bookMode,
+                symbol,
+                predictionCreatedAt:
+                  typeof closeReference?.snapshot?.createdAtIso === 'string'
+                    ? closeReference.snapshot.createdAtIso
+                    : new Date(executionStartMs).toISOString(),
+              })
+            : null;
+        const executedEvidenceFingerprint =
+          lifecycleTradeId != null && lifecycleTradeId > 0
+            ? `perp:${lifecycleTradeId}`
+            : tradeEvidenceBaseFingerprint;
+        const executedSnapshot = buildPerpTradeSnapshot({
+          capturedAtMs: executionStartMs,
+          bookMode,
+          symbol,
+          side: side as 'buy' | 'sell',
+          size,
+          requestedSize,
+          reduceOnly,
+          markPrice: market.markPrice ?? null,
+          hypothesisId,
+          signalClass: effectiveSignalClass,
+          marketRegime,
+          volatilityBucket,
+          liquidityBucket,
+          expectedEdge,
+          entryTrigger,
+          newsSubtype,
+          newsSources,
+          noveltyScore,
+          marketConfirmationScore,
+          thesisExpiresAtMs,
+          invalidationPrice,
+          timeStopAtMs,
+          tradeArchetype,
+          planContext,
+          reasoning: policyReasoning,
+          estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+          estimatedFeeUsd: feeEstimate.estimated_fee_usd,
+          lifecycleTradeId,
+          entryPrice: closeEntryPriceOverride ?? closeReference?.markPrice ?? market.markPrice ?? null,
+          exitPrice: reduceOnly ? market.markPrice ?? null : null,
+          pricePathHigh: closePathHigh,
+          pricePathLow: closePathLow,
+          capturedR: componentScores?.capturedR ?? null,
+          leftOnTableR: componentScores?.leftOnTableR ?? null,
+        });
         try {
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
@@ -2274,10 +2608,70 @@ export async function executeToolCall(
             realizedOrderId: realizedFee.realized_order_id,
             realizedFillTimeMs: realizedFee.realized_fill_time_ms,
             feeObservationError: realizedFee.error ?? null,
+            snapshot: executedSnapshot,
             planContext,
             outcome: 'executed',
             message: result.message,
           });
+          persistPerpTradeEvidence({
+            symbol,
+            fingerprint: executedEvidenceFingerprint,
+            outcome: 'executed',
+            snapshot: executedSnapshot,
+            signalClass: effectiveSignalClass,
+            confidence: 0.5,
+          });
+          if (closedPositionCompletely) {
+            const learningCase = buildPerpExecutionLearningCase({
+              symbol,
+              executionMode: bookMode,
+              tradeId: lifecycleTradeId,
+              hypothesisId,
+              capturedAtMs: executionStartMs,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              signalClass: effectiveSignalClass ?? closeReference?.signalClass ?? null,
+              marketRegime: marketRegime ?? closeReference?.marketRegime ?? null,
+              volatilityBucket: volatilityBucket ?? closeReference?.volatilityBucket ?? null,
+              liquidityBucket: liquidityBucket ?? closeReference?.liquidityBucket ?? null,
+              tradeArchetype: tradeArchetype ?? closeReference?.tradeArchetype ?? null,
+              entryTrigger: entryTrigger ?? closeReference?.entryTrigger ?? null,
+              expectedEdge: expectedEdge ?? closeReference?.expectedEdge ?? null,
+              invalidationPrice: invalidationPrice ?? closeReference?.invalidationPrice ?? null,
+              timeStopAtMs: timeStopAtMs ?? closeReference?.timeStopAtMs ?? null,
+              entryPrice:
+                closeEntryPriceOverride ?? closeReference?.markPrice ?? market.markPrice ?? null,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              realizedPnlUsd: closeSummary?.realizedPnlUsd ?? null,
+              netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
+              realizedFeeUsd: closeSummary?.feeUsd ?? realizedFee.realized_fee_usd ?? null,
+              directionScore: componentScores?.directionScore ?? null,
+              timingScore: componentScores?.timingScore ?? null,
+              sizingScore: componentScores?.sizingScore ?? null,
+              exitScore: componentScores?.exitScore ?? null,
+              capturedR: componentScores?.capturedR ?? null,
+              leftOnTableR: componentScores?.leftOnTableR ?? null,
+              wouldHit2R: componentScores?.wouldHit2R ?? null,
+              wouldHit3R: componentScores?.wouldHit3R ?? null,
+              maeProxy: null,
+              mfeProxy: null,
+              reasoning: policyReasoning,
+              planContext: planContext ?? closeReference?.planContext ?? null,
+              snapshot: executedSnapshot,
+            });
+            persistExecutionLearningCase({
+              symbol,
+              fingerprint: `${executedEvidenceFingerprint}:execution_quality`,
+              learningCase,
+              signalClass: effectiveSignalClass,
+            });
+          }
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
         }
@@ -2333,7 +2727,7 @@ export async function executeToolCall(
         } catch {
           // Best-effort resolution: never block trading on prediction write failures.
         }
-        if (reduceOnly && positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0)) {
+        if (closedPositionCompletely) {
           // Reduce-only that fully closed the position: clear the policy after best-effort finalization.
           try { clearPositionExitPolicy(symbol); } catch { }
         }
