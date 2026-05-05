@@ -368,8 +368,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       if (count >= PLIL_PHASE2_THRESHOLD) {
         plilPhase2NotifiedThisRun = true;
         this.notify(
-          `🧠 PLIL Phase 2 unblocked: ${count} confirmed predictions in learning_examples.\n` +
-          `Time to start feat/v1.99-learning-metrics (rolling window metrics + gate wiring).`
+          `🧠 PLIL Phase 2 threshold reached: ${count} confirmed predictions in learning_examples.\n` +
+          `PLIL metrics and calibration-aware gate wiring are live in release-v2.00.`
         ).catch(() => {});
       }
     }
