@@ -34,11 +34,17 @@ function makeEntry(capturedR: number, seg: Partial<AdaptiveEdgeSegment> = {}): P
     kind: 'perp_trade_journal',
     symbol: 'BTC',
     outcome: 'executed',
+    reduceOnly: true,
     capturedR,
     signalClass: seg.signalClass ?? SEG.signalClass,
     marketRegime: (seg.marketRegime ?? SEG.marketRegime) as PerpTradeJournalEntry['marketRegime'],
     volatilityBucket: (seg.volatilityBucket ?? SEG.volatilityBucket) as PerpTradeJournalEntry['volatilityBucket'],
     liquidityBucket: (seg.liquidityBucket ?? SEG.liquidityBucket) as PerpTradeJournalEntry['liquidityBucket'],
+    snapshot: {
+      createdAtMs: Date.now(),
+      entryPrice: 100,
+      exitPrice: 99,
+    },
   };
 }
 
@@ -91,11 +97,12 @@ describe('resolveAdaptiveEdge — prior phase', () => {
     expect(result.edge).toBeCloseTo(0.015 * 1.5, 5); // signalStrength=1 → multiplier=1.5
   });
 
-  it('returns prior when entries < minSamples', () => {
+  it('blends lightly toward evidence when entries exist below minSamples', () => {
     const config = makeConfig({ minSamples: 10 });
     const journals = Array.from({ length: 5 }, () => makeEntry(0.8));
     const result = resolveAdaptiveEdge(config, journals, SEG, 0.5);
-    expect(result.source).toBe('prior');
+    expect(result.source).toBe('blended');
+    expect(result.sourceLevel).toBe('exact');
     expect(result.sampleCount).toBe(5);
   });
 
@@ -153,35 +160,65 @@ describe('resolveAdaptiveEdge — empirical phase', () => {
     expect(result.edge).toBe(0);
   });
 
-  it('segment filtering is exact — wrong marketRegime not counted', () => {
-    const config = makeConfig({ minSamples: 3 });
-    const wrongSeg = Array.from({ length: 10 }, () =>
-      makeEntry(2.0, { marketRegime: 'trending' })
-    );
-    const result = resolveAdaptiveEdge(config, wrongSeg, SEG, 0.5);
-    expect(result.source).toBe('prior');
-    expect(result.sampleCount).toBe(0);
+  it('uses exact segment matches when they exist', () => {
+    const config = makeConfig({ minSamples: 2 });
+    const exact = [makeEntry(1.2), makeEntry(0.8)];
+    const partial = [
+      makeEntry(-3, { liquidityBucket: 'deep' }),
+      makeEntry(-3, { liquidityBucket: 'deep' }),
+      makeEntry(-3, { liquidityBucket: 'deep' }),
+    ];
+    const result = resolveAdaptiveEdge(config, [...exact, ...partial], SEG, 0.5);
+    expect(result.sourceLevel).toBe('exact');
+    expect(result.empiricalExpectancy).toBeCloseTo(1, 5);
+    expect(result.sampleCount).toBe(2);
   });
 
-  it('segment filtering is exact — wrong volatilityBucket not counted', () => {
+  it('falls back to partial segment when exact history is missing', () => {
     const config = makeConfig({ minSamples: 3 });
-    const wrongSeg = Array.from({ length: 10 }, () =>
-      makeEntry(2.0, { volatilityBucket: 'high' })
+    const partialOnly = Array.from({ length: 4 }, () =>
+      makeEntry(0.75, { liquidityBucket: 'deep' })
     );
-    const result = resolveAdaptiveEdge(config, wrongSeg, SEG, 0.5);
-    // SEG.volatilityBucket = 'medium'; 'high' entries must not match
-    expect(result.source).toBe('prior');
-    expect(result.sampleCount).toBe(0);
+    const result = resolveAdaptiveEdge(config, partialOnly, SEG, 0.5);
+    expect(result.sourceLevel).toBe('partial');
+    expect(result.sampleCount).toBe(4);
+    expect(result.empiricalExpectancy).toBeCloseTo(0.75, 5);
   });
 
-  it('segment filtering is exact — wrong liquidityBucket not counted', () => {
+  it('falls back to coarse segment when exact and partial history are missing', () => {
     const config = makeConfig({ minSamples: 3 });
-    const wrongSeg = Array.from({ length: 10 }, () =>
-      makeEntry(2.0, { liquidityBucket: 'deep' })
+    const coarseOnly = Array.from({ length: 4 }, () =>
+      makeEntry(0.4, { volatilityBucket: 'high', liquidityBucket: 'deep' })
     );
-    const result = resolveAdaptiveEdge(config, wrongSeg, SEG, 0.5);
-    // SEG.liquidityBucket = 'normal'; 'deep' entries must not match
+    const result = resolveAdaptiveEdge(config, coarseOnly, SEG, 0.5);
+    expect(result.sourceLevel).toBe('coarse');
+    expect(result.sampleCount).toBe(4);
+    expect(result.empiricalExpectancy).toBeCloseTo(0.4, 5);
+  });
+
+  it('falls back to archetype-level history before prior', () => {
+    const config = makeConfig({ minSamples: 3 });
+    const archetypeOnly = Array.from({ length: 4 }, () =>
+      makeEntry(0.25, {
+        marketRegime: 'trending',
+        volatilityBucket: 'high',
+        liquidityBucket: 'deep',
+      })
+    );
+    const result = resolveAdaptiveEdge(config, archetypeOnly, SEG, 0.5);
+    expect(result.sourceLevel).toBe('archetype');
+    expect(result.sampleCount).toBe(4);
+    expect(result.empiricalExpectancy).toBeCloseTo(0.25, 5);
+  });
+
+  it('returns prior when no archetype history exists', () => {
+    const config = makeConfig({ minSamples: 3 });
+    const noSignalMatch = Array.from({ length: 4 }, () =>
+      makeEntry(2.0, { signalClass: 'momentum_breakout' })
+    );
+    const result = resolveAdaptiveEdge(config, noSignalMatch, SEG, 0.5);
     expect(result.source).toBe('prior');
+    expect(result.sourceLevel).toBe('prior');
     expect(result.sampleCount).toBe(0);
   });
 });

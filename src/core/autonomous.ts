@@ -55,6 +55,8 @@ import { listEvents } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import type { ToolExecutorContext } from './tool-executor.js';
+import { isSuppressed } from '../memory/signal_class_suppression.js';
+import { createLearningCase } from '../memory/learning_cases.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -376,8 +378,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       if (count >= PLIL_PHASE2_THRESHOLD) {
         plilPhase2NotifiedThisRun = true;
         this.notify(
-          `🧠 PLIL Phase 2 unblocked: ${count} confirmed predictions in learning_examples.\n` +
-          `Time to start feat/v1.99-learning-metrics (rolling window metrics + gate wiring).`
+          `🧠 PLIL Phase 2 threshold reached: ${count} confirmed predictions in learning_examples.\n` +
+          `PLIL metrics and calibration-aware gate wiring are live in release-v2.00.`
         ).catch(() => {});
       }
     }
@@ -531,6 +533,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     // Fetch market context (10-min cached)
     const marketContext = await this.getMarketContextCached(topMarkets);
 
+    if (isSuppressed('llm_originator')) {
+      this.logger.info('Originator skipped: signal class llm_originator is currently suppressed.');
+      return null;
+    }
+
     // Assemble bundle and propose
     const perfByClass = summarizeAllSignalClasses(listPerpTradeJournals({ limit: 200 }));
     const performanceSummary =
@@ -662,6 +669,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       edge: 0.1,
       confidence: proposal.confidence,
       signalClass: 'llm_originator',
+      domain: 'perp',
       regime: 'unknown',
       session: sessionContext.session,
       entryReasoning: proposal.thesisText,
@@ -717,15 +725,37 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           predictedOutcome,
           predictedProbability: proposal.confidence,
           modelProbability: proposal.confidence,
-          marketProbability: 0.5,
+          learningComparable: false,
           symbol,
           domain: 'perp',
-          learningComparable: true,
           horizonMinutes: proposal.suggestedTtlMinutes,
           reasoning: proposal.thesisText,
           executed: true,
           executionPrice: markPrice || undefined,
           positionSize: size,
+        });
+        createLearningCase({
+          caseType: 'comparable_forecast',
+          domain: 'perp',
+          entityType: 'symbol',
+          entityId: symbol,
+          comparable: false,
+          exclusionReason: 'missing_comparator',
+          sourcePredictionId: predictionId,
+          belief: {
+            modelProbability: proposal.confidence,
+            predictedOutcome,
+          },
+          context: {
+            horizonMinutes: proposal.suggestedTtlMinutes,
+            mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+          },
+          action: {
+            side,
+            executed: true,
+            executionPrice: markPrice || null,
+            positionSize: size,
+          },
         });
       } catch { }
 
@@ -1159,14 +1189,36 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             predictedOutcome,
             predictedProbability: confidenceWeighted,
             modelProbability: confidenceWeighted,
-            marketProbability: 0.5,
+            learningComparable: false,
             symbol,
             domain: 'perp',
-            learningComparable: true,
             horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
             executed: true,
             executionPrice: markPrice || undefined,
             positionSize: size,
+          });
+          createLearningCase({
+            caseType: 'comparable_forecast',
+            domain: 'perp',
+            entityType: 'symbol',
+            entityId: symbol,
+            comparable: false,
+            exclusionReason: 'missing_comparator',
+            sourcePredictionId: predictionId,
+            belief: {
+              modelProbability: confidenceWeighted,
+              predictedOutcome,
+            },
+            context: {
+              horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
+              mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+            },
+            action: {
+              side: expr.side,
+              executed: true,
+              executionPrice: markPrice || null,
+              positionSize: size,
+            },
           });
         } catch { }
         try {

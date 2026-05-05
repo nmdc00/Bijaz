@@ -122,6 +122,9 @@ wallet:
     maxOrderNotionalUsd: 250    # Max notional per perp order (USD)
     maxTotalNotionalUsd: 1000   # Max total perp notional across positions (USD)
     minLiquidationDistanceBps: 500 # Minimum liquidation distance (bps) when data available
+    sameSideExposureCaps:
+      maxOpenPositions: 3       # Max concurrent longs or shorts before blocking more in the same direction
+      maxTotalNotionalUsd: 500  # Max total notional for one-sided books (all longs or all shorts)
     correlationCaps: []         # Optional: [{ name, symbols, maxNotionalUsd }]
 
   # Loss protection
