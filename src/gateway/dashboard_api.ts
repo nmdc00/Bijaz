@@ -1214,6 +1214,10 @@ function buildLearningAuditSection(
   };
 
   if (tableExists(db, 'learning_cases')) {
+    const learningCaseCount = safeCount(db, 'SELECT COUNT(*) AS c FROM learning_cases');
+    if (learningCaseCount <= 0) {
+      return buildLearningAuditSectionFromFallback(db, predictionAccuracy, policyState);
+    }
     const comparableSource = viewExists(db, 'comparable_learning_cases')
       ? 'comparable_learning_cases'
       : 'learning_cases';
@@ -1290,6 +1294,15 @@ function buildLearningAuditSection(
     };
   }
 
+  return buildLearningAuditSectionFromFallback(db, predictionAccuracy, policyState);
+}
+
+function buildLearningAuditSectionFromFallback(
+  db: Database.Database,
+  predictionAccuracy: PredictionAccuracySection,
+  policyState: ReturnType<typeof buildPolicyStateSection>
+): LearningAuditSection {
+  const emptyPolicyOutputs = buildFallbackPolicyOutputs(policyState, predictionAccuracy);
   const comparableByDomain = listDomainCounts(
     db,
     `
@@ -1322,10 +1335,9 @@ function buildLearningAuditSection(
       totalCaseCount: exclusionRows.reduce((sum, row) => sum + row.count, 0),
       byReason: exclusionRows,
     },
-    policyOutputs: empty.policyOutputs,
+    policyOutputs: emptyPolicyOutputs,
   };
 }
-
 type LiveWalletSnapshot = {
   equityCurve: EquityCurveSection;
   openPositions: {
