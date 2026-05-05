@@ -560,7 +560,7 @@ export default function App() {
                 <div className="mono">{numberText(learningAudit?.execution.totalCaseCount, 0)}</div>
               </div>
               <div className="subpanel">
-                <h3>Excluded Rows</h3>
+                <h3>Excluded Cases</h3>
                 <div className="mono">{numberText(learningAudit?.exclusions.totalCaseCount, 0)}</div>
               </div>
               <div className="subpanel">
@@ -591,10 +591,10 @@ export default function App() {
             />
           </article>
           <article className="subpanel">
-            <h3>Comparable Exclusions</h3>
+            <h3>Excluded Cases</h3>
             <LearningAuditCountTable
               rows={(learningAudit?.exclusions.byReason ?? []).map((row) => ({ label: row.reason, count: row.count }))}
-              empty="No comparable exclusions."
+              empty="No excluded learning cases."
             />
           </article>
           <article className="subpanel">
