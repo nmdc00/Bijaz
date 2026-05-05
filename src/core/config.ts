@@ -210,6 +210,12 @@ const ConfigSchema = z.object({
           maxOrderNotionalUsd: z.number().optional(),
           maxTotalNotionalUsd: z.number().optional(),
           minLiquidationDistanceBps: z.number().optional(),
+          sameSideExposureCaps: z
+            .object({
+              maxOpenPositions: z.number().int().min(1).optional(),
+              maxTotalNotionalUsd: z.number().positive().optional(),
+            })
+            .default({}),
           correlationCaps: z
             .array(
               z.object({

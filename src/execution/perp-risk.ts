@@ -7,6 +7,11 @@ export type PerpCorrelationCap = {
   maxNotionalUsd: number;
 };
 
+export type PerpSameSideExposureCaps = {
+  maxOpenPositions?: number;
+  maxTotalNotionalUsd?: number;
+};
+
 type PerpRiskLimits = NonNullable<ThufirConfig['wallet']>['perps'];
 
 type PerpRiskCheckInput = {
@@ -116,6 +121,32 @@ function shouldCheckLiqDistance(params: {
   return params.orderNotional > params.existing.notionalUsd;
 }
 
+function opensOrFlipsIntoSide(params: {
+  orderNotional: number;
+  orderSide: 'buy' | 'sell';
+  existing?: PositionSnapshot;
+}): boolean {
+  const { orderNotional, orderSide, existing } = params;
+  if (!existing) return orderNotional > 0;
+  const targetSide: PositionSnapshot['side'] = orderSide === 'buy' ? 'long' : 'short';
+  if (existing.side === targetSide) return false;
+  return orderNotional > existing.notionalUsd;
+}
+
+function computeSameSideNotionalContribution(params: {
+  orderNotional: number;
+  orderSide: 'buy' | 'sell';
+  existing?: PositionSnapshot;
+}): number {
+  const { orderNotional, orderSide, existing } = params;
+  if (!existing) return orderNotional;
+  const targetSide: PositionSnapshot['side'] = orderSide === 'buy' ? 'long' : 'short';
+  if (existing.side === targetSide) {
+    return orderNotional;
+  }
+  return Math.max(0, orderNotional - existing.notionalUsd);
+}
+
 export async function checkPerpRiskLimits(
   input: PerpRiskCheckInput
 ): Promise<PerpRiskCheckResult> {
@@ -153,6 +184,9 @@ export async function checkPerpRiskLimits(
   const maxOrderNotional = toFiniteNumber(limits.maxOrderNotionalUsd);
   const maxTotalNotional = toFiniteNumber(limits.maxTotalNotionalUsd);
   const minLiqDistanceBps = toFiniteNumber(limits.minLiquidationDistanceBps);
+  const sameSideExposureCaps = (limits.sameSideExposureCaps ?? {}) as PerpSameSideExposureCaps;
+  const maxSameSideOpenPositions = toFiniteNumber(sameSideExposureCaps.maxOpenPositions);
+  const maxSameSideTotalNotional = toFiniteNumber(sameSideExposureCaps.maxTotalNotionalUsd);
   const correlationCaps = Array.isArray(limits.correlationCaps)
     ? (limits.correlationCaps as PerpCorrelationCap[])
     : [];
@@ -188,7 +222,11 @@ export async function checkPerpRiskLimits(
   }
 
   const needsPositions =
-    maxTotalNotional != null || minLiqDistanceBps != null || correlationCaps.length > 0;
+    maxTotalNotional != null ||
+    minLiqDistanceBps != null ||
+    correlationCaps.length > 0 ||
+    maxSameSideOpenPositions != null ||
+    maxSameSideTotalNotional != null;
 
   if (!needsPositions) {
     return { allowed: true };
@@ -215,6 +253,42 @@ export async function checkPerpRiskLimits(
     orderSide: input.side,
     existing,
   });
+  const targetSide: PositionSnapshot['side'] = input.side === 'buy' ? 'long' : 'short';
+  const sameSidePositions = positions.filter((pos) => pos.side === targetSide);
+  const nextSameSideOpenCount =
+    sameSidePositions.length +
+    (opensOrFlipsIntoSide({
+      orderNotional: orderNotionalResolved,
+      orderSide: input.side,
+      existing,
+    })
+      ? 1
+      : 0);
+  const nextSameSideNotional =
+    sameSidePositions.reduce((sum, pos) => sum + pos.notionalUsd, 0) +
+    computeSameSideNotionalContribution({
+      orderNotional: orderNotionalResolved,
+      orderSide: input.side,
+      existing,
+    });
+
+  if (maxSameSideOpenPositions != null && nextSameSideOpenCount > maxSameSideOpenPositions) {
+    return {
+      allowed: false,
+      reason:
+        `Same-side exposure cap exceeded: ${targetSide} book would have ` +
+        `${nextSameSideOpenCount} open positions vs max ${maxSameSideOpenPositions}`,
+    };
+  }
+
+  if (maxSameSideTotalNotional != null && nextSameSideNotional > maxSameSideTotalNotional) {
+    return {
+      allowed: false,
+      reason:
+        `Same-side exposure cap exceeded: ${targetSide} notional ` +
+        `$${nextSameSideNotional.toFixed(2)} exceeds max $${maxSameSideTotalNotional.toFixed(2)}`,
+    };
+  }
 
   if (maxTotalNotional != null) {
     const totalNotional = positions.reduce((sum, pos) => sum + pos.notionalUsd, 0);
