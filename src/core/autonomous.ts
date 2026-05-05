@@ -55,6 +55,7 @@ import { listEvents } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { isSuppressed } from '../memory/signal_class_suppression.js';
+import { createLearningCase } from '../memory/learning_cases.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -688,6 +689,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           predictedOutcome,
           predictedProbability: proposal.confidence,
           modelProbability: proposal.confidence,
+          learningComparable: false,
           symbol,
           domain: 'perp',
           horizonMinutes: proposal.suggestedTtlMinutes,
@@ -695,6 +697,29 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           executed: true,
           executionPrice: markPrice || undefined,
           positionSize: size,
+        });
+        createLearningCase({
+          caseType: 'comparable_forecast',
+          domain: 'perp',
+          entityType: 'symbol',
+          entityId: symbol,
+          comparable: false,
+          exclusionReason: 'missing_comparator',
+          sourcePredictionId: predictionId,
+          belief: {
+            modelProbability: proposal.confidence,
+            predictedOutcome,
+          },
+          context: {
+            horizonMinutes: proposal.suggestedTtlMinutes,
+            mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+          },
+          action: {
+            side,
+            executed: true,
+            executionPrice: markPrice || null,
+            positionSize: size,
+          },
         });
       } catch { }
 
@@ -1128,12 +1153,36 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             predictedOutcome,
             predictedProbability: confidenceWeighted,
             modelProbability: confidenceWeighted,
+            learningComparable: false,
             symbol,
             domain: 'perp',
             horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
             executed: true,
             executionPrice: markPrice || undefined,
             positionSize: size,
+          });
+          createLearningCase({
+            caseType: 'comparable_forecast',
+            domain: 'perp',
+            entityType: 'symbol',
+            entityId: symbol,
+            comparable: false,
+            exclusionReason: 'missing_comparator',
+            sourcePredictionId: predictionId,
+            belief: {
+              modelProbability: confidenceWeighted,
+              predictedOutcome,
+            },
+            context: {
+              horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
+              mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+            },
+            action: {
+              side: expr.side,
+              executed: true,
+              executionPrice: markPrice || null,
+              positionSize: size,
+            },
           });
         } catch { }
         try {
