@@ -7,6 +7,7 @@ import Database from 'better-sqlite3';
 import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
 import { countFinalPredictions, recordOutcome } from '../../src/memory/calibration.js';
 import { openDatabase } from '../../src/memory/db.js';
+import { getSignalWeights } from '../../src/memory/learning.js';
 import { createLearningCase, listLearningCases } from '../../src/memory/learning_cases.js';
 
 function useTempDb(): string {
@@ -221,5 +222,37 @@ describe('PLIL predictions — data integrity', () => {
       sourceTrack: 'comparable_forecast',
       comparableIncluded: true,
     });
+  });
+
+  it('recordOutcome updates signal weights when prediction signal scores are stored', () => {
+    const before = getSignalWeights('global');
+    const id = createPrediction({
+      marketId: 'm-signal-weights',
+      marketTitle: 'Comparable weighted learning',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.7,
+      modelProbability: 0.7,
+      marketProbability: 0.5,
+      learningComparable: true,
+      signalScores: {
+        technical: 0.9,
+        news: 0.2,
+        onChain: 0.1,
+      },
+      signalWeightsSnapshot: {
+        technical: 0.5,
+        news: 0.3,
+        onChain: 0.2,
+      },
+    });
+
+    recordOutcome({ id, outcome: 'YES', outcomeBasis: 'final', pnl: 5 });
+
+    const after = getSignalWeights('global');
+    expect(before).toBeNull();
+    expect(after).not.toBeNull();
+    expect(after!.technical).toBeGreaterThan(0.5);
+    expect(after!.news).toBeLessThan(0.3);
+    expect(after!.onChain).toBeLessThan(0.2);
   });
 });
