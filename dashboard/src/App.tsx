@@ -212,6 +212,60 @@ function PredictionAccuracyTable({
   );
 }
 
+function LearningAuditCountTable({
+  rows,
+  empty,
+}: {
+  rows: Array<{ label: string; count: number }>;
+  empty: string;
+}) {
+  return (
+    <DataTable
+      headers={['Label', 'Count']}
+      empty={empty}
+      rows={rows.map((row) => [
+        row.label,
+        <span className="mono">{numberText(row.count, 0)}</span>,
+      ])}
+    />
+  );
+}
+
+function LearningAuditPolicyTable({
+  rows,
+}: {
+  rows: Array<{
+    sourceTrack: 'comparable_forecast' | 'execution_quality' | 'combined';
+    action: 'block' | 'resize' | 'bias' | 'suppress' | 'prior_adjustment';
+    scope: string;
+    count: number;
+    blocked: boolean;
+    sizeMultiplier: number | null;
+    reason: string | null;
+    updatedAt: string | null;
+  }>;
+}) {
+  return (
+    <DataTable
+      headers={['Track', 'Action', 'Scope', 'Count', 'Multiplier', 'Reason', 'Updated']}
+      empty="No active learning-policy outputs."
+      rows={rows.map((row) => [
+        <span className={badgeClass(row.blocked ? 'bad' : row.sourceTrack === 'comparable_forecast' ? 'mixed' : 'good')}>
+          {row.sourceTrack}
+        </span>,
+        row.action,
+        row.scope,
+        <span className="mono">{numberText(row.count, 0)}</span>,
+        <span className="mono">
+          {row.sizeMultiplier == null ? '-' : numberText(row.sizeMultiplier, 2)}
+        </span>,
+        row.reason ?? '-',
+        timeText(row.updatedAt),
+      ])}
+    />
+  );
+}
+
 function ConversationThread({ thread }: { thread: ConversationThreadResponse | null }) {
   if (!thread || thread.messages.length === 0) {
     return <div className="empty-state">No messages in this thread.</div>;
@@ -419,6 +473,7 @@ export default function App() {
   const policy = payload?.sections.policyState;
   const performance = payload?.sections.performanceBreakdown;
   const predictionAccuracy = payload?.sections.predictionAccuracy;
+  const learningAudit = payload?.sections.learningAudit;
 
   return (
     <main className="app-shell">
@@ -493,10 +548,59 @@ export default function App() {
             </div>
             <PredictionAccuracyTable rows={predictionAccuracy?.global ?? []} />
           </article>
+          <article className="subpanel">
+            <h3>Learning Audit</h3>
+            <div className="subgrid">
+              <div className="subpanel">
+                <h3>Comparable Cases</h3>
+                <div className="mono">{numberText(learningAudit?.comparable.totalCaseCount, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Execution Cases</h3>
+                <div className="mono">{numberText(learningAudit?.execution.totalCaseCount, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Excluded Rows</h3>
+                <div className="mono">{numberText(learningAudit?.exclusions.totalCaseCount, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Policy Outputs</h3>
+                <div className="mono">{numberText(learningAudit?.policyOutputs.length, 0)}</div>
+              </div>
+            </div>
+            <div className="footnote">
+              Empty-safe audit surface: uses canonical learning cases when present, otherwise derives from current comparable rows, journals, and policy state.
+            </div>
+          </article>
           <article className="subpanel"><h3>By Signal Class</h3><PerfTable rows={performance?.bySignalClass ?? []} /></article>
           <article className="subpanel"><h3>By Regime</h3><PerfTable rows={performance?.byRegime ?? []} /></article>
           <article className="subpanel"><h3>By Session</h3><PerfTable rows={performance?.bySession ?? []} /></article>
           <article className="subpanel"><h3>Promotion Gates</h3><DataTable headers={['Setup', 'Samples', 'Hit Rate', 'Expectancy', 'Promoted']} empty="No promotion rows." rows={promotionRows.map((row) => [String(row.setupKey ?? '-'), <span className="mono">{numberText(Number(row.sampleCount ?? 0), 0)}</span>, <span className="mono">{percent(Number(row.hitRate ?? 0) * 100)}</span>, <span className="mono">{numberText(Number(row.expectancyR ?? 0), 3)}</span>, <span className={badgeClass(Boolean(row.promoted))}>{row.promoted ? 'yes' : 'no'}</span>])} /></article>
+          <article className="subpanel">
+            <h3>Comparable Cases by Domain</h3>
+            <LearningAuditCountTable
+              rows={(learningAudit?.comparable.byDomain ?? []).map((row) => ({ label: row.domain, count: row.count }))}
+              empty="No comparable learning cases."
+            />
+          </article>
+          <article className="subpanel">
+            <h3>Execution Cases by Domain</h3>
+            <LearningAuditCountTable
+              rows={(learningAudit?.execution.byDomain ?? []).map((row) => ({ label: row.domain, count: row.count }))}
+              empty="No execution learning cases."
+            />
+          </article>
+          <article className="subpanel">
+            <h3>Comparable Exclusions</h3>
+            <LearningAuditCountTable
+              rows={(learningAudit?.exclusions.byReason ?? []).map((row) => ({ label: row.reason, count: row.count }))}
+              empty="No comparable exclusions."
+            />
+          </article>
+          <article className="subpanel">
+            <h3>Active Policy Outputs</h3>
+            <LearningAuditPolicyTable rows={learningAudit?.policyOutputs ?? []} />
+          </article>
           {Object.entries(predictionAccuracy?.byDomain ?? {}).map(([domain, rows]) => (
             <article className="subpanel" key={domain}>
               <h3>{domain} Calibration</h3>

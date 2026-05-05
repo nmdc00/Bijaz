@@ -49,6 +49,7 @@ export type DashboardPayload = {
       drawdownCapRemainingUsd: number | null;
       tradesRemainingToday: number | null;
       updatedAt: string | null;
+      reason?: string | null;
     };
     performanceBreakdown: {
       bySignalClass: Array<Record<string, unknown>>;
@@ -81,6 +82,39 @@ export type DashboardPayload = {
         totalPnl: number | null;
       }>>;
       totalFinalPredictions: number;
+    };
+    learningAudit: {
+      comparable: {
+        totalCaseCount: number;
+        byDomain: Array<{
+          domain: string;
+          count: number;
+        }>;
+      };
+      execution: {
+        totalCaseCount: number;
+        byDomain: Array<{
+          domain: string;
+          count: number;
+        }>;
+      };
+      exclusions: {
+        totalCaseCount: number;
+        byReason: Array<{
+          reason: string;
+          count: number;
+        }>;
+      };
+      policyOutputs: Array<{
+        sourceTrack: 'comparable_forecast' | 'execution_quality' | 'combined';
+        action: 'block' | 'resize' | 'bias' | 'suppress' | 'prior_adjustment';
+        scope: string;
+        count: number;
+        blocked: boolean;
+        sizeMultiplier: number | null;
+        reason: string | null;
+        updatedAt: string | null;
+      }>;
     };
   };
 };

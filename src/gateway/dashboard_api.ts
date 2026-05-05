@@ -824,6 +824,46 @@ type PredictionAccuracySection = {
   totalFinalPredictions: number;
 };
 
+type LearningAuditDomainCount = {
+  domain: string;
+  count: number;
+};
+
+type LearningAuditExclusionCount = {
+  reason: string;
+  count: number;
+};
+
+type LearningAuditPolicyAction = 'block' | 'resize' | 'bias' | 'suppress' | 'prior_adjustment';
+type LearningAuditPolicySourceTrack = 'comparable_forecast' | 'execution_quality' | 'combined';
+
+type LearningAuditPolicyOutput = {
+  sourceTrack: LearningAuditPolicySourceTrack;
+  action: LearningAuditPolicyAction;
+  scope: string;
+  count: number;
+  blocked: boolean;
+  sizeMultiplier: number | null;
+  reason: string | null;
+  updatedAt: string | null;
+};
+
+type LearningAuditSection = {
+  comparable: {
+    totalCaseCount: number;
+    byDomain: LearningAuditDomainCount[];
+  };
+  execution: {
+    totalCaseCount: number;
+    byDomain: LearningAuditDomainCount[];
+  };
+  exclusions: {
+    totalCaseCount: number;
+    byReason: LearningAuditExclusionCount[];
+  };
+  policyOutputs: LearningAuditPolicyOutput[];
+};
+
 function buildPredictionAccuracySection(db: Database.Database): PredictionAccuracySection {
   try {
     const total = (
@@ -841,6 +881,431 @@ function buildPredictionAccuracySection(db: Database.Database): PredictionAccura
       totalFinalPredictions: 0,
     };
   }
+}
+
+function listDomainCounts(
+  db: Database.Database,
+  query: string,
+  params: ReadonlyArray<unknown> = []
+): LearningAuditDomainCount[] {
+  try {
+    const rows = db.prepare(query).all(...params) as Array<{ domain?: string | null; count?: number | null }>;
+    return rows
+      .map((row) => ({
+        domain: typeof row.domain === 'string' && row.domain.trim().length > 0 ? row.domain : 'unknown',
+        count: Number(row.count ?? 0),
+      }))
+      .filter((row) => Number.isFinite(row.count) && row.count > 0);
+  } catch {
+    return [];
+  }
+}
+
+function listExecutionFallbackRows(db: Database.Database): Array<{ domain: string; payload: Record<string, unknown> }> {
+  if (!tableExists(db, 'decision_artifacts')) {
+    return [];
+  }
+  try {
+    const rows = db
+      .prepare(
+        `
+          SELECT payload
+          FROM decision_artifacts
+          WHERE kind = 'perp_trade_journal'
+        `
+      )
+      .all() as Array<{ payload?: string | null }>;
+    const result: Array<{ domain: string; payload: Record<string, unknown> }> = [];
+    for (const row of rows) {
+      const payload = parseJson<Record<string, unknown>>(row.payload ?? null);
+      if (!payload) continue;
+      const capturedR = Number(payload.capturedR ?? payload.captured_r ?? NaN);
+      if (!Number.isFinite(capturedR)) continue;
+      const domainRaw = typeof payload.domain === 'string' ? payload.domain.trim() : '';
+      result.push({ domain: domainRaw || 'perp', payload });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+function buildFallbackExclusionCounts(db: Database.Database): LearningAuditExclusionCount[] {
+  if (!tableExists(db, 'predictions')) {
+    return [];
+  }
+  try {
+    const rows = db
+      .prepare(
+        `
+          SELECT
+            CASE
+              WHEN domain = 'perp' AND (learning_comparable = 0 OR market_probability IS NULL) THEN 'perp_without_real_comparator'
+              WHEN outcome_basis IS NOT NULL AND outcome_basis != 'final' THEN 'outcome_not_final'
+              WHEN market_probability IS NULL THEN 'missing_market_probability'
+              WHEN model_probability IS NULL THEN 'missing_model_probability'
+              WHEN outcome IS NULL THEN 'missing_outcome'
+              WHEN learning_comparable = 0 THEN 'excluded_by_flag'
+              ELSE 'excluded_unspecified'
+            END AS reason,
+            COUNT(*) AS count
+          FROM predictions
+          WHERE learning_comparable = 0
+             OR outcome_basis IS NULL
+             OR outcome_basis != 'final'
+             OR model_probability IS NULL
+             OR market_probability IS NULL
+             OR outcome IS NULL
+          GROUP BY 1
+          ORDER BY count DESC, reason ASC
+        `
+      )
+      .all() as Array<{ reason?: string | null; count?: number | null }>;
+    return rows
+      .map((row) => ({
+        reason: typeof row.reason === 'string' && row.reason.trim().length > 0 ? row.reason : 'excluded_unspecified',
+        count: Number(row.count ?? 0),
+      }))
+      .filter((row) => Number.isFinite(row.count) && row.count > 0);
+  } catch {
+    return [];
+  }
+}
+
+function deriveComparablePolicyOutputs(
+  predictionAccuracy: PredictionAccuracySection
+): LearningAuditPolicyOutput[] {
+  const outputs: LearningAuditPolicyOutput[] = [];
+  for (const [domain, rows] of Object.entries(predictionAccuracy.byDomain)) {
+    const w50 = rows.find((row) => row.windowSize === 50);
+    const w20 = rows.find((row) => row.windowSize === 20);
+    if (w50 && w50.sampleCount >= 50 && w50.brierDelta != null && w50.brierDelta < 0) {
+      outputs.push({
+        sourceTrack: 'comparable_forecast',
+        action: 'block',
+        scope: domain,
+        count: 1,
+        blocked: true,
+        sizeMultiplier: 0,
+        reason: 'domain_calibration_below_market',
+        updatedAt: null,
+      });
+      continue;
+    }
+    if (w20 && w20.sampleCount >= 20 && w20.brierDelta != null && w20.brierDelta < -0.05) {
+      outputs.push({
+        sourceTrack: 'comparable_forecast',
+        action: 'resize',
+        scope: domain,
+        count: 1,
+        blocked: false,
+        sizeMultiplier: 0.5,
+        reason: 'domain_calibration_degrading',
+        updatedAt: null,
+      });
+    }
+  }
+  return outputs;
+}
+
+function actionFromReason(reason: string | null, blocked: boolean, sizeMultiplier: number | null): LearningAuditPolicyAction {
+  const normalized = (reason ?? '').trim().toLowerCase();
+  if (blocked) return 'block';
+  if (normalized.includes('suppress') || normalized.includes('observation')) return 'suppress';
+  if (sizeMultiplier != null && sizeMultiplier < 1) return 'resize';
+  if (normalized.includes('bias')) return 'bias';
+  return 'prior_adjustment';
+}
+
+function trackFromReason(reason: string | null): LearningAuditPolicySourceTrack {
+  const normalized = (reason ?? '').trim().toLowerCase();
+  if (normalized.startsWith('domain_calibration')) return 'comparable_forecast';
+  if (normalized.startsWith('quality.segment') || normalized.startsWith('calibration.segment')) {
+    return 'execution_quality';
+  }
+  return 'combined';
+}
+
+function buildFallbackPolicyOutputs(
+  policyState: ReturnType<typeof buildPolicyStateSection>,
+  predictionAccuracy: PredictionAccuracySection
+): LearningAuditPolicyOutput[] {
+  const outputs = deriveComparablePolicyOutputs(predictionAccuracy);
+  if (policyState.observationMode) {
+    outputs.push({
+      sourceTrack: 'combined',
+      action: 'suppress',
+      scope: 'global',
+      count: 1,
+      blocked: true,
+      sizeMultiplier: null,
+      reason: policyState.reason ?? 'observation_mode_active',
+      updatedAt: policyState.updatedAt,
+    });
+  }
+  if (policyState.leverageCap != null) {
+    outputs.push({
+      sourceTrack: 'execution_quality',
+      action: 'resize',
+      scope: 'global',
+      count: 1,
+      blocked: false,
+      sizeMultiplier: null,
+      reason: 'leverage_cap_override',
+      updatedAt: policyState.updatedAt,
+    });
+  }
+  if (policyState.reason) {
+    const sourceTrack = trackFromReason(policyState.reason);
+    const action = actionFromReason(policyState.reason, policyState.observationMode, null);
+    const dedupeKey = `${sourceTrack}:${action}:${policyState.reason}`;
+    const seen = new Set(outputs.map((item) => `${item.sourceTrack}:${item.action}:${item.reason ?? ''}`));
+    if (!seen.has(dedupeKey)) {
+      outputs.push({
+        sourceTrack,
+        action,
+        scope: 'global',
+        count: 1,
+        blocked: action === 'block' || action === 'suppress',
+        sizeMultiplier: null,
+        reason: policyState.reason,
+        updatedAt: policyState.updatedAt,
+      });
+    }
+  }
+  return outputs;
+}
+
+function parseLearningCasePolicyOutput(
+  row: {
+    domain?: string | null;
+    case_type?: string | null;
+    policy_input_payload?: string | null;
+    updated_at?: string | null;
+    created_at?: string | null;
+  }
+): LearningAuditPolicyOutput | null {
+  const payload = parseJson<Record<string, unknown>>(row.policy_input_payload ?? null);
+  if (!payload) return null;
+
+  const sourceTrackRaw =
+    payload.sourceTrack ??
+    payload.source_track ??
+    (row.case_type === 'comparable_forecast' ? 'comparable_forecast' : 'execution_quality');
+  const sourceTrack =
+    sourceTrackRaw === 'comparable_forecast' ||
+    sourceTrackRaw === 'execution_quality' ||
+    sourceTrackRaw === 'combined'
+      ? sourceTrackRaw
+      : row.case_type === 'comparable_forecast'
+        ? 'comparable_forecast'
+        : 'execution_quality';
+
+  const blockedRaw = payload.blocked ?? payload.isBlocked ?? payload.suppressed ?? false;
+  const blocked = blockedRaw === true || blockedRaw === 1;
+  const sizeMultiplierRaw = Number(payload.sizeMultiplier ?? payload.size_multiplier ?? NaN);
+  const sizeMultiplier = Number.isFinite(sizeMultiplierRaw) ? sizeMultiplierRaw : null;
+  const reason =
+    typeof payload.reason === 'string' && payload.reason.trim().length > 0
+      ? payload.reason
+      : typeof payload.suppressionReason === 'string' && payload.suppressionReason.trim().length > 0
+        ? payload.suppressionReason
+        : typeof payload.suppression_reason === 'string' && payload.suppression_reason.trim().length > 0
+          ? payload.suppression_reason
+          : null;
+  const actionRaw = payload.action ?? payload.policyAction ?? payload.policy_action;
+  const action =
+    actionRaw === 'block' ||
+    actionRaw === 'resize' ||
+    actionRaw === 'bias' ||
+    actionRaw === 'suppress' ||
+    actionRaw === 'prior_adjustment'
+      ? actionRaw
+      : actionFromReason(reason, blocked, sizeMultiplier);
+
+  return {
+    sourceTrack,
+    action,
+    scope: typeof payload.scope === 'string' && payload.scope.trim().length > 0
+      ? payload.scope
+      : typeof row.domain === 'string' && row.domain.trim().length > 0
+        ? row.domain
+        : 'global',
+    count: 1,
+    blocked,
+    sizeMultiplier,
+    reason,
+    updatedAt: row.updated_at ?? row.created_at ?? null,
+  };
+}
+
+function buildLearningCasePolicyOutputs(db: Database.Database): LearningAuditPolicyOutput[] {
+  if (!tableExists(db, 'learning_cases') || !tableHasColumn(db, 'learning_cases', 'policy_input_payload')) {
+    return [];
+  }
+  try {
+    const rows = db
+      .prepare(
+        `
+          SELECT domain, case_type, policy_input_payload, updated_at, created_at
+          FROM learning_cases
+          WHERE policy_input_payload IS NOT NULL
+            AND TRIM(policy_input_payload) != ''
+          ORDER BY COALESCE(updated_at, created_at) DESC
+          LIMIT 200
+        `
+      )
+      .all() as Array<{
+        domain?: string | null;
+        case_type?: string | null;
+        policy_input_payload?: string | null;
+        updated_at?: string | null;
+        created_at?: string | null;
+      }>;
+    const aggregates = new Map<string, LearningAuditPolicyOutput>();
+    for (const row of rows) {
+      const parsed = parseLearningCasePolicyOutput(row);
+      if (!parsed) continue;
+      const key = [
+        parsed.sourceTrack,
+        parsed.action,
+        parsed.scope,
+        parsed.blocked ? '1' : '0',
+        parsed.sizeMultiplier == null ? 'null' : parsed.sizeMultiplier.toFixed(6),
+        parsed.reason ?? '',
+      ].join('|');
+      const existing = aggregates.get(key);
+      if (existing) {
+        existing.count += 1;
+        if ((parsed.updatedAt ?? '') > (existing.updatedAt ?? '')) {
+          existing.updatedAt = parsed.updatedAt;
+        }
+      } else {
+        aggregates.set(key, { ...parsed });
+      }
+    }
+    return [...aggregates.values()].sort((a, b) => {
+      const updated = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
+      if (updated !== 0) return updated;
+      return b.count - a.count;
+    });
+  } catch {
+    return [];
+  }
+}
+
+function buildLearningAuditSection(
+  db: Database.Database,
+  predictionAccuracy: PredictionAccuracySection,
+  policyState: ReturnType<typeof buildPolicyStateSection>
+): LearningAuditSection {
+  const empty: LearningAuditSection = {
+    comparable: { totalCaseCount: 0, byDomain: [] },
+    execution: { totalCaseCount: 0, byDomain: [] },
+    exclusions: { totalCaseCount: 0, byReason: [] },
+    policyOutputs: buildFallbackPolicyOutputs(policyState, predictionAccuracy),
+  };
+
+  if (tableExists(db, 'learning_cases')) {
+    const comparableByDomain = listDomainCounts(
+      db,
+      `
+        SELECT domain, COUNT(*) AS count
+        FROM learning_cases
+        WHERE case_type = 'comparable_forecast'
+          AND comparable = 1
+        GROUP BY domain
+        ORDER BY count DESC, domain ASC
+      `
+    );
+    const executionByDomain = listDomainCounts(
+      db,
+      `
+        SELECT domain, COUNT(*) AS count
+        FROM learning_cases
+        WHERE case_type = 'execution_quality'
+        GROUP BY domain
+        ORDER BY count DESC, domain ASC
+      `
+    );
+    const exclusionRows = tableHasColumn(db, 'learning_cases', 'exclusion_reason')
+      ? (() => {
+          try {
+            const rows = db
+              .prepare(
+                `
+                  SELECT COALESCE(NULLIF(TRIM(exclusion_reason), ''), 'excluded_unspecified') AS reason,
+                         COUNT(*) AS count
+                  FROM learning_cases
+                  WHERE comparable = 0
+                  GROUP BY 1
+                  ORDER BY count DESC, reason ASC
+                `
+              )
+              .all() as Array<{ reason?: string | null; count?: number | null }>;
+            return rows
+              .map((row) => ({
+                reason: typeof row.reason === 'string' && row.reason.trim().length > 0 ? row.reason : 'excluded_unspecified',
+                count: Number(row.count ?? 0),
+              }))
+              .filter((row) => Number.isFinite(row.count) && row.count > 0);
+          } catch {
+            return [] as LearningAuditExclusionCount[];
+          }
+        })()
+      : [];
+    const policyOutputs = buildLearningCasePolicyOutputs(db);
+    return {
+      comparable: {
+        totalCaseCount: comparableByDomain.reduce((sum, row) => sum + row.count, 0),
+        byDomain: comparableByDomain,
+      },
+      execution: {
+        totalCaseCount: executionByDomain.reduce((sum, row) => sum + row.count, 0),
+        byDomain: executionByDomain,
+      },
+      exclusions: {
+        totalCaseCount: exclusionRows.reduce((sum, row) => sum + row.count, 0),
+        byReason: exclusionRows,
+      },
+      policyOutputs: policyOutputs.length > 0 ? policyOutputs : empty.policyOutputs,
+    };
+  }
+
+  const comparableByDomain = listDomainCounts(
+    db,
+    `
+      SELECT COALESCE(NULLIF(TRIM(domain), ''), 'unknown') AS domain, COUNT(*) AS count
+      FROM learning_examples
+      GROUP BY domain
+      ORDER BY count DESC, domain ASC
+    `
+  );
+  const executionRows = listExecutionFallbackRows(db);
+  const executionByDomainMap = new Map<string, number>();
+  for (const row of executionRows) {
+    executionByDomainMap.set(row.domain, (executionByDomainMap.get(row.domain) ?? 0) + 1);
+  }
+  const executionByDomain = [...executionByDomainMap.entries()]
+    .map(([domain, count]) => ({ domain, count }))
+    .sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain));
+  const exclusionRows = buildFallbackExclusionCounts(db);
+
+  return {
+    comparable: {
+      totalCaseCount: comparableByDomain.reduce((sum, row) => sum + row.count, 0),
+      byDomain: comparableByDomain,
+    },
+    execution: {
+      totalCaseCount: executionRows.length,
+      byDomain: executionByDomain,
+    },
+    exclusions: {
+      totalCaseCount: exclusionRows.reduce((sum, row) => sum + row.count, 0),
+      byReason: exclusionRows,
+    },
+    policyOutputs: empty.policyOutputs,
+  };
 }
 
 type LiveWalletSnapshot = {
@@ -1747,6 +2212,7 @@ function buildPolicyStateSection(db: Database.Database): {
   drawdownCapRemainingUsd: number | null;
   tradesRemainingToday: number | null;
   updatedAt: string | null;
+  reason: string | null;
 } {
   const defaults = {
     observationMode: false,
@@ -1754,6 +2220,7 @@ function buildPolicyStateSection(db: Database.Database): {
     drawdownCapRemainingUsd: null,
     tradesRemainingToday: null,
     updatedAt: null,
+    reason: null,
   } as const;
 
   if (!tableExists(db, 'autonomy_policy_state')) {
@@ -1765,6 +2232,7 @@ function buildPolicyStateSection(db: Database.Database): {
   let drawdownCapRemainingUsdRaw: unknown = null;
   let tradesRemainingTodayRaw: unknown = null;
   let updatedAtRaw: unknown = null;
+  let reasonRaw: unknown = null;
   try {
     if (tableHasColumn(db, 'autonomy_policy_state', 'payload')) {
       const row = db
@@ -1791,6 +2259,7 @@ function buildPolicyStateSection(db: Database.Database): {
             payload.drawdown_cap_remaining_usd ??
             payload.drawdownRemainingUsd ??
             null;
+          reasonRaw = payload.reason ?? null;
           tradesRemainingTodayRaw =
             payload.tradesRemainingToday ??
             payload.trades_remaining_today ??
@@ -1905,6 +2374,7 @@ function buildPolicyStateSection(db: Database.Database): {
     drawdownCapRemainingUsd: drawdownCapRemainingUsdFinal,
     tradesRemainingToday,
     updatedAt: updatedAtRaw ? String(updatedAtRaw) : null,
+    reason: typeof reasonRaw === 'string' && reasonRaw.trim().length > 0 ? String(reasonRaw) : null,
   };
 }
 
@@ -1958,6 +2428,7 @@ export function buildDashboardApiPayload(params?: {
       drawdownCapRemainingUsd: number | null;
       tradesRemainingToday: number | null;
       updatedAt: string | null;
+      reason: string | null;
     };
     performanceBreakdown: {
       bySignalClass: unknown[];
@@ -1965,6 +2436,7 @@ export function buildDashboardApiPayload(params?: {
       bySession: unknown[];
     };
     predictionAccuracy: PredictionAccuracySection;
+    learningAudit: LearningAuditSection;
   };
 } {
   const db = params?.db ?? openDatabase();
@@ -2000,6 +2472,7 @@ export function buildDashboardApiPayload(params?: {
   const promotionGateRows = listPromotionGateRows(db, filters);
   const policyState = buildPolicyStateSection(db);
   const performanceBreakdown = listPerformanceBreakdown(db, filters);
+  const predictionAccuracy = buildPredictionAccuracySection(db);
 
   return {
     meta: {
@@ -2039,13 +2512,15 @@ export function buildDashboardApiPayload(params?: {
         drawdownCapRemainingUsd: policyState.drawdownCapRemainingUsd,
         tradesRemainingToday: policyState.tradesRemainingToday,
         updatedAt: policyState.updatedAt,
+        reason: policyState.reason,
       },
       performanceBreakdown: {
         bySignalClass: performanceBreakdown.bySignalClass,
         byRegime: performanceBreakdown.byRegime,
         bySession: performanceBreakdown.bySession,
       },
-      predictionAccuracy: buildPredictionAccuracySection(db),
+      predictionAccuracy,
+      learningAudit: buildLearningAuditSection(db, predictionAccuracy, policyState),
     },
   };
 }
