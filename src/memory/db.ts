@@ -384,3 +384,13 @@ export function openDatabase(dbPath?: string): Database.Database {
   INSTANCES.set(resolvedPath, db);
   return db;
 }
+
+export function closeDatabase(dbPath?: string): void {
+  const resolvedPath = dbPath ?? process.env.THUFIR_DB_PATH ?? DEFAULT_DB_PATH;
+  const existing = INSTANCES.get(resolvedPath);
+  if (!existing) {
+    return;
+  }
+  existing.close();
+  INSTANCES.delete(resolvedPath);
+}
