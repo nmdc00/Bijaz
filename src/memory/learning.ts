@@ -25,6 +25,12 @@ export interface LearningEventInput {
   notes?: Record<string, unknown> | null;
 }
 
+const DEFAULT_SIGNAL_WEIGHTS: SignalWeights = {
+  technical: 0.5,
+  news: 0.3,
+  onChain: 0.2,
+};
+
 function serialize(value: unknown): string | null {
   if (value == null) return null;
   try {
@@ -52,6 +58,7 @@ export function recordLearningEvent(input: LearningEventInput): number {
           prediction_id,
           market_id,
           domain,
+          resolved_at,
           predicted_outcome,
           predicted_probability,
           outcome,
@@ -69,6 +76,7 @@ export function recordLearningEvent(input: LearningEventInput): number {
           @predictionId,
           @marketId,
           @domain,
+          @resolvedAt,
           @predictedOutcome,
           @predictedProbability,
           @outcome,
@@ -89,6 +97,7 @@ export function recordLearningEvent(input: LearningEventInput): number {
       predictionId: input.predictionId ?? null,
       marketId: input.marketId,
       domain: input.domain ?? 'global',
+      resolvedAt: new Date().toISOString(),
       predictedOutcome: input.predictedOutcome ?? null,
       predictedProbability: input.predictedProbability ?? null,
       outcome: input.outcome ?? null,
@@ -103,7 +112,33 @@ export function recordLearningEvent(input: LearningEventInput): number {
       modelVersion: input.modelVersion ?? null,
       notes: serialize(input.notes ?? null),
     });
-  return Number(res.lastInsertRowid ?? 0);
+  const learningEventId = Number(res.lastInsertRowid ?? 0);
+
+  const outcome =
+    input.outcome === 'YES'
+      ? 1
+      : input.outcome === 'NO'
+        ? 0
+        : null;
+  const domain = input.domain ?? 'global';
+  const currentWeights = getSignalWeights(domain) ?? DEFAULT_SIGNAL_WEIGHTS;
+  const signalScores = input.signalScores ?? input.signalWeights ?? currentWeights;
+  if (outcome != null) {
+    const { updated, delta } = updateSignalWeights({
+      domain,
+      scores: signalScores,
+      weights: input.signalWeights ?? currentWeights,
+      outcome,
+    });
+    setSignalWeights(domain, updated);
+    recordWeightUpdate({
+      learningEventId,
+      domain,
+      delta,
+    });
+  }
+
+  return learningEventId;
 }
 
 export function getSignalWeights(domain = 'global'): SignalWeights | null {

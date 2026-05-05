@@ -58,6 +58,8 @@ function migratePredictionsForPlil(db: Database.Database): void {
     'outcome_basis',
     "outcome_basis TEXT DEFAULT 'legacy' CHECK(outcome_basis IN ('final', 'estimated', 'legacy'))"
   );
+  addColumnIfMissing('signal_scores', 'signal_scores TEXT');
+  addColumnIfMissing('signal_weights_snapshot', 'signal_weights_snapshot TEXT');
 
   if (columnNames.has('predicted_outcome')) {
     db.exec(`

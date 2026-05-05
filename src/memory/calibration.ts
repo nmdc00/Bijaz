@@ -1,7 +1,10 @@
 import { openDatabase } from './db.js';
 import { adjustCashBalance } from './portfolio.js';
 import { listTradesByPrediction } from './trades.js';
-import { recordLearningEvent } from './learning.js';
+import {
+  getSignalWeights,
+  recordLearningEvent,
+} from './learning.js';
 import { listLearningCases, updateLearningCaseOutcome } from './learning_cases.js';
 
 export interface CalibrationSummary {
@@ -18,8 +21,12 @@ interface PredictionOutcomeRow {
   domain?: string | null;
   predictedOutcome?: string;
   predictedProbability?: number | null;
+  confidenceRaw?: number | null;
+  confidenceAdjusted?: number | null;
   modelProbability?: number | null;
   marketProbability?: number | null;
+  signalScores?: string | null;
+  signalWeightsSnapshot?: string | null;
   learningComparable?: number;
   outcomeBasis?: 'final' | 'estimated' | 'legacy' | null;
   executed?: number;
@@ -110,8 +117,12 @@ export function recordOutcome(params: {
                domain,
                predicted_outcome as predictedOutcome,
                predicted_probability as predictedProbability,
+               confidence_raw as confidenceRaw,
+               confidence_adjusted as confidenceAdjusted,
                model_probability as modelProbability,
                market_probability as marketProbability,
+               signal_scores as signalScores,
+               signal_weights_snapshot as signalWeightsSnapshot,
                learning_comparable as learningComparable,
                outcome_basis as outcomeBasis,
                executed,
@@ -212,6 +223,18 @@ export function recordOutcome(params: {
   }
 
   if (prediction?.marketId) {
+    const parsedSignalScores =
+      typeof prediction.signalScores === 'string'
+        ? (JSON.parse(prediction.signalScores) as { technical?: number; news?: number; onChain?: number })
+        : null;
+    const parsedSignalWeights =
+      typeof prediction.signalWeightsSnapshot === 'string'
+        ? (JSON.parse(prediction.signalWeightsSnapshot) as {
+            technical?: number;
+            news?: number;
+            onChain?: number;
+          })
+        : null;
     recordLearningEvent({
       predictionId: params.id,
       marketId: prediction.marketId,
@@ -221,6 +244,30 @@ export function recordOutcome(params: {
       outcome: params.outcome,
       brier,
       pnl,
+      confidenceRaw: prediction.confidenceRaw ?? null,
+      confidenceAdjusted: prediction.confidenceAdjusted ?? null,
+      signalScores:
+        parsedSignalScores &&
+        Number.isFinite(Number(parsedSignalScores.technical)) &&
+        Number.isFinite(Number(parsedSignalScores.news)) &&
+        Number.isFinite(Number(parsedSignalScores.onChain))
+          ? {
+              technical: Number(parsedSignalScores.technical),
+              news: Number(parsedSignalScores.news),
+              onChain: Number(parsedSignalScores.onChain),
+            }
+          : null,
+      signalWeights:
+        parsedSignalWeights &&
+        Number.isFinite(Number(parsedSignalWeights.technical)) &&
+        Number.isFinite(Number(parsedSignalWeights.news)) &&
+        Number.isFinite(Number(parsedSignalWeights.onChain))
+          ? {
+              technical: Number(parsedSignalWeights.technical),
+              news: Number(parsedSignalWeights.news),
+              onChain: Number(parsedSignalWeights.onChain),
+            }
+          : getSignalWeights(prediction.domain ?? 'global'),
       notes: {
         comparable: Boolean(prediction.learningComparable),
         marketProbability: prediction.marketProbability ?? null,
