@@ -28,6 +28,7 @@ import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_tr
 import { findOpenPerpPrediction, findOpenPerpPredictionById } from '../memory/predictions.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { storeDecisionArtifact } from '../memory/decision_artifacts.js';
+import { createLearningCase } from '../memory/learning_cases.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
 import {
@@ -61,6 +62,10 @@ import {
   getPositionExitPolicy,
   upsertPositionExitPolicy,
 } from '../memory/position_exit_policy.js';
+import {
+  buildPerpExecutionLearningCase,
+  toPerpExecutionLearningCaseInput,
+} from './perp_lifecycle.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -620,6 +625,28 @@ function persistPerpTradeEvidence(params: {
     confidence: params.confidence,
     payload: params.snapshot,
     notes: { signalClass: params.signalClass },
+  });
+}
+
+function persistExecutionLearningCase(params: {
+  symbol: string;
+  fingerprint: string;
+  learningCase: ReturnType<typeof buildPerpExecutionLearningCase>;
+  signalClass: string | null;
+}): void {
+  createLearningCase(toPerpExecutionLearningCaseInput(params.learningCase));
+  storeDecisionArtifact({
+    source: 'perps',
+    kind: 'execution_learning_case',
+    marketId: params.symbol,
+    fingerprint: params.fingerprint,
+    outcome: 'executed',
+    payload: params.learningCase,
+    notes: {
+      signalClass: params.signalClass,
+      track: 'execution_quality',
+      persistence: 'decision_artifacts_compat',
+    },
   });
 }
 
@@ -2405,6 +2432,8 @@ export async function executeToolCall(
           isNativePaperExecutor,
           paperInitialCashUsdc,
         });
+        const closedPositionCompletely =
+          reduceOnly && positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0);
         let lifecycleTradeId: number | null = null;
         try {
           lifecycleTradeId = await resolvePerpLifecycleTradeId({
@@ -2468,6 +2497,18 @@ export async function executeToolCall(
             });
           }
         }
+        const closeSummary =
+          closedPositionCompletely
+            ? await resolvePerpCloseSummary({
+                ctx,
+                mode: bookMode,
+                symbol,
+                predictionCreatedAt:
+                  typeof closeReference?.snapshot?.createdAtIso === 'string'
+                    ? closeReference.snapshot.createdAtIso
+                    : new Date(executionStartMs).toISOString(),
+              })
+            : null;
         const executedEvidenceFingerprint =
           lifecycleTradeId != null && lifecycleTradeId > 0
             ? `perp:${lifecycleTradeId}`
@@ -2580,6 +2621,57 @@ export async function executeToolCall(
             signalClass: effectiveSignalClass,
             confidence: 0.5,
           });
+          if (closedPositionCompletely) {
+            const learningCase = buildPerpExecutionLearningCase({
+              symbol,
+              executionMode: bookMode,
+              tradeId: lifecycleTradeId,
+              hypothesisId,
+              capturedAtMs: executionStartMs,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              signalClass: effectiveSignalClass ?? closeReference?.signalClass ?? null,
+              marketRegime: marketRegime ?? closeReference?.marketRegime ?? null,
+              volatilityBucket: volatilityBucket ?? closeReference?.volatilityBucket ?? null,
+              liquidityBucket: liquidityBucket ?? closeReference?.liquidityBucket ?? null,
+              tradeArchetype: tradeArchetype ?? closeReference?.tradeArchetype ?? null,
+              entryTrigger: entryTrigger ?? closeReference?.entryTrigger ?? null,
+              expectedEdge: expectedEdge ?? closeReference?.expectedEdge ?? null,
+              invalidationPrice: invalidationPrice ?? closeReference?.invalidationPrice ?? null,
+              timeStopAtMs: timeStopAtMs ?? closeReference?.timeStopAtMs ?? null,
+              entryPrice:
+                closeEntryPriceOverride ?? closeReference?.markPrice ?? market.markPrice ?? null,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              realizedPnlUsd: closeSummary?.realizedPnlUsd ?? null,
+              netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
+              realizedFeeUsd: closeSummary?.feeUsd ?? realizedFee.realized_fee_usd ?? null,
+              directionScore: componentScores?.directionScore ?? null,
+              timingScore: componentScores?.timingScore ?? null,
+              sizingScore: componentScores?.sizingScore ?? null,
+              exitScore: componentScores?.exitScore ?? null,
+              capturedR: componentScores?.capturedR ?? null,
+              leftOnTableR: componentScores?.leftOnTableR ?? null,
+              wouldHit2R: componentScores?.wouldHit2R ?? null,
+              wouldHit3R: componentScores?.wouldHit3R ?? null,
+              maeProxy: null,
+              mfeProxy: null,
+              reasoning: policyReasoning,
+              planContext: planContext ?? closeReference?.planContext ?? null,
+              snapshot: executedSnapshot,
+            });
+            persistExecutionLearningCase({
+              symbol,
+              fingerprint: `${executedEvidenceFingerprint}:execution_quality`,
+              learningCase,
+              signalClass: effectiveSignalClass,
+            });
+          }
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
         }
@@ -2635,7 +2727,7 @@ export async function executeToolCall(
         } catch {
           // Best-effort resolution: never block trading on prediction write failures.
         }
-        if (reduceOnly && positionBefore != null && (positionAfter == null || (positionAfter.size ?? 0) === 0)) {
+        if (closedPositionCompletely) {
           // Reduce-only that fully closed the position: clear the policy after best-effort finalization.
           try { clearPositionExitPolicy(symbol); } catch { }
         }
