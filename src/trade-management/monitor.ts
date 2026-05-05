@@ -147,13 +147,13 @@ export class TradeMonitor {
         liqDistBps != null &&
         liqDistBps <= (tm.liquidationGuardDistanceBps ?? 800)
       ) {
-        await this.flattenPosition(pos);
+        await this.flattenPosition(pos, 'risk_reduction');
         deleteTradeManagementState(pos.symbol);
       }
 
       const now = Date.now();
       if (Date.parse(state.expiresAt) <= now) {
-        await this.flattenPosition(pos);
+        await this.flattenPosition(pos, 'time_exit');
         deleteTradeManagementState(pos.symbol);
       }
     }
@@ -237,12 +237,22 @@ export class TradeMonitor {
     }
   }
 
-  private async flattenPosition(pos: PositionToolRow): Promise<void> {
+  private async flattenPosition(
+    pos: PositionToolRow,
+    exitMode: 'risk_reduction' | 'time_exit'
+  ): Promise<void> {
     const side = pos.side === 'long' ? 'sell' : 'buy';
     try {
       await this.toolExec(
         'perp_place_order',
-        { symbol: pos.symbol, side, size: pos.size, reduce_only: true, order_type: 'market' },
+        {
+          symbol: pos.symbol,
+          side,
+          size: pos.size,
+          reduce_only: true,
+          order_type: 'market',
+          exit_mode: exitMode,
+        },
         this.toolContext
       );
     } catch (error) {
