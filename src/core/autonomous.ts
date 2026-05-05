@@ -54,6 +54,7 @@ import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { listEvents } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
+import type { ToolExecutorContext } from './tool-executor.js';
 import { isSuppressed } from '../memory/signal_class_suppression.js';
 import { createLearningCase } from '../memory/learning_cases.js';
 
@@ -190,7 +191,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private originator: LlmTradeOriginator;
   private lastFiredMs = 0;
   private symbolCooldownMap = new Map<string, number>();
-  private marketContextCache: { value: string; expiresAt: number } | null = null;
+  private marketContextCache: { key: string; value: string; expiresAt: number } | null = null;
+  private toolContext?: ToolExecutorContext;
 
   constructor(
     llm: LlmClient,
@@ -200,7 +202,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     limiter: DbSpendingLimitEnforcer,
     thufirConfig: ThufirConfig,
     logger?: Logger,
-    notify?: (message: string) => Promise<void>
+    notify?: (message: string) => Promise<void>,
+    toolContext?: ToolExecutorContext
   ) {
     super();
     this.llm = llm;
@@ -211,6 +214,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     this.thufirConfig = thufirConfig;
     this.logger = logger ?? new Logger('info');
     this.notify = notify;
+    this.toolContext = toolContext;
     this.schedulerNamespace = this.buildSchedulerNamespace();
     this.startedAtMs = Date.now();
     this.entryGate = new LlmEntryGate(
@@ -223,7 +227,12 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     this.taSurface = new TaSurface(this.thufirConfig);
     this.originationTrigger = new OriginationTrigger(this.thufirConfig);
-    this.originator = new LlmTradeOriginator(this.llm, this.fallbackLlm, this.thufirConfig);
+    this.originator = new LlmTradeOriginator(
+      this.llm,
+      this.fallbackLlm,
+      this.thufirConfig,
+      this.toolContext
+    );
 
     // Load autonomous config with defaults
     this.config = {
@@ -400,16 +409,39 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     return this.runDiscoveryScan(scanInput);
   }
 
-  private async getMarketContextCached(): Promise<string> {
+  private async getMarketContextCached(signalSymbols: string[] = []): Promise<string> {
     const now = Date.now();
-    if (this.marketContextCache && this.marketContextCache.expiresAt > now) {
+    const normalizedSymbols = signalSymbols
+      .map((symbol) => String(symbol ?? '').trim().toUpperCase())
+      .filter(Boolean)
+      .slice(0, 3);
+    const cacheKey = normalizedSymbols.join(',') || 'default';
+    if (
+      this.marketContextCache &&
+      this.marketContextCache.key === cacheKey &&
+      this.marketContextCache.expiresAt > now
+    ) {
       return this.marketContextCache.value;
     }
     try {
       const { gatherMarketContext } = await import('../markets/context.js');
+      const executeTool = this.toolContext
+        ? async (toolName: string, input: Record<string, unknown>) => {
+            const { executeToolCall } = await import('./tool-executor.js');
+            return executeToolCall(toolName, input, this.toolContext as ToolExecutorContext);
+          }
+        : async () => ({ success: false as const, error: 'no tool executor' });
       const snapshot = await gatherMarketContext(
-        { message: 'crypto perpetual markets overview', domain: 'crypto', marketLimit: 20 },
-        async () => ({ success: false as const, error: 'no tool executor' })
+        {
+          message:
+            normalizedSymbols.length > 0
+              ? `crypto perpetual markets overview for ${normalizedSymbols.join(', ')}`
+              : 'crypto perpetual markets overview',
+          domain: 'crypto',
+          marketLimit: 20,
+          signalSymbols: normalizedSymbols,
+        },
+        executeTool
       );
       const successful = snapshot.results.filter((r: any) => r.success);
       const value = successful
@@ -419,7 +451,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         })
         .join('\n')
         .slice(0, 1000);
-      this.marketContextCache = { value, expiresAt: now + 10 * 60 * 1000 };
+      this.marketContextCache = {
+        key: cacheKey,
+        value,
+        expiresAt: now + 10 * 60 * 1000,
+      };
       return value;
     } catch {
       return '';
@@ -495,7 +531,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             .slice(0, 500);
 
     // Fetch market context (10-min cached)
-    const marketContext = await this.getMarketContextCached();
+    const marketContext = await this.getMarketContextCached(topMarkets);
 
     if (isSuppressed('llm_originator')) {
       this.logger.info('Originator skipped: signal class llm_originator is currently suppressed.');
