@@ -251,7 +251,7 @@ describe('dashboard api payload', () => {
     const db = openDatabase(dbPath);
 
     db.exec(`
-      CREATE TABLE learning_cases (
+      CREATE TABLE IF NOT EXISTS learning_cases (
         id TEXT PRIMARY KEY,
         case_type TEXT NOT NULL,
         domain TEXT NOT NULL,
@@ -274,6 +274,7 @@ describe('dashboard api payload', () => {
         updated_at TEXT
       );
     `);
+    db.exec(`DELETE FROM learning_cases;`);
 
     db.prepare(
       `
