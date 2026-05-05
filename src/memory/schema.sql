@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     confidence_level TEXT CHECK(confidence_level IN ('low', 'medium', 'high')),
     confidence_raw REAL,
     confidence_adjusted REAL,
+    signal_scores TEXT,
+    signal_weights_snapshot TEXT,
 
     -- Execution details
     executed INTEGER DEFAULT 0,
