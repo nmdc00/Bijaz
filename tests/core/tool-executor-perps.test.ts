@@ -8,6 +8,7 @@ import { executeToolCall } from '../../src/core/tool-executor.js';
 import { HyperliquidClient } from '../../src/execution/hyperliquid/client.js';
 import { PaperExecutor } from '../../src/execution/modes/paper.js';
 import { countFinalPredictions } from '../../src/memory/calibration.js';
+import { openDatabase } from '../../src/memory/db.js';
 import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
 
 describe('tool-executor perps', () => {
@@ -445,6 +446,53 @@ describe('tool-executor perps', () => {
     expect(String(res.error)).toMatch(/notional/i);
   });
 
+  it('perp_place_order blocks same-side live clustering beyond configured caps', async () => {
+    vi.spyOn(HyperliquidClient.prototype, 'getAllMids').mockResolvedValue({
+      BTC: 81000,
+      ETH: 2350,
+      SOL: 85,
+    } as any);
+    vi.spyOn(HyperliquidClient.prototype, 'getClearinghouseState').mockResolvedValue({
+      assetPositions: [
+        { position: { coin: 'BTC', szi: '-0.0015', positionValue: '121.5' } },
+        { position: { coin: 'ETH', szi: '-0.04', positionValue: '94' } },
+      ],
+    } as any);
+    const executor = {
+      execute: async () => ({ executed: true, message: 'ok' }),
+      getOpenOrders: async () => [],
+      cancelOrder: async () => {},
+    };
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+
+    const res = await executeToolCall(
+      'perp_place_order',
+      { symbol: 'SOL', side: 'sell', size: 1, mode: 'live' },
+      {
+        config: {
+          execution: { provider: 'hyperliquid', mode: 'live' },
+          wallet: {
+            perps: {
+              sameSideExposureCaps: {
+                maxOpenPositions: 2,
+                maxTotalNotionalUsd: 200,
+              },
+            },
+          },
+        } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(res.success).toBe(false);
+    expect(String((res as any).error)).toMatch(/Same-side exposure cap exceeded/i);
+  });
+
   it('perp_place_order allows reduce-only even if spending limiter blocks', async () => {
     const executor = {
       execute: async () => ({ executed: true, message: 'ok' }),
@@ -493,6 +541,55 @@ describe('tool-executor perps', () => {
       { config: { execution: { provider: 'hyperliquid' } } as any, marketClient, executor, limiter }
     );
     expect(res.success).toBe(true);
+  });
+
+  it('persists an executed trade snapshot artifact with segment context', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+
+    currentMarkPrice = 50000;
+    const openRes = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTCSNAP',
+        side: 'buy',
+        size: 0.01,
+        mode: 'paper',
+        signal_class: 'mean_reversion',
+        market_regime: 'trending',
+        volatility_bucket: 'high',
+        liquidity_bucket: 'deep',
+        expected_edge: 0.08,
+        entry_trigger: 'technical',
+        invalidation_price: 49000,
+        time_stop_at_ms: Date.now() + 3600000,
+        plan_context: { setupKey: 'perp:mean_reversion' },
+      },
+      {
+        config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+        marketClient,
+        executor,
+        limiter,
+      }
+    );
+    expect(openRes.success).toBe(true);
+
+    const db = openDatabase();
+    const row = db.prepare(
+      `SELECT payload FROM decision_artifacts WHERE kind = 'perp_trade_snapshot' AND market_id = 'BTCSNAP' ORDER BY id DESC LIMIT 1`
+    ).get() as { payload?: string } | undefined;
+    expect(row?.payload).toBeTruthy();
+    const payload = JSON.parse(String(row?.payload ?? '{}')) as Record<string, unknown>;
+    expect(payload.signalClass).toBe('mean_reversion');
+    expect(payload.marketRegime).toBe('trending');
+    expect(payload.volatilityBucket).toBe('high');
+    expect(payload.liquidityBucket).toBe('deep');
+    expect(payload.planContext).toEqual({ setupKey: 'perp:mean_reversion' });
+    expect(typeof payload.createdAtMs).toBe('number');
   });
 
   it('blocks reduce-only when no live position exists', async () => {
