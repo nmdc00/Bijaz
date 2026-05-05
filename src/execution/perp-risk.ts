@@ -24,6 +24,7 @@ type PerpRiskCheckInput = {
   markPrice?: number | null;
   notionalUsd?: number;
   marketMaxLeverage?: number | null;
+  enforceAutonomousDefaults?: boolean;
 };
 
 type PositionSnapshot = {
@@ -32,6 +33,13 @@ type PositionSnapshot = {
   size: number;
   notionalUsd: number;
   liquidationPrice?: number | null;
+};
+
+type ClearinghouseStateSnapshot = {
+  assetPositions?: Array<{ position?: Record<string, unknown> }>;
+  marginSummary?: Record<string, unknown>;
+  crossMarginSummary?: Record<string, unknown>;
+  withdrawable?: string | number;
 };
 
 type PerpRiskCheckResult = {
@@ -55,12 +63,9 @@ const resolveMid = (mids: Record<string, number>, symbol: string): number | null
 };
 
 async function fetchPositions(
-  client: HyperliquidClient,
+  state: ClearinghouseStateSnapshot,
   mids: Record<string, number>
 ): Promise<PositionSnapshot[]> {
-  const state = (await client.getClearinghouseState()) as {
-    assetPositions?: Array<{ position?: Record<string, unknown> }>;
-  };
   const positions = (state.assetPositions ?? [])
     .map((entry) => entry?.position ?? {})
     .map((position) => {
@@ -87,6 +92,22 @@ async function fetchPositions(
     .filter((position): position is NonNullable<typeof position> => Boolean(position));
 
   return positions;
+}
+
+function resolveAccountValueUsd(state: ClearinghouseStateSnapshot): number | null {
+  const crossValue = toFiniteNumber((state.crossMarginSummary as { accountValue?: unknown } | undefined)?.accountValue);
+  if (crossValue != null && crossValue > 0) {
+    return crossValue;
+  }
+  const marginValue = toFiniteNumber((state.marginSummary as { accountValue?: unknown } | undefined)?.accountValue);
+  if (marginValue != null && marginValue > 0) {
+    return marginValue;
+  }
+  const withdrawable = toFiniteNumber(state.withdrawable);
+  if (withdrawable != null && withdrawable > 0) {
+    return withdrawable;
+  }
+  return null;
 }
 
 function computeDeltaNotional(params: {
@@ -182,18 +203,19 @@ export async function checkPerpRiskLimits(
   }
 
   const maxOrderNotional = toFiniteNumber(limits.maxOrderNotionalUsd);
-  const maxTotalNotional = toFiniteNumber(limits.maxTotalNotionalUsd);
+  const maxTotalNotionalConfigured = toFiniteNumber(limits.maxTotalNotionalUsd);
   const minLiqDistanceBps = toFiniteNumber(limits.minLiquidationDistanceBps);
   const sameSideExposureCaps = (limits.sameSideExposureCaps ?? {}) as PerpSameSideExposureCaps;
-  const maxSameSideOpenPositions = toFiniteNumber(sameSideExposureCaps.maxOpenPositions);
-  const maxSameSideTotalNotional = toFiniteNumber(sameSideExposureCaps.maxTotalNotionalUsd);
+  const maxSameSideOpenPositionsConfigured = toFiniteNumber(sameSideExposureCaps.maxOpenPositions);
+  const maxSameSideTotalNotionalConfigured = toFiniteNumber(sameSideExposureCaps.maxTotalNotionalUsd);
   const correlationCaps = Array.isArray(limits.correlationCaps)
     ? (limits.correlationCaps as PerpCorrelationCap[])
     : [];
+  const useAutonomousDefaults = input.enforceAutonomousDefaults === true;
 
   const needsPrice =
     maxOrderNotional != null ||
-    maxTotalNotional != null ||
+    maxTotalNotionalConfigured != null ||
     minLiqDistanceBps != null ||
     correlationCaps.length > 0;
 
@@ -222,26 +244,47 @@ export async function checkPerpRiskLimits(
   }
 
   const needsPositions =
-    maxTotalNotional != null ||
+    maxTotalNotionalConfigured != null ||
     minLiqDistanceBps != null ||
     correlationCaps.length > 0 ||
-    maxSameSideOpenPositions != null ||
-    maxSameSideTotalNotional != null;
+    maxSameSideOpenPositionsConfigured != null ||
+    maxSameSideTotalNotionalConfigured != null ||
+    useAutonomousDefaults;
 
   if (!needsPositions) {
     return { allowed: true };
   }
 
   let positions: PositionSnapshot[] = [];
+  let state: ClearinghouseStateSnapshot | null = null;
+  let maxTotalNotional = maxTotalNotionalConfigured;
+  let maxSameSideOpenPositions = maxSameSideOpenPositionsConfigured;
+  let maxSameSideTotalNotional = maxSameSideTotalNotionalConfigured;
   if (needsPositions) {
     try {
       const client = new HyperliquidClient(input.config);
       if (Object.keys(mids).length === 0) {
         mids = await client.getAllMids();
       }
-      positions = await fetchPositions(client, mids);
+      state = (await client.getClearinghouseState()) as ClearinghouseStateSnapshot;
+      positions = await fetchPositions(state, mids);
     } catch {
       return { allowed: true };
+    }
+  }
+
+  if (useAutonomousDefaults) {
+    const accountValueUsd = state ? resolveAccountValueUsd(state) : null;
+    if (maxSameSideOpenPositions == null) {
+      maxSameSideOpenPositions = 3;
+    }
+    if (accountValueUsd != null && accountValueUsd > 0) {
+      if (maxTotalNotional == null) {
+        maxTotalNotional = Math.max(50, accountValueUsd * 2);
+      }
+      if (maxSameSideTotalNotional == null) {
+        maxSameSideTotalNotional = Math.max(25, accountValueUsd * 1.25);
+      }
     }
   }
 
