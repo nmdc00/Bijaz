@@ -108,6 +108,51 @@ WHERE outcome_basis     = 'final'
   AND outcome            IS NOT NULL;
 
 -- ============================================================================
+-- Canonical Learning Cases
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS learning_cases (
+    id TEXT PRIMARY KEY,
+    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality')),
+    domain TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    comparable INTEGER NOT NULL CHECK(comparable IN (0, 1)),
+    comparator_kind TEXT,
+    source_prediction_id TEXT,
+    source_trade_id INTEGER,
+    source_artifact_id INTEGER,
+    belief_payload TEXT,
+    baseline_payload TEXT,
+    context_payload TEXT,
+    action_payload TEXT,
+    outcome_payload TEXT,
+    quality_payload TEXT,
+    policy_input_payload TEXT,
+    exclusion_reason TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_cases_type ON learning_cases(case_type);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_domain ON learning_cases(domain);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_comparable ON learning_cases(comparable);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_prediction ON learning_cases(source_prediction_id);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_trade ON learning_cases(source_trade_id);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_entity ON learning_cases(entity_type, entity_id);
+
+CREATE VIEW IF NOT EXISTS comparable_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'comparable_forecast'
+  AND comparable = 1;
+
+CREATE VIEW IF NOT EXISTS execution_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'execution_quality';
+
+-- ============================================================================
 -- Calibration Cache
 -- ============================================================================
 
