@@ -1142,6 +1142,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         session: sessionContext.session,
         entryReasoning: expr.expectedMove ?? '',
       };
+      let gateStopLevelPrice: number | null = null;
       if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
         const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
         if (gateDecision.verdict === 'reject') {
@@ -1149,6 +1150,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           this.limiter.release(probeUsd);
           continue;
         }
+        gateStopLevelPrice = gateDecision.stopLevelPrice ?? null;
         if (gateDecision.verdict === 'resize' && gateDecision.adjustedSizeUsd) {
           probeUsd = gateDecision.adjustedSizeUsd;
           size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
@@ -1245,7 +1247,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             symbol,
             side,
             timeStopAtMs,
-            null,
+            gateStopLevelPrice,
             serializeExitContract(exitContract),
             predictionId
           );
