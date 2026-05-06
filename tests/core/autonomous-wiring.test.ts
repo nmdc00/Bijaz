@@ -189,6 +189,7 @@ vi.mock('../../src/core/position_book.js', () => {
     get: vi.fn(() => undefined),
     hasPosition: vi.fn(() => false),
     hasConflict: vi.fn(() => false),
+    findOppositeSideLosers: vi.fn(() => []),
   };
   const PositionBook = {
     _instance: bookInstance,

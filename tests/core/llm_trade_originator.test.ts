@@ -482,6 +482,8 @@ describe('LlmTradeOriginator', () => {
           side: 'long' as const,
           size: 1.5,
           entryPrice: 2500,
+          currentMarkPrice: null,
+          unrealizedPnlUsd: null,
           entryReasoningText: 'Momentum thesis',
           thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
           exitContract: null,
