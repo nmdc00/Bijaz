@@ -115,10 +115,17 @@ vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeApproveLlm() {
+function makeApproveLlm(overrides?: Partial<{ stopLevelPrice: number | null; suggestedLeverage: number }>) {
   return {
     complete: vi.fn(async () => ({
-      content: JSON.stringify({ verdict: 'approve', reasoning: 'ok' , stopLevelPrice: null, equityAtRiskPct: 2.5, targetRR: 2.0 }),
+      content: JSON.stringify({
+        verdict: 'approve',
+        reasoning: 'ok',
+        stopLevelPrice: overrides?.stopLevelPrice ?? null,
+        equityAtRiskPct: 2.5,
+        targetRR: 2.0,
+        ...(overrides?.suggestedLeverage != null ? { suggestedLeverage: overrides.suggestedLeverage } : {}),
+      }),
       model: 'test',
     })),
   } as any;
@@ -207,6 +214,24 @@ describe('autonomous exit policy — writes exit policy after execution', () => 
     const expectedMax = afterMs + 120 * 60_000 + 10_000;
     expect(timeStopAtMs).toBeGreaterThanOrEqual(expectedMin);
     expect(timeStopAtMs).toBeLessThanOrEqual(expectedMax);
+  });
+
+  it('persists the discovery gate stop level as invalidationPrice when provided', async () => {
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const executor = {
+      execute: vi.fn(async () => ({ executed: true, message: 'paper ok' })),
+    } as any;
+    const marketClient = {
+      getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
+    } as any;
+
+    const llm = makeApproveLlm({ stopLevelPrice: 68450 });
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, makeLimiter(), baseConfig);
+    await manager.runScan();
+
+    expect(upsertExitPolicy).toHaveBeenCalledOnce();
+    const [, , , invalidationPrice] = upsertExitPolicy.mock.calls[0]!;
+    expect(invalidationPrice).toBe(68450);
   });
 
   it('does not write exit policy when trade fails to execute', async () => {

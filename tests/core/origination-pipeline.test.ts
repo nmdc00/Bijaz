@@ -56,9 +56,35 @@ vi.mock('../../src/markets/context.js', () => ({
 }));
 
 const mockRecordEntryGateDecision = vi.fn();
+const mockListPerpTradeJournals = vi.fn(() => []);
+const mockSummarizeSignalPerformance = vi.fn(() => ({
+  signalClass: 'momentum_breakout',
+  sampleCount: 0,
+  wins: 0,
+  losses: 0,
+  thesisCorrectRate: 0,
+  expectancy: 0,
+  variance: 0,
+  sharpeLike: 0,
+  maeProxy: 0,
+  mfeProxy: 0,
+}));
+const mockComputeRollingWindowMetrics = vi.fn(() => []);
 
 vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
   recordEntryGateDecision: (...args: unknown[]) => mockRecordEntryGateDecision(...args),
+}));
+
+vi.mock('../../src/memory/perp_trade_journal.js', () => ({
+  listPerpTradeJournals: (...args: unknown[]) => mockListPerpTradeJournals(...args),
+}));
+
+vi.mock('../../src/core/signal_performance.js', () => ({
+  summarizeSignalPerformance: (...args: unknown[]) => mockSummarizeSignalPerformance(...args),
+}));
+
+vi.mock('../../src/memory/learning_metrics.js', () => ({
+  computeRollingWindowMetrics: (...args: unknown[]) => mockComputeRollingWindowMetrics(...args),
 }));
 
 // ── Imports after mocks ────────────────────────────────────────────────────────
@@ -114,11 +140,13 @@ function makeBundle(overrides?: Partial<OriginationInputBundle>): OriginationInp
 function makeBook(opts?: {
   hasConflict?: boolean;
   hasPosition?: boolean;
+  oppositeSideLosers?: Array<{ symbol: string; side: 'long' | 'short'; unrealizedPnlUsd: number }>;
   entries?: BookEntry[];
 }): PositionBook {
   return {
     hasConflict: vi.fn().mockReturnValue(opts?.hasConflict ?? false),
     hasPosition: vi.fn().mockReturnValue(opts?.hasPosition ?? false),
+    findOppositeSideLosers: vi.fn().mockReturnValue(opts?.oppositeSideLosers ?? []),
     getAll: vi.fn().mockReturnValue(opts?.entries ?? []),
     get: vi.fn(),
     refresh: vi.fn(),

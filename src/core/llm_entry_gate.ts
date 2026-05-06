@@ -291,6 +291,34 @@ export class LlmEntryGate {
       return decision;
     }
 
+    const oppositeSideLosers = this.book.findOppositeSideLosers(candidate.side);
+    if (oppositeSideLosers.length > 0) {
+      const loserSummary = oppositeSideLosers
+        .slice(0, 3)
+        .map((entry) => `${entry.symbol} ${entry.side} (${entry.unrealizedPnlUsd.toFixed(2)} USD)`)
+        .join(', ');
+      const decision: EntryGateDecision = {
+        verdict: 'reject',
+        reasoning:
+          `Opposite-side losers already open in the book (${loserSummary}). ` +
+          'Resolve or reduce incompatible losing positions before expanding exposure in the other direction.',
+      };
+      recordEntryGateDecision({
+        symbol: candidate.symbol,
+        side: candidate.side,
+        notionalUsd: candidate.notionalUsd,
+        verdict: decision.verdict,
+        reasoning: decision.reasoning,
+        adjustedSizeUsd: undefined,
+        usedFallback: false,
+        signalClass: candidate.signalClass,
+        regime: candidate.regime,
+        session: candidate.session,
+        edge: candidate.edge,
+      });
+      return decision;
+    }
+
     // Reject originator proposals that didn't name a price invalidation level
     if ('invalidationPrice' in candidate && (candidate.invalidationPrice == null || !Number.isFinite(candidate.invalidationPrice))) {
       const decision: EntryGateDecision = {

@@ -15,10 +15,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockListPaperPerpPositions = vi.fn();
+const mockListPaperPerpPositionsWithMark = vi.fn();
 const mockGetPositionExitPolicy = vi.fn();
 
 vi.mock('../../src/memory/paper_perps.js', () => ({
   listPaperPerpPositions: (...args: unknown[]) => mockListPaperPerpPositions(...args),
+  listPaperPerpPositionsWithMark: (...args: unknown[]) => mockListPaperPerpPositionsWithMark(...args),
 }));
 
 vi.mock('../../src/memory/position_exit_policy.js', () => ({
@@ -51,6 +53,7 @@ describe('PositionBook', () => {
     vi.clearAllMocks();
     resetSingleton();
     mockListPaperPerpPositions.mockReturnValue([]);
+    mockListPaperPerpPositionsWithMark.mockReturnValue([]);
     mockGetPositionExitPolicy.mockReturnValue(null);
   });
 
@@ -251,6 +254,94 @@ describe('PositionBook', () => {
       const a = PositionBook.getInstance();
       const b = PositionBook.getInstance();
       expect(a).toBe(b);
+    });
+
+    it('enriches entries with mark and unrealized pnl when available', async () => {
+      mockListPaperPerpPositions.mockReturnValue([
+        { symbol: 'BTC', side: 'long', size: 0.1, entryPrice: 50000 },
+      ]);
+      mockListPaperPerpPositionsWithMark.mockReturnValue([
+        {
+          symbol: 'BTC',
+          side: 'long',
+          size: 0.1,
+          entryPrice: 50000,
+          leverage: 2,
+          openedAt: '2026-05-06T00:00:00Z',
+          updatedAt: '2026-05-06T00:00:00Z',
+          currentMarkPrice: 49750,
+          unrealizedPnlUsd: -25,
+          returnOnEquityPct: -0.5,
+          liquidationPrice: 25000,
+        },
+      ]);
+
+      const book = PositionBook.getInstance();
+      await book.refresh();
+
+      const btc = book.get('BTC')!;
+      expect(btc.currentMarkPrice).toBe(49750);
+      expect(btc.unrealizedPnlUsd).toBe(-25);
+    });
+  });
+
+  describe('findOppositeSideLosers()', () => {
+    it('returns losing positions on the opposite side only', async () => {
+      mockListPaperPerpPositions.mockReturnValue([
+        { symbol: 'TON', side: 'long', size: 1, entryPrice: 2 },
+        { symbol: 'ETH', side: 'short', size: 1, entryPrice: 2400 },
+        { symbol: 'SOL', side: 'long', size: 1, entryPrice: 90 },
+      ]);
+      mockListPaperPerpPositionsWithMark.mockReturnValue([
+        {
+          symbol: 'TON',
+          side: 'long',
+          size: 1,
+          entryPrice: 2,
+          leverage: 2,
+          openedAt: '2026-05-06T00:00:00Z',
+          updatedAt: '2026-05-06T00:00:00Z',
+          currentMarkPrice: 1.2,
+          unrealizedPnlUsd: -0.8,
+          returnOnEquityPct: -20,
+          liquidationPrice: 1,
+        },
+        {
+          symbol: 'ETH',
+          side: 'short',
+          size: 1,
+          entryPrice: 2400,
+          leverage: 2,
+          openedAt: '2026-05-06T00:00:00Z',
+          updatedAt: '2026-05-06T00:00:00Z',
+          currentMarkPrice: 2350,
+          unrealizedPnlUsd: 50,
+          returnOnEquityPct: 2,
+          liquidationPrice: 3600,
+        },
+        {
+          symbol: 'SOL',
+          side: 'long',
+          size: 1,
+          entryPrice: 90,
+          leverage: 2,
+          openedAt: '2026-05-06T00:00:00Z',
+          updatedAt: '2026-05-06T00:00:00Z',
+          currentMarkPrice: 89.7,
+          unrealizedPnlUsd: -0.3,
+          returnOnEquityPct: -0.33,
+          liquidationPrice: 45,
+        },
+      ]);
+
+      const book = PositionBook.getInstance();
+      await book.refresh();
+
+      const losers = book.findOppositeSideLosers('short');
+
+      expect(losers).toHaveLength(1);
+      expect(losers[0]?.symbol).toBe('TON');
+      expect(losers[0]?.unrealizedPnlUsd).toBe(-0.8);
     });
   });
 });

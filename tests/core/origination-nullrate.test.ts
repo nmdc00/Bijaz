@@ -75,6 +75,8 @@ function makeBookEntry(symbol: string, side: 'long' | 'short'): BookEntry {
     side,
     size: 1,
     entryPrice: 100,
+    currentMarkPrice: null,
+    unrealizedPnlUsd: null,
     entryReasoningText: 'test entry',
     thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
     exitContract: null,

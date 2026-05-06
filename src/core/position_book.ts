@@ -1,4 +1,4 @@
-import { listPaperPerpPositions } from '../memory/paper_perps.js';
+import { listPaperPerpPositions, listPaperPerpPositionsWithMark } from '../memory/paper_perps.js';
 import { getPositionExitPolicy } from '../memory/position_exit_policy.js';
 import { openDatabase } from '../memory/db.js';
 import { parseExitContract, summarizeExitContract, type ExitContract } from './exit_contract.js';
@@ -8,6 +8,8 @@ export interface BookEntry {
   side: 'long' | 'short';
   size: number;
   entryPrice: number;
+  currentMarkPrice: number | null;
+  unrealizedPnlUsd: number | null;
   entryReasoningText: string;
   thesisExpiresAtMs: number;
   exitContract: ExitContract | null;
@@ -72,6 +74,8 @@ export class PositionBook {
         side: pos.side,
         size: pos.size,
         entryPrice: pos.entryPrice,
+        currentMarkPrice: existing?.currentMarkPrice ?? null,
+        unrealizedPnlUsd: existing?.unrealizedPnlUsd ?? null,
         entryReasoningText: reasoning,
         thesisExpiresAtMs: policy?.timeStopAtMs ?? Date.now() + defaultTtlMs,
         exitContract,
@@ -83,6 +87,18 @@ export class PositionBook {
     }
 
     this.entries = next;
+
+    try {
+      const markedPositions = listPaperPerpPositionsWithMark();
+      for (const pos of markedPositions) {
+        const entry = this.entries.get(pos.symbol);
+        if (!entry) continue;
+        entry.currentMarkPrice = pos.currentMarkPrice;
+        entry.unrealizedPnlUsd = pos.unrealizedPnlUsd;
+      }
+    } catch {
+      // Best-effort enrichment only.
+    }
   }
 
   get(symbol: string): BookEntry | undefined {
@@ -113,5 +129,18 @@ export class PositionBook {
     if (!entry) return false;
     const normalized = normalizeSide(side);
     return entry.side === normalized;
+  }
+
+  findOppositeSideLosers(
+    side: 'long' | 'short' | 'buy' | 'sell',
+    minLossUsd = 0.5,
+  ): Array<BookEntry & { unrealizedPnlUsd: number }> {
+    const normalized = normalizeSide(side);
+    return this.getAll().flatMap((entry) => {
+      if (entry.side === normalized) return [];
+      if (entry.unrealizedPnlUsd == null || !Number.isFinite(entry.unrealizedPnlUsd)) return [];
+      if (entry.unrealizedPnlUsd > -Math.abs(minLossUsd)) return [];
+      return [{ ...entry, unrealizedPnlUsd: entry.unrealizedPnlUsd }];
+    });
   }
 }
