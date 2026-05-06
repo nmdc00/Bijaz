@@ -88,11 +88,13 @@ function makeCandidate(overrides?: Partial<EntryGateCandidate>): EntryGateCandid
 function makeBook(overrides?: {
   hasConflict?: boolean;
   hasPosition?: boolean;
+  oppositeSideLosers?: Array<{ symbol: string; side: 'long' | 'short'; unrealizedPnlUsd: number }>;
   entries?: ReturnType<PositionBook['getAll']>;
 }): PositionBook {
   return {
     hasConflict: vi.fn().mockReturnValue(overrides?.hasConflict ?? false),
     hasPosition: vi.fn().mockReturnValue(overrides?.hasPosition ?? false),
+    findOppositeSideLosers: vi.fn().mockReturnValue(overrides?.oppositeSideLosers ?? []),
     getAll: vi.fn().mockReturnValue(overrides?.entries ?? []),
     get: vi.fn(),
     refresh: vi.fn(),
@@ -173,6 +175,26 @@ describe('LlmEntryGate', () => {
       const call = mockRecordEntryGateDecision.mock.calls[0][0];
       expect(call.verdict).toBe('reject');
       expect(call.symbol).toBe('ETH');
+    });
+
+    it('rejects without calling LLM when opposite-side losers are already open elsewhere in the book', async () => {
+      const book = makeBook({
+        oppositeSideLosers: [
+          { symbol: 'TON', side: 'long', unrealizedPnlUsd: -1.38 },
+          { symbol: 'SOL', side: 'long', unrealizedPnlUsd: -2.25 },
+        ],
+      });
+      const mainLlm = makeLlmClient({ verdict: 'approve', reasoning: 'fine' });
+      const fallbackLlm = makeLlmClient({ verdict: 'approve', reasoning: 'fine' });
+      const gate = new LlmEntryGate(mainLlm, fallbackLlm, notify, book, dummyConfig);
+
+      const result = await gate.evaluate(makeCandidate({ symbol: 'ETH', side: 'sell' }), markPrice);
+
+      expect(result.verdict).toBe('reject');
+      expect(result.reasoning).toMatch(/opposite-side losers/i);
+      expect(result.reasoning).toMatch(/TON long/i);
+      expect((mainLlm.complete as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+      expect((fallbackLlm.complete as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
   });
 
@@ -626,6 +648,8 @@ describe('LlmEntryGate', () => {
           side: 'short' as const,
           size: 100,
           entryPrice: 40,
+          currentMarkPrice: null,
+          unrealizedPnlUsd: null,
           entryReasoningText: '',
           thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
           exitContract: null,
@@ -638,6 +662,8 @@ describe('LlmEntryGate', () => {
           side: 'short' as const,
           size: 1,
           entryPrice: 500,
+          currentMarkPrice: null,
+          unrealizedPnlUsd: null,
           entryReasoningText: '',
           thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
           exitContract: null,
