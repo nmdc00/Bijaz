@@ -57,6 +57,7 @@ import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { isSuppressed } from '../memory/signal_class_suppression.js';
 import { createLearningCase } from '../memory/learning_cases.js';
+import { getSignalWeights } from '../memory/learning.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -690,7 +691,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           predictedOutcome,
           predictedProbability: proposal.confidence,
           modelProbability: proposal.confidence,
-          learningComparable: false,
+          marketProbability: 0.5,
+          learningComparable: true,
           symbol,
           domain: 'perp',
           horizonMinutes: proposal.suggestedTtlMinutes,
@@ -704,12 +706,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           domain: 'perp',
           entityType: 'symbol',
           entityId: symbol,
-          comparable: false,
-          exclusionReason: 'missing_comparator',
+          comparable: true,
+          comparatorKind: 'market_price',
           sourcePredictionId: predictionId,
           belief: {
             modelProbability: proposal.confidence,
             predictedOutcome,
+          },
+          baseline: {
+            marketProbability: 0.5,
           },
           context: {
             horizonMinutes: proposal.suggestedTtlMinutes,
@@ -1162,13 +1167,21 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         let predictionId: string | null = null;
         try {
           const predictedOutcome = expr.side === 'buy' ? 'YES' : 'NO';
+          const signalWeightsSnapshot =
+            getSignalWeights('perp') ??
+            getSignalWeights('global') ??
+            undefined;
           predictionId = createPrediction({
             marketId: `perp:${symbol}`,
             marketTitle: `${symbol} ${expr.side === 'buy' ? 'long' : 'short'}: quant scan`,
             predictedOutcome,
             predictedProbability: confidenceWeighted,
             modelProbability: confidenceWeighted,
-            learningComparable: false,
+            confidenceRaw,
+            confidenceAdjusted: confidenceWeighted,
+            signalWeightsSnapshot,
+            marketProbability: 0.5,
+            learningComparable: true,
             symbol,
             domain: 'perp',
             horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
@@ -1181,12 +1194,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             domain: 'perp',
             entityType: 'symbol',
             entityId: symbol,
-            comparable: false,
-            exclusionReason: 'missing_comparator',
+            comparable: true,
+            comparatorKind: 'market_price',
             sourcePredictionId: predictionId,
             belief: {
               modelProbability: confidenceWeighted,
               predictedOutcome,
+            },
+            baseline: {
+              marketProbability: 0.5,
             },
             context: {
               horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
