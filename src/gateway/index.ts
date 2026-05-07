@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { access } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 
-import { loadConfig } from '../core/config.js';
+import { loadConfig, resolveResolverNotificationConfig } from '../core/config.js';
 
 const execAsync = promisify(exec);
 
@@ -90,6 +90,7 @@ import { handleDashboardPageRequest } from './dashboard_page.js';
 import { handleDashboardApiRequest } from './dashboard_api.js';
 import { extractRecentIntelEvents } from '../events/extract.js';
 import { resolveExpiredForecasts } from '../events/outcomes.js';
+import { registerResolverSchedulerJob } from './resolver_scheduler.js';
 import {
   materializeThoughtsAndForecastsForEvents,
   resolveForecastMoveWithPriceService,
@@ -803,28 +804,20 @@ if (heartbeatConfig?.enabled) {
   hasSchedulerJobs = true;
 }
 
-const resolverConfig = config.notifications?.resolver;
-if (resolverConfig?.enabled) {
-  const resolverIntervalMs = Math.max(60_000, (resolverConfig.intervalSeconds ?? 900) * 1000);
-  scheduler.registerJob(
-    {
-      name: `gateway:${schedulerNamespace}:resolver`,
-      schedule: { kind: 'interval', intervalMs: resolverIntervalMs },
-      leaseMs: 60_000,
-    },
-    async () => {
-      const updated = await resolveOutcomes(config, resolverConfig.limit ?? 50);
-      if (updated > 0) {
-        logger.info(`Resolver: resolved ${updated} prediction(s).`);
-      }
-      const forecastBatch = await resolveExpiredForecasts({
+if (
+  registerResolverSchedulerJob({
+    config,
+    scheduler,
+    schedulerNamespace,
+    logger,
+    runPredictionResolver: async () =>
+      resolveOutcomes(config, resolveResolverNotificationConfig(config).limit),
+    runForecastResolver: async () =>
+      resolveExpiredForecasts({
         resolveMove: async (forecast) => resolveForecastMoveWithPriceService(config, forecast),
-      });
-      if (forecastBatch.resolved > 0) {
-        logger.info(`Forecast resolver: resolved ${forecastBatch.resolved}/${forecastBatch.checked} expired forecast(s).`);
-      }
-    }
-  );
+      }),
+  })
+) {
   hasSchedulerJobs = true;
 }
 

@@ -972,7 +972,7 @@ const ConfigSchema = z.object({
         .default({}),
       resolver: z
         .object({
-          enabled: z.boolean().default(false),
+          enabled: z.boolean().default(true),
           intervalSeconds: z.number().default(900),
           limit: z.number().default(50),
         })
@@ -1146,6 +1146,23 @@ const ConfigSchema = z.object({
 });
 
 export type ThufirConfig = z.infer<typeof ConfigSchema>;
+
+export interface ResolverNotificationConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  limit: number;
+}
+
+export function resolveResolverNotificationConfig(
+  config: Pick<ThufirConfig, 'notifications'>
+): ResolverNotificationConfig {
+  const resolver = config.notifications?.resolver;
+  return {
+    enabled: resolver?.enabled ?? true,
+    intervalSeconds: resolver?.intervalSeconds ?? 900,
+    limit: resolver?.limit ?? 50,
+  };
+}
 
 export function loadConfig(configPath?: string): ThufirConfig {
   const path =
