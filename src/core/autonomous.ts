@@ -16,7 +16,6 @@ import type { ExecutionAdapter, TradeDecision } from '../execution/executor.js';
 import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { selectDiscoveryMarkets } from '../discovery/market_selector.js';
-import { countFinalPredictions } from '../memory/calibration.js';
 import { createPrediction } from '../memory/predictions.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
 import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
@@ -165,8 +164,6 @@ export interface AutonomousEvents {
 
 // Fires a one-time Telegram notification when learning_examples reaches the Phase 2 threshold.
 // Resets on process restart — intentional, as the system should remind on each deploy until acted on.
-let plilPhase2NotifiedThisRun = false;
-const PLIL_PHASE2_THRESHOLD = 50;
 
 export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   private config: AutonomousConfig;
@@ -373,17 +370,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
   async runScan(options?: { forceExecute?: boolean; maxTrades?: number }): Promise<string> {
     if (this.isPaused) {
       return `Autonomous trading is paused: ${this.pauseReason}`;
-    }
-
-    if (!plilPhase2NotifiedThisRun && this.notify) {
-      const count = countFinalPredictions();
-      if (count >= PLIL_PHASE2_THRESHOLD) {
-        plilPhase2NotifiedThisRun = true;
-        this.notify(
-          `🧠 PLIL Phase 2 threshold reached: ${count} confirmed predictions in learning_examples.\n` +
-          `PLIL metrics and calibration-aware gate wiring are live in release-v2.00.`
-        ).catch(() => {});
-      }
     }
 
     const remaining = this.limiter.getRemainingDaily();
@@ -728,9 +714,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           predictedProbability: proposal.confidence,
           modelProbability: proposal.confidence,
           marketProbability: 0.5,
-          learningComparable: true,
           symbol,
           domain: 'perp',
+          learningComparable: false,
           horizonMinutes: proposal.suggestedTtlMinutes,
           reasoning: proposal.thesisText,
           executed: true,
@@ -742,8 +728,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           domain: 'perp',
           entityType: 'symbol',
           entityId: symbol,
-          comparable: true,
+          comparable: false,
           comparatorKind: 'market_price',
+          exclusionReason: 'synthetic_perp_market_probability',
           sourcePredictionId: predictionId,
           belief: {
             modelProbability: proposal.confidence,
@@ -1217,9 +1204,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             confidenceAdjusted: confidenceWeighted,
             signalWeightsSnapshot,
             marketProbability: 0.5,
-            learningComparable: true,
             symbol,
             domain: 'perp',
+            learningComparable: false,
             horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
             executed: true,
             executionPrice: markPrice || undefined,
@@ -1230,8 +1217,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             domain: 'perp',
             entityType: 'symbol',
             entityId: symbol,
-            comparable: true,
+            comparable: false,
             comparatorKind: 'market_price',
+            exclusionReason: 'synthetic_perp_market_probability',
             sourcePredictionId: predictionId,
             belief: {
               modelProbability: confidenceWeighted,

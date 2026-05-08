@@ -1,4 +1,5 @@
 import { openDatabase } from './db.js';
+import { LEGACY_PERP_CONTAMINATION_WHERE_SQL } from './learning_schema.js';
 import { adjustCashBalance } from './portfolio.js';
 import { listTradesByPrediction } from './trades.js';
 import {
@@ -217,6 +218,15 @@ export function recordOutcome(params: {
     pnl,
     outcomeBasis,
   });
+
+  db.prepare(
+    `
+      UPDATE predictions
+      SET learning_comparable = 0
+      WHERE id = ?
+        AND ${LEGACY_PERP_CONTAMINATION_WHERE_SQL}
+    `
+  ).run(params.id);
 
   if (payout && payout > 0) {
     adjustCashBalance(payout);

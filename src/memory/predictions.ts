@@ -172,6 +172,9 @@ function parseSignalWeights(value: string | null): SignalWeights | null {
   return null;
 }
 
+function isSyntheticPerpComparableInput(input: Pick<PredictionInput, 'domain' | 'marketProbability'>): boolean {
+  return input.domain === 'perp' && Number(input.marketProbability) === 0.5;
+}
 export function createPrediction(input: PredictionInput): string {
   const db = openDatabase();
   const id = randomUUID();
@@ -189,11 +192,13 @@ export function createPrediction(input: PredictionInput): string {
       ? new Date(Date.parse(createdAt) + horizonMinutes * 60_000).toISOString()
       : null);
 
-  const learningComparable =
+  const learningComparableRequested =
     input.learningComparable ??
     (input.predictedOutcome != null &&
       input.modelProbability != null &&
       input.marketProbability != null);
+  const learningComparable =
+    learningComparableRequested && !isSyntheticPerpComparableInput(input);
 
   const stmt = db.prepare(`
     INSERT INTO predictions (
