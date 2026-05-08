@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   upsertSuppression,
   isSuppressed,
@@ -7,8 +10,27 @@ import {
 } from '../../src/memory/signal_class_suppression.js';
 
 describe('signal_class_suppression', () => {
+  let dbDir: string | null = null;
+  let dbPath: string | null = null;
+  const originalDbPath = process.env.THUFIR_DB_PATH;
+
   beforeEach(() => {
+    dbDir = mkdtempSync(join(tmpdir(), 'thufir-signal-class-suppression-'));
+    dbPath = join(dbDir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
     clearExpired(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+  });
+
+  afterEach(() => {
+    process.env.THUFIR_DB_PATH = originalDbPath;
+    if (dbPath) {
+      rmSync(dbPath, { force: true });
+      dbPath = null;
+    }
+    if (dbDir) {
+      rmSync(dbDir, { recursive: true, force: true });
+      dbDir = null;
+    }
   });
 
   describe('upsertSuppression + isSuppressed', () => {
