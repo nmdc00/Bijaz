@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     confidence_level TEXT CHECK(confidence_level IN ('low', 'medium', 'high')),
     confidence_raw REAL,
     confidence_adjusted REAL,
+    signal_scores TEXT,
+    signal_weights_snapshot TEXT,
 
     -- Execution details
     executed INTEGER DEFAULT 0,
@@ -265,6 +267,9 @@ CREATE TABLE IF NOT EXISTS perp_trades (
     status TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_perp_trades_symbol ON perp_trades(symbol);
+CREATE INDEX IF NOT EXISTS idx_perp_trades_status ON perp_trades(status);
+CREATE INDEX IF NOT EXISTS idx_perp_trades_created ON perp_trades(created_at);
 
 -- Learning events
 CREATE TABLE IF NOT EXISTS learning_events (

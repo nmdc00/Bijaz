@@ -153,7 +153,52 @@ describe('tool-executor perps', () => {
     expect(prediction?.resolutionStatus).toBe('resolved_true');
     expect(prediction?.pnl).toBeCloseTo(8.9900025, 6);
     expect(prediction?.resolutionMetadata?.basis).toBe('realized_net_pnl_close');
-    expect(countFinalPredictions()).toBe(1);
+    expect(countFinalPredictions()).toBe(0);
+  });
+
+  it('inherits signal_class onto reduce-only close journal entries on the real journal path', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+    const symbol = 'BTCSIGCLS';
+
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        { symbol, side: 'buy', size: 0.01, mode: 'paper', signal_class: 'mean_reversion' },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    expect(
+      await executeToolCall(
+        'perp_place_order',
+        { symbol, side: 'sell', size: 0.01, reduce_only: true, mode: 'paper', exit_mode: 'take_profit' },
+        ctx
+      )
+    ).toMatchObject({ success: true });
+
+    const listRes = await executeToolCall(
+      'perp_trade_journal_list',
+      { symbol, limit: 20 },
+      ctx
+    );
+    expect(listRes.success).toBe(true);
+    const entries = ((listRes as any).data?.entries ?? []) as Array<Record<string, unknown>>;
+    const closed = entries.find(
+      (entry) => entry.reduceOnly === true && entry.outcome === 'executed'
+    );
+    expect(closed).toBeDefined();
+    expect(closed?.signalClass).toBe('mean_reversion');
   });
 
   it('does not resolve a perp prediction on partial reduce-only close', async () => {

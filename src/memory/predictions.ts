@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
 import { adjustCashBalance } from './portfolio.js';
+import type { SignalWeights } from './learning.js';
 
 export type ConfidenceLevel = 'low' | 'medium' | 'high';
 export type Outcome = 'YES' | 'NO';
@@ -19,6 +20,8 @@ export interface PredictionInput {
   confidenceLevel?: ConfidenceLevel;
   confidenceRaw?: number;
   confidenceAdjusted?: number;
+  signalScores?: SignalWeights;
+  signalWeightsSnapshot?: SignalWeights;
   reasoning?: string;
   keyFactors?: string[];
   intelIds?: string[];
@@ -50,6 +53,8 @@ export interface PredictionRecord {
   confidenceLevel?: ConfidenceLevel;
   confidenceRaw?: number;
   confidenceAdjusted?: number;
+  signalScores?: SignalWeights | null;
+  signalWeightsSnapshot?: SignalWeights | null;
   reasoning?: string;
   keyFactors?: string[];
   intelIds?: string[];
@@ -149,6 +154,28 @@ function parseJsonRecord(value: string | null): Record<string, unknown> | null {
   return null;
 }
 
+function parseSignalWeights(value: string | null): SignalWeights | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<SignalWeights>;
+    const technical = Number(parsed.technical);
+    const news = Number(parsed.news);
+    const onChain = Number(parsed.onChain);
+    if ([technical, news, onChain].every((entry) => Number.isFinite(entry))) {
+      return { technical, news, onChain };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isSyntheticPerpComparableInput(input: Pick<PredictionInput, 'domain' | 'marketProbability'>): boolean {
+  return input.domain === 'perp' && Number(input.marketProbability) === 0.5;
+}
+
 export function createPrediction(input: PredictionInput): string {
   const db = openDatabase();
   const id = randomUUID();
@@ -166,11 +193,13 @@ export function createPrediction(input: PredictionInput): string {
       ? new Date(Date.parse(createdAt) + horizonMinutes * 60_000).toISOString()
       : null);
 
-  const learningComparable =
+  const learningComparableRequested =
     input.learningComparable ??
     (input.predictedOutcome != null &&
       input.modelProbability != null &&
       input.marketProbability != null);
+  const learningComparable =
+    learningComparableRequested && !isSyntheticPerpComparableInput(input);
 
   const stmt = db.prepare(`
     INSERT INTO predictions (
@@ -182,6 +211,8 @@ export function createPrediction(input: PredictionInput): string {
       confidence_level,
       confidence_raw,
       confidence_adjusted,
+      signal_scores,
+      signal_weights_snapshot,
       reasoning,
       key_factors,
       intel_ids,
@@ -210,6 +241,8 @@ export function createPrediction(input: PredictionInput): string {
       @confidenceLevel,
       @confidenceRaw,
       @confidenceAdjusted,
+      @signalScores,
+      @signalWeightsSnapshot,
       @reasoning,
       @keyFactors,
       @intelIds,
@@ -241,6 +274,10 @@ export function createPrediction(input: PredictionInput): string {
     confidenceLevel: input.confidenceLevel ?? null,
     confidenceRaw: input.confidenceRaw ?? null,
     confidenceAdjusted: input.confidenceAdjusted ?? null,
+    signalScores: input.signalScores ? JSON.stringify(input.signalScores) : null,
+    signalWeightsSnapshot: input.signalWeightsSnapshot
+      ? JSON.stringify(input.signalWeightsSnapshot)
+      : null,
     reasoning: input.reasoning ?? null,
     keyFactors: serializeJson(input.keyFactors),
     intelIds: serializeJson(input.intelIds),
@@ -282,6 +319,8 @@ export function listPredictions(options?: {
       confidence_level as confidenceLevel,
       confidence_raw as confidenceRaw,
       confidence_adjusted as confidenceAdjusted,
+      signal_scores as signalScores,
+      signal_weights_snapshot as signalWeightsSnapshot,
       reasoning,
       key_factors as keyFactors,
       intel_ids as intelIds,
@@ -331,6 +370,8 @@ export function listPredictions(options?: {
     confidenceLevel: row.confidenceLevel as ConfidenceLevel | undefined,
     confidenceRaw: row.confidenceRaw as number | undefined,
     confidenceAdjusted: row.confidenceAdjusted as number | undefined,
+    signalScores: parseSignalWeights((row.signalScores as string | null) ?? null),
+    signalWeightsSnapshot: parseSignalWeights((row.signalWeightsSnapshot as string | null) ?? null),
     reasoning: (row.reasoning as string) ?? undefined,
     keyFactors: parseJsonArray((row.keyFactors as string | null) ?? null),
     intelIds: parseJsonArray((row.intelIds as string | null) ?? null),
@@ -377,6 +418,8 @@ export function getPrediction(id: string): PredictionRecord | null {
         confidence_level as confidenceLevel,
         confidence_raw as confidenceRaw,
         confidence_adjusted as confidenceAdjusted,
+        signal_scores as signalScores,
+        signal_weights_snapshot as signalWeightsSnapshot,
         reasoning,
         key_factors as keyFactors,
         intel_ids as intelIds,
@@ -423,6 +466,8 @@ export function getPrediction(id: string): PredictionRecord | null {
     confidenceLevel: row.confidenceLevel as ConfidenceLevel | undefined,
     confidenceRaw: row.confidenceRaw as number | undefined,
     confidenceAdjusted: row.confidenceAdjusted as number | undefined,
+    signalScores: parseSignalWeights((row.signalScores as string | null) ?? null),
+    signalWeightsSnapshot: parseSignalWeights((row.signalWeightsSnapshot as string | null) ?? null),
     reasoning: (row.reasoning as string) ?? undefined,
     keyFactors: parseJsonArray((row.keyFactors as string | null) ?? null),
     intelIds: parseJsonArray((row.intelIds as string | null) ?? null),

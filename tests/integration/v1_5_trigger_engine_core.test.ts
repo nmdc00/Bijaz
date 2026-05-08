@@ -1,8 +1,12 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import fixture from '../fixtures/v1_5_trigger_stream.fixture.json';
 import { Logger } from '../../src/core/logger.js';
 import { PositionHeartbeatService } from '../../src/core/position_heartbeat.js';
+import { openDatabase } from '../../src/memory/db.js';
 
 const journalWrites: Array<{ symbol: string; triggers: string[]; decision?: { action?: string } }> = [];
 
@@ -27,14 +31,25 @@ type TriggerFixture = {
   }>;
 };
 
+const originalDbPath = process.env.THUFIR_DB_PATH;
+let dbDir: string | null = null;
+
 describe('v1.5 trigger engine core integration', () => {
   beforeEach(() => {
     journalWrites.length = 0;
+    dbDir = mkdtempSync(join(tmpdir(), 'thufir-trigger-engine-'));
+    process.env.THUFIR_DB_PATH = join(dbDir, 'thufir.sqlite');
+    openDatabase();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    process.env.THUFIR_DB_PATH = originalDbPath;
+    if (dbDir) {
+      rmSync(dbDir, { recursive: true, force: true });
+      dbDir = null;
+    }
   });
 
   it('emits deterministic trigger stream from fixture market/account data', async () => {
