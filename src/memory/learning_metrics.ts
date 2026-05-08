@@ -1,3 +1,5 @@
+import type Database from 'better-sqlite3';
+
 import { openDatabase } from './db.js';
 
 export type WindowMetrics = {
@@ -40,8 +42,7 @@ function emptyWindow(windowSize: number, sampleCount: number): WindowMetrics {
   };
 }
 
-function loadLearningRows(domain?: string): LearningExampleRow[] {
-  const db = openDatabase();
+function loadLearningRows(domain?: string, db: Database.Database = openDatabase()): LearningExampleRow[] {
   const sql = `
     SELECT
       outcome_value,
@@ -58,8 +59,11 @@ function loadLearningRows(domain?: string): LearningExampleRow[] {
   return (domain ? db.prepare(sql).all(domain) : db.prepare(sql).all()) as LearningExampleRow[];
 }
 
-export function computeRollingWindowMetrics(domain?: string): WindowMetrics[] {
-  const rows = loadLearningRows(domain);
+export function computeRollingWindowMetrics(
+  domain?: string,
+  db: Database.Database = openDatabase()
+): WindowMetrics[] {
+  const rows = loadLearningRows(domain, db);
   const totalAvailable = rows.length;
 
   return WINDOWS.map((windowSize) => {
@@ -109,8 +113,9 @@ export function computeRollingWindowMetrics(domain?: string): WindowMetrics[] {
   });
 }
 
-export function computeDomainWindowMetrics(): Record<string, WindowMetrics[]> {
-  const db = openDatabase();
+export function computeDomainWindowMetrics(
+  db: Database.Database = openDatabase()
+): Record<string, WindowMetrics[]> {
   const rows = db.prepare(
     `SELECT DISTINCT domain FROM learning_examples WHERE domain IS NOT NULL ORDER BY domain ASC`
   ).all() as Array<{ domain?: string | null }>;
@@ -121,7 +126,7 @@ export function computeDomainWindowMetrics(): Record<string, WindowMetrics[]> {
     if (!domain) {
       continue;
     }
-    result[domain] = computeRollingWindowMetrics(domain);
+    result[domain] = computeRollingWindowMetrics(domain, db);
   }
   return result;
 }

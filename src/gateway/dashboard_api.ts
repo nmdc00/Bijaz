@@ -870,8 +870,8 @@ function buildPredictionAccuracySection(db: Database.Database): PredictionAccura
       db.prepare(`SELECT COUNT(*) AS c FROM learning_examples`).get() as { c?: number } | undefined
     )?.c ?? 0;
     return {
-      global: computeRollingWindowMetrics(),
-      byDomain: computeDomainWindowMetrics(),
+      global: computeRollingWindowMetrics(undefined, db),
+      byDomain: computeDomainWindowMetrics(db),
       totalFinalPredictions: Number(total),
     };
   } catch {
