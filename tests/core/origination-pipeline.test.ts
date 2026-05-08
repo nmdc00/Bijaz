@@ -12,7 +12,11 @@
  *   Section 8: Regression — v1.97 components
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { openDatabase } from '../../src/memory/db.js';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -195,6 +199,22 @@ const validShortProposalJson = JSON.stringify({
 });
 
 const dummyConfig = {} as any;
+const originalDbPath = process.env.THUFIR_DB_PATH;
+let dbDir: string | null = null;
+
+beforeEach(() => {
+  dbDir = mkdtempSync(join(tmpdir(), 'thufir-origination-pipeline-'));
+  process.env.THUFIR_DB_PATH = join(dbDir, 'thufir.sqlite');
+  openDatabase();
+});
+
+afterEach(() => {
+  process.env.THUFIR_DB_PATH = originalDbPath;
+  if (dbDir) {
+    rmSync(dbDir, { recursive: true, force: true });
+    dbDir = null;
+  }
+});
 
 // ── Section 1: TaSurface + OriginationTrigger ─────────────────────────────────
 

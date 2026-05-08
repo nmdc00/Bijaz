@@ -36,7 +36,6 @@ describe('PLIL predictions — data integrity', () => {
     raw.close();
 
     process.env.THUFIR_DB_PATH = dbPath;
-    // Must not throw even though predicted_outcome column is absent
     expect(() => openDatabase()).not.toThrow();
 
     const db = openDatabase();
@@ -47,7 +46,6 @@ describe('PLIL predictions — data integrity', () => {
     expect(names.has('learning_comparable')).toBe(true);
     expect(names.has('outcome_basis')).toBe(true);
 
-    // Existing row survived with correct defaults
     const row = db.prepare("SELECT * FROM predictions WHERE id = 'test-1'").get() as any;
     expect(row.learning_comparable).toBe(0);
     expect(row.outcome_basis).toBe('legacy');
@@ -80,6 +78,45 @@ describe('PLIL predictions — data integrity', () => {
     expect(pred!.resolutionStatus).toBe('open');
   });
 
+  it('synthetic perp prediction is never marked learning-comparable', () => {
+    const id = createPrediction({
+      marketId: 'perp:SOL',
+      marketTitle: 'SOL long: synthetic comparator thesis',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.74,
+      modelProbability: 0.74,
+      marketProbability: 0.5,
+      symbol: 'SOL',
+      domain: 'perp',
+      learningComparable: true,
+      executed: true,
+    });
+
+    const pred = getPrediction(id);
+    expect(pred).not.toBeNull();
+    expect(pred!.marketProbability).toBeCloseTo(0.5, 6);
+    expect(pred!.learningComparable).toBe(false);
+  });
+
+  it('keeps comparable rows when perp predictions carry a real comparator', () => {
+    const id = createPrediction({
+      marketId: 'perp:SOL',
+      marketTitle: 'SOL long: real comparator thesis',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.74,
+      modelProbability: 0.74,
+      marketProbability: 0.47,
+      symbol: 'SOL',
+      domain: 'perp',
+      learningComparable: true,
+    });
+
+    const pred = getPrediction(id);
+    expect(pred).not.toBeNull();
+    expect(pred!.marketProbability).toBeCloseTo(0.47, 6);
+    expect(pred!.learningComparable).toBe(true);
+  });
+
   it('recordOutcome with explicit pnl writes that value directly (not Polymarket computation)', () => {
     const id = createPrediction({
       marketId: 'perp:ETH',
@@ -101,6 +138,32 @@ describe('PLIL predictions — data integrity', () => {
     expect(row.pnl).toBeCloseTo(12.5, 4);
     expect(row.outcome_basis).toBe('final');
     expect(countFinalPredictions()).toBe(0);
+  });
+
+  it('recordOutcome demotes synthetic perp comparable rows on final resolution', () => {
+    const id = createPrediction({
+      marketId: 'perp:ETH',
+      marketTitle: 'ETH short test',
+      predictedOutcome: 'NO',
+      predictedProbability: 0.65,
+      modelProbability: 0.65,
+      marketProbability: 0.47,
+      symbol: 'ETH',
+      domain: 'perp',
+      learningComparable: true,
+      executed: true,
+    });
+
+    const db = openDatabase();
+    db.prepare('UPDATE predictions SET market_probability = 0.5, learning_comparable = 1 WHERE id = ?').run(id);
+
+    recordOutcome({ id, outcome: 'YES', outcomeBasis: 'final', pnl: -12.5 });
+
+    const row = db
+      .prepare('SELECT learning_comparable AS learningComparable, outcome_basis AS outcomeBasis FROM predictions WHERE id = ?')
+      .get(id) as { learningComparable: number; outcomeBasis: string };
+    expect(row.learningComparable).toBe(0);
+    expect(row.outcomeBasis).toBe('final');
   });
 
   it('recordOutcome with negative pnl (loss) stores the correct negative value', () => {
@@ -137,12 +200,10 @@ describe('PLIL predictions — data integrity', () => {
       positionSize: 0.1,
     });
 
-    // Wrong prediction: predicted YES, outcome is NO → positionSize-based loss
     recordOutcome({ id, outcome: 'NO', outcomeBasis: 'estimated' });
 
     const db = openDatabase();
     const row = db.prepare('SELECT pnl FROM predictions WHERE id = ?').get(id) as any;
-    // else branch: pnl = -positionSize
     expect(row.pnl).toBeCloseTo(-0.1, 4);
   });
 

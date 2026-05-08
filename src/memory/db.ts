@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import Database from 'better-sqlite3';
+import { ensureLearningSchema } from './learning_schema.js';
 
 const DEFAULT_DB_PATH = join(homedir(), '.thufir', 'thufir.sqlite');
 const INSTANCES = new Map<string, Database.Database>();
@@ -23,6 +24,7 @@ function applySchema(db: Database.Database): void {
   migratePredictionsForPlil(db);  // must run before schema.sql so the view can reference outcome_basis
   const schemaSql = getSchemaSql();
   db.exec(schemaSql);
+  ensureLearningSchema(db);
   migratePredictionsForDelphiResolution(db);
   migrateAlertPersistenceLifecycle(db);
   migrateCausalEventReasoning(db);
