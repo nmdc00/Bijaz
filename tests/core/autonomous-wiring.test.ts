@@ -488,7 +488,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(call.domain).toBe('perp');
     expect(call.modelProbability).toBe(0.72);
     expect(call.learningComparable).toBe(false);
-    expect(call.marketProbability).toBe(0.5);
+    expect(call.marketProbability).toBeUndefined();
     expect(call.executed).toBe(true);
     expect(call.executionPrice).toBeGreaterThan(0);
     expect(typeof call.positionSize).toBe('number');
@@ -499,14 +499,14 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       entityType: 'symbol',
       entityId: 'BTC',
       comparable: false,
-      comparatorKind: 'market_price',
-      exclusionReason: 'synthetic_perp_market_probability',
-      baseline: { marketProbability: 0.5 },
+      comparatorKind: null,
+      exclusionReason: 'missing_comparator',
+      baseline: { marketProbability: null },
       sourcePredictionId: 'pred-mock-id',
     });
   });
 
-  it('10. quant fallback path: synthetic perp predictions stay non-comparable while preserving confidence metadata', async () => {
+  it('10. quant fallback path: perp predictions stay non-comparable without fabricating a market baseline', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'cadence', alertedSymbols: [] });
     mocks.originatorPropose.mockResolvedValue(null);
     mocks.runDiscovery.mockResolvedValue({
@@ -545,7 +545,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     const call = mocks.createPrediction.mock.calls[0]![0] as any;
     expect(call.marketId).toBe('perp:BTC');
     expect(call.learningComparable).toBe(false);
-    expect(call.marketProbability).toBe(0.5);
+    expect(call.marketProbability).toBeUndefined();
     expect(call.confidenceRaw).toBe(0.8);
     expect(call.confidenceAdjusted).toBeCloseTo(0.92, 6);
     expect(call.signalWeightsSnapshot).toEqual({ technical: 0.5, news: 0.3, onChain: 0.2 });
@@ -557,9 +557,9 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       entityType: 'symbol',
       entityId: 'BTC',
       comparable: false,
-      comparatorKind: 'market_price',
-      exclusionReason: 'synthetic_perp_market_probability',
-      baseline: { marketProbability: 0.5 },
+      comparatorKind: null,
+      exclusionReason: 'missing_comparator',
+      baseline: { marketProbability: null },
       sourcePredictionId: 'pred-mock-id',
     });
   });
