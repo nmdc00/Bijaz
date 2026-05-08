@@ -8,7 +8,7 @@
     "thufir": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "pnpm build:dashboard && tsc",
+    "build": "pnpm build:dashboard && tsc && node scripts/copy-runtime-assets.mjs",
     "build:dashboard": "pnpm --filter dashboard build",
     "dev": "tsx watch src/index.ts",
     "dev:dashboard": "pnpm --filter dashboard dev",
@@ -16,6 +16,8 @@
     "thufir": "tsx src/cli/index.ts",
     "gateway": "tsx src/gateway/index.ts",
     "gateway:watch": "tsx watch src/gateway/index.ts",
+    "schema:validate": "tsx scripts/validate_learning_schema.ts",
+    "schema:migrate:learning": "tsx scripts/migrate_learning_schema.ts",
     "test": "vitest",
     "test:v1.4:acceptance": "vitest run tests/integration/v1_4_acceptance.test.ts",
     "test:v1.5:acceptance": "vitest run tests/integration/v1_5_acceptance.test.ts",
