@@ -713,7 +713,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           predictedOutcome,
           predictedProbability: proposal.confidence,
           modelProbability: proposal.confidence,
-          marketProbability: 0.5,
           symbol,
           domain: 'perp',
           learningComparable: false,
@@ -729,15 +728,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           entityType: 'symbol',
           entityId: symbol,
           comparable: false,
-          comparatorKind: 'market_price',
-          exclusionReason: 'synthetic_perp_market_probability',
+          comparatorKind: null,
+          exclusionReason: 'missing_comparator',
           sourcePredictionId: predictionId,
           belief: {
             modelProbability: proposal.confidence,
             predictedOutcome,
           },
           baseline: {
-            marketProbability: 0.5,
+            marketProbability: null,
           },
           context: {
             horizonMinutes: proposal.suggestedTtlMinutes,
@@ -1203,7 +1202,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             confidenceRaw,
             confidenceAdjusted: confidenceWeighted,
             signalWeightsSnapshot,
-            marketProbability: 0.5,
             symbol,
             domain: 'perp',
             learningComparable: false,
@@ -1218,15 +1216,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             entityType: 'symbol',
             entityId: symbol,
             comparable: false,
-            comparatorKind: 'market_price',
-            exclusionReason: 'synthetic_perp_market_probability',
+            comparatorKind: null,
+            exclusionReason: 'missing_comparator',
             sourcePredictionId: predictionId,
             belief: {
               modelProbability: confidenceWeighted,
               predictedOutcome,
             },
             baseline: {
-              marketProbability: 0.5,
+              marketProbability: null,
             },
             context: {
               horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
