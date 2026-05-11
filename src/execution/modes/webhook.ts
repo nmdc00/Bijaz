@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 
 import type { ExecutionAdapter, TradeDecision, TradeResult, Order } from '../executor.js';
 import type { Market } from '../markets.js';
+import { createLearningCase } from '../../memory/learning_cases.js';
 import { createPrediction, recordExecution } from '../../memory/predictions.js';
 import { recordTrade } from '../../memory/trades.js';
 import { logWalletOperation } from '../../memory/audit.js';
@@ -27,6 +28,29 @@ export class WebhookExecutor implements ExecutionAdapter {
       modelProbability: decision.modelProbability ?? undefined,
       marketProbability: getComparableMarketProbability(market, decision),
       learningComparable: isComparablePredictionTrade(market, decision),
+    });
+    createLearningCase({
+      caseType: 'comparable_forecast',
+      domain: market.platform || 'prediction_market',
+      entityType: 'market',
+      entityId: market.id,
+      comparable: isComparablePredictionTrade(market, decision),
+      comparatorKind: isComparablePredictionTrade(market, decision) ? 'market_price' : null,
+      exclusionReason: isComparablePredictionTrade(market, decision) ? null : 'missing_model_probability',
+      sourcePredictionId: predictionId,
+      belief: {
+        modelProbability: decision.modelProbability ?? null,
+        predictedOutcome: decision.outcome,
+      },
+      baseline: {
+        marketProbability: getComparableMarketProbability(market, decision) ?? null,
+      },
+      action: {
+        action: decision.action,
+        amount: decision.amount,
+        executed: true,
+        executionPrice: market.prices?.[decision.outcome] ?? null,
+      },
     });
 
     const response = await fetch(this.webhookUrl, {

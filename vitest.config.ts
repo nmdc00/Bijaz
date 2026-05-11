@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    pool: 'forks',
     clearMocks: true,
     restoreMocks: true,
     testTimeout: 10_000,

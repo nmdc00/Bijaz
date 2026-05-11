@@ -9,6 +9,7 @@ import { HyperliquidClient } from '../../src/execution/hyperliquid/client.js';
 import { PaperExecutor } from '../../src/execution/modes/paper.js';
 import { countFinalPredictions } from '../../src/memory/calibration.js';
 import { openDatabase } from '../../src/memory/db.js';
+import { listLearningCases } from '../../src/memory/learning_cases.js';
 import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
 
 describe('tool-executor perps', () => {
@@ -1244,6 +1245,66 @@ describe('tool-executor perps', () => {
     expect(closeFill).toBeDefined();
     expect(typeof closeFill.realized_pnl_usd).toBe('number');
     expect(typeof data.summary.total_realized_pnl_usd).toBe('number');
+  });
+
+  it('paper open+close persists an execution-quality learning case', async () => {
+    const executor = new PaperExecutor({ initialCashUsdc: 200 });
+    const limiter = {
+      checkAndReserve: async () => ({ allowed: true }),
+      confirm: () => {},
+      release: () => {},
+    };
+    const ctx = {
+      config: { execution: { provider: 'hyperliquid', mode: 'paper' } } as any,
+      marketClient,
+      executor,
+      limiter,
+    };
+
+    await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTCLEARN',
+        side: 'buy',
+        size: 0.01,
+        mode: 'paper',
+        signal_class: 'momentum_breakout',
+        trade_archetype: 'intraday',
+      },
+      ctx
+    );
+    const closeRes = await executeToolCall(
+      'perp_place_order',
+      {
+        symbol: 'BTCLEARN',
+        side: 'sell',
+        size: 0.01,
+        reduce_only: true,
+        mode: 'paper',
+        thesis_invalidation_hit: false,
+        exit_mode: 'take_profit',
+      },
+      ctx
+    );
+
+    expect(closeRes.success).toBe(true);
+
+    const learningCase = listLearningCases({
+      caseType: 'execution_quality',
+      entityType: 'symbol',
+      entityId: 'BTCLEARN',
+      limit: 1,
+    })[0];
+
+    expect(learningCase).toBeTruthy();
+    expect(learningCase.caseType).toBe('execution_quality');
+    expect(learningCase.comparable).toBe(false);
+    expect(learningCase.exclusionReason).toBe('execution_quality_case');
+    expect(learningCase.context?.signalClass).toBe('momentum_breakout');
+    expect(learningCase.action?.reduceOnly).toBe(true);
+    expect(learningCase.outcome?.exitMode).toBe('take_profit');
+    expect(learningCase.outcome?.thesisCorrect).toBe(true);
+    expect(typeof learningCase.qualityScores?.compositeScore).toBe('number');
   });
 
   it('get_fills live mode returns mapped fills from Hyperliquid API', async () => {

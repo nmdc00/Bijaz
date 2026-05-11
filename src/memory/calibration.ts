@@ -6,6 +6,7 @@ import {
   getSignalWeights,
   recordLearningEvent,
 } from './learning.js';
+import { listLearningCases, updateLearningCaseOutcome } from './learning_cases.js';
 
 export interface CalibrationSummary {
   domain: string;
@@ -13,6 +14,84 @@ export interface CalibrationSummary {
   resolvedPredictions: number;
   accuracy: number | null;
   avgBrier: number | null;
+}
+
+interface PredictionOutcomeRow {
+  outcome?: string | null;
+  marketId?: string;
+  domain?: string | null;
+  predictedOutcome?: string;
+  predictedProbability?: number | null;
+  confidenceRaw?: number | null;
+  confidenceAdjusted?: number | null;
+  modelProbability?: number | null;
+  marketProbability?: number | null;
+  signalScores?: string | null;
+  signalWeightsSnapshot?: string | null;
+  learningComparable?: number;
+  outcomeBasis?: 'final' | 'estimated' | 'legacy' | null;
+  executed?: number;
+  executionPrice?: number | null;
+  positionSize?: number | null;
+}
+
+function resolvePreferredModelProbability(prediction: PredictionOutcomeRow | undefined): number | null {
+  if (typeof prediction?.modelProbability === 'number' && Number.isFinite(prediction.modelProbability)) {
+    return prediction.modelProbability;
+  }
+  if (typeof prediction?.predictedProbability === 'number' && Number.isFinite(prediction.predictedProbability)) {
+    return prediction.predictedProbability;
+  }
+  return null;
+}
+
+function computeBrier(probability: number | null, outcome: 'YES' | 'NO'): number | null {
+  if (probability === null) return null;
+  const outcomeValue = outcome === 'YES' ? 1 : 0;
+  return Math.pow(probability - outcomeValue, 2);
+}
+
+function syncComparableLearningCaseOutcome(input: {
+  predictionId: string;
+  outcome: 'YES' | 'NO';
+  outcomeBasis: 'final' | 'estimated';
+  outcomeTimestamp: string;
+  resolutionStatus: 'resolved_true' | 'resolved_false';
+  brier: number | null;
+  pnl: number | null;
+  resolutionMetadata?: Record<string, unknown> | null;
+}): void {
+  const learningCase = listLearningCases({
+    caseType: 'comparable_forecast',
+    sourcePredictionId: input.predictionId,
+    limit: 1,
+  })[0];
+  if (!learningCase) return;
+  updateLearningCaseOutcome({
+    id: learningCase.id,
+    outcome: {
+      outcome: input.outcome,
+      outcomeValue: input.outcome === 'YES' ? 1 : 0,
+      outcomeBasis: input.outcomeBasis,
+      resolutionStatus: input.resolutionStatus,
+      resolvedAt: input.outcomeTimestamp,
+      brier: input.brier,
+      pnl: input.pnl,
+      resolutionMetadata: input.resolutionMetadata ?? null,
+    },
+    policyInputs: {
+      sourceTrack: 'comparable_forecast',
+      comparableIncluded: input.outcomeBasis === 'final' && learningCase.comparable,
+    },
+    comparable:
+      input.outcomeBasis === 'estimated' && learningCase.comparable
+        ? false
+        : undefined,
+    exclusionReason:
+      input.outcomeBasis === 'estimated' && learningCase.comparable
+        ? 'estimated_outcome_only'
+        : undefined,
+  });
 }
 
 export function recordOutcome(params: {
@@ -34,8 +113,12 @@ export function recordOutcome(params: {
                predicted_probability as predictedProbability,
                confidence_raw as confidenceRaw,
                confidence_adjusted as confidenceAdjusted,
+               model_probability as modelProbability,
+               market_probability as marketProbability,
                signal_scores as signalScores,
                signal_weights_snapshot as signalWeightsSnapshot,
+               learning_comparable as learningComparable,
+               outcome_basis as outcomeBasis,
                executed,
                execution_price as executionPrice,
                position_size as positionSize
@@ -43,22 +126,7 @@ export function recordOutcome(params: {
         WHERE id = ?
       `
     )
-    .get(params.id) as
-    | {
-        outcome?: string | null;
-        marketId?: string;
-        domain?: string | null;
-        predictedOutcome?: string;
-        predictedProbability?: number;
-        confidenceRaw?: number | null;
-        confidenceAdjusted?: number | null;
-        signalScores?: string | null;
-        signalWeightsSnapshot?: string | null;
-        executed?: number;
-        executionPrice?: number | null;
-        positionSize?: number | null;
-      }
-    | undefined;
+    .get(params.id) as PredictionOutcomeRow | undefined;
 
   if (prediction?.outcome) {
     return;
@@ -73,10 +141,8 @@ export function recordOutcome(params: {
       ? 'resolved_true'
       : 'resolved_false';
 
-  const predictedProbability = prediction?.predictedProbability ?? null;
-  const outcomeValue = params.outcome === 'YES' ? 1 : 0;
-  const brier =
-    predictedProbability === null ? null : Math.pow(predictedProbability - outcomeValue, 2);
+  const preferredModelProbability = resolvePreferredModelProbability(prediction);
+  const brier = computeBrier(preferredModelProbability, params.outcome);
 
   let pnl: number | null = null;
   let payout: number | null = null;
@@ -115,6 +181,9 @@ export function recordOutcome(params: {
     pnl = params.pnl;
   }
 
+  const outcomeTimestamp = params.outcomeTimestamp ?? new Date().toISOString();
+  const outcomeBasis = params.outcomeBasis ?? 'estimated';
+
   db.prepare(
     `
       UPDATE predictions
@@ -132,15 +201,15 @@ export function recordOutcome(params: {
   ).run({
     id: params.id,
     outcome: params.outcome,
-    outcomeTimestamp: params.outcomeTimestamp ?? new Date().toISOString(),
+    outcomeTimestamp,
     resolutionStatus,
     resolutionMetadata: params.resolutionMetadata
       ? JSON.stringify(params.resolutionMetadata)
       : null,
-    resolutionTimestamp: params.outcomeTimestamp ?? new Date().toISOString(),
+    resolutionTimestamp: outcomeTimestamp,
     brier,
     pnl,
-    outcomeBasis: params.outcomeBasis ?? 'estimated',
+    outcomeBasis,
   });
 
   db.prepare(
@@ -155,6 +224,17 @@ export function recordOutcome(params: {
   if (payout && payout > 0) {
     adjustCashBalance(payout);
   }
+
+  syncComparableLearningCaseOutcome({
+    predictionId: params.id,
+    outcome: params.outcome,
+    outcomeBasis,
+    outcomeTimestamp,
+    resolutionStatus,
+    brier,
+    pnl,
+    resolutionMetadata: params.resolutionMetadata ?? null,
+  });
 
   if (prediction?.marketId) {
     const parsedSignalScores =
@@ -174,7 +254,7 @@ export function recordOutcome(params: {
       marketId: prediction.marketId,
       domain: prediction.domain ?? 'global',
       predictedOutcome: prediction.predictedOutcome ?? null,
-      predictedProbability: predictedProbability,
+      predictedProbability: preferredModelProbability,
       outcome: params.outcome,
       brier,
       pnl,
@@ -202,6 +282,12 @@ export function recordOutcome(params: {
               onChain: Number(parsedSignalWeights.onChain),
             }
           : getSignalWeights(prediction.domain ?? 'global'),
+      notes: {
+        comparable: Boolean(prediction.learningComparable),
+        marketProbability: prediction.marketProbability ?? null,
+        modelProbability: prediction.modelProbability ?? preferredModelProbability,
+        outcomeBasis,
+      },
     });
   }
 }

@@ -17,6 +17,7 @@ import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { selectDiscoveryMarkets } from '../discovery/market_selector.js';
 import { countFinalPredictions } from '../memory/calibration.js';
+import { createLearningCase } from '../memory/learning_cases.js';
 import { createPrediction } from '../memory/predictions.js';
 import { recordPerpTrade } from '../memory/perp_trades.js';
 import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
@@ -707,7 +708,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           predictedOutcome,
           predictedProbability: proposal.confidence,
           modelProbability: proposal.confidence,
-          marketProbability: 0.5,
           symbol,
           domain: 'perp',
           learningComparable: false,
@@ -716,6 +716,33 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           executed: true,
           executionPrice: markPrice || undefined,
           positionSize: size,
+        });
+        createLearningCase({
+          caseType: 'comparable_forecast',
+          domain: 'perp',
+          entityType: 'symbol',
+          entityId: symbol,
+          comparable: false,
+          comparatorKind: null,
+          exclusionReason: 'missing_comparator',
+          sourcePredictionId: predictionId,
+          belief: {
+            modelProbability: proposal.confidence,
+            predictedOutcome,
+          },
+          baseline: {
+            marketProbability: null,
+          },
+          context: {
+            horizonMinutes: proposal.suggestedTtlMinutes,
+            mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+          },
+          action: {
+            side,
+            executed: true,
+            executionPrice: markPrice || null,
+            positionSize: size,
+          },
         });
       } catch { }
 
@@ -1149,7 +1176,6 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             predictedOutcome,
             predictedProbability: confidenceWeighted,
             modelProbability: confidenceWeighted,
-            marketProbability: 0.5,
             symbol,
             domain: 'perp',
             learningComparable: false,
@@ -1157,6 +1183,33 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             executed: true,
             executionPrice: markPrice || undefined,
             positionSize: size,
+          });
+          createLearningCase({
+            caseType: 'comparable_forecast',
+            domain: 'perp',
+            entityType: 'symbol',
+            entityId: symbol,
+            comparable: false,
+            comparatorKind: null,
+            exclusionReason: 'missing_comparator',
+            sourcePredictionId: predictionId,
+            belief: {
+              modelProbability: confidenceWeighted,
+              predictedOutcome,
+            },
+            baseline: {
+              marketProbability: null,
+            },
+            context: {
+              horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
+              mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+            },
+            action: {
+              side: expr.side,
+              executed: true,
+              executionPrice: markPrice || null,
+              positionSize: size,
+            },
           });
         } catch { }
         try {

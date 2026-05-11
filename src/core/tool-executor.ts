@@ -24,6 +24,7 @@ import {
   recordPerpTrade,
   setActivePerpPositionLifecycle,
 } from '../memory/perp_trades.js';
+import { createLearningCase } from '../memory/learning_cases.js';
 import { recordPerpTradeJournal, listPerpTradeJournals } from '../memory/perp_trade_journal.js';
 import { findOpenPerpPrediction, findOpenPerpPredictionById } from '../memory/predictions.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
@@ -45,6 +46,7 @@ import { evaluateGlobalTradeGate } from './autonomy_policy.js';
 import { buildPaperPromotionReport } from './paper_promotion.js';
 import { resilientWebSearch } from '../intel/web_search_resilience.js';
 import { computeClosedTradeComponentScores } from './decision_component_scores.js';
+import { buildPerpExecutionLearningCase, toPerpExecutionLearningCaseInput } from './perp_lifecycle.js';
 import {
   hydrateEntryTradeContract,
   normalizeReduceOnlyExitFsmInput,
@@ -620,6 +622,28 @@ function persistPerpTradeEvidence(params: {
     confidence: params.confidence,
     payload: params.snapshot,
     notes: { signalClass: params.signalClass },
+  });
+}
+
+function persistExecutionLearningCase(params: {
+  symbol: string;
+  fingerprint: string;
+  learningCase: ReturnType<typeof buildPerpExecutionLearningCase>;
+  signalClass: string | null;
+}): void {
+  createLearningCase(toPerpExecutionLearningCaseInput(params.learningCase));
+  storeDecisionArtifact({
+    source: 'perps',
+    kind: 'execution_learning_case',
+    marketId: params.symbol,
+    fingerprint: params.fingerprint,
+    outcome: 'executed',
+    payload: params.learningCase,
+    notes: {
+      signalClass: params.signalClass,
+      track: 'execution_quality',
+      persistence: 'decision_artifacts_compat',
+    },
   });
 }
 
@@ -2580,6 +2604,59 @@ export async function executeToolCall(
             signalClass: effectiveSignalClass,
             confidence: 0.5,
           });
+          if (reduceOnly) {
+            const learningCase = buildPerpExecutionLearningCase({
+              symbol,
+              executionMode: bookMode,
+              tradeId: lifecycleTradeId,
+              hypothesisId,
+              capturedAtMs: executionStartMs,
+              side: side as 'buy' | 'sell',
+              size,
+              leverage: leverage ?? null,
+              signalClass: effectiveSignalClass,
+              marketRegime,
+              volatilityBucket,
+              liquidityBucket,
+              tradeArchetype,
+              entryTrigger,
+              expectedEdge,
+              invalidationPrice,
+              timeStopAtMs,
+              entryPrice: closeEntryPriceOverride ?? closeReference?.markPrice ?? market.markPrice ?? null,
+              exitPrice: market.markPrice ?? null,
+              pricePathHigh: closePathHigh,
+              pricePathLow: closePathLow,
+              thesisCorrect: exitAssessment.thesisCorrect,
+              thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+              exitMode: exitAssessment.exitMode,
+              realizedPnlUsd: result.realizedPnlUsd ?? null,
+              netRealizedPnlUsd:
+                typeof result.realizedPnlUsd === 'number'
+                  ? result.realizedPnlUsd - (realizedFee.realized_fee_usd ?? 0)
+                  : null,
+              realizedFeeUsd: realizedFee.realized_fee_usd,
+              directionScore: componentScores?.directionScore ?? null,
+              timingScore: componentScores?.timingScore ?? null,
+              sizingScore: componentScores?.sizingScore ?? null,
+              exitScore: componentScores?.exitScore ?? null,
+              capturedR: componentScores?.capturedR ?? null,
+              leftOnTableR: componentScores?.leftOnTableR ?? null,
+              wouldHit2R: componentScores?.wouldHit2R ?? null,
+              wouldHit3R: componentScores?.wouldHit3R ?? null,
+              maeProxy: null,
+              mfeProxy: null,
+              reasoning: policyReasoning,
+              planContext,
+              snapshot: executedSnapshot,
+            });
+            persistExecutionLearningCase({
+              symbol,
+              fingerprint: executedEvidenceFingerprint,
+              learningCase,
+              signalClass: effectiveSignalClass,
+            });
+          }
         } catch {
           // Best-effort journaling: never block trading due to local DB issues.
         }
