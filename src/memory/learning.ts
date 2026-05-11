@@ -122,11 +122,10 @@ export function recordLearningEvent(input: LearningEventInput): number {
         : null;
   const domain = input.domain ?? 'global';
   const currentWeights = getSignalWeights(domain) ?? DEFAULT_SIGNAL_WEIGHTS;
-  const signalScores = input.signalScores ?? input.signalWeights ?? currentWeights;
-  if (outcome != null) {
+  if (outcome != null && input.signalScores) {
     const { updated, delta } = updateSignalWeights({
       domain,
-      scores: signalScores,
+      scores: input.signalScores,
       weights: input.signalWeights ?? currentWeights,
       outcome,
     });
