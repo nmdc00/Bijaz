@@ -82,6 +82,7 @@ function makeBundle(overrides?: Partial<OriginationInputBundle>): OriginationInp
     recentEvents: 'No notable events in last 2h',
     alertedSymbols: [],
     triggerReason: 'cadence',
+    contextDomain: 'crypto',
     ...overrides,
   };
 }
@@ -456,6 +457,10 @@ describe('LlmTradeOriginator', () => {
 
       // gatherMarketContext should only be called once since the cache is populated after the first call
       expect(mockGatherMarketContext).toHaveBeenCalledTimes(1);
+      expect(mockGatherMarketContext).toHaveBeenCalledWith(
+        expect.objectContaining({ domain: 'crypto', message: 'crypto markets overview for BTC' }),
+        expect.any(Function)
+      );
     });
 
     it('does not call gatherMarketContext when bundle provides marketContext directly', async () => {
@@ -542,6 +547,56 @@ describe('LlmTradeOriginator', () => {
       const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
       const contextSection = userContent.split('## Market Context\n')[1]?.split('\n## ')[0]?.trimEnd() ?? '';
       expect(contextSection.length).toBeLessThanOrEqual(1000);
+    });
+
+    it('includes event intelligence section when supplied', async () => {
+      const completeFn = vi.fn().mockResolvedValue({ content: 'null', model: 'test' });
+      const mainLlm: LlmClient = { complete: completeFn } as unknown as LlmClient;
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+
+      await originator.propose(makeBundle({
+        eventContext: [
+          '[energy] Hormuz disruption tightens crude exports',
+          'thought: shipping disruption reduces crude availability',
+          'historical_analogs: 2019-abqaiq-attack-oil',
+        ].join('\n'),
+      }));
+
+      const messages = completeFn.mock.calls[0][0] as Array<{ role: string; content: string }>;
+      const userContent = messages.find((m) => m.role === 'user')?.content ?? '';
+      expect(userContent).toContain('## Event Intelligence');
+      expect(userContent).toContain('Hormuz disruption tightens crude exports');
+      expect(userContent).toContain('2019-abqaiq-attack-oil');
+    });
+
+    it('uses provided contextDomain when marketContext fallback is needed', async () => {
+      const mainLlm = makeLlmClient('null');
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+
+      await originator.propose(makeBundle({
+        marketContext: '',
+        contextDomain: 'energy',
+        taSnapshots: [
+          {
+            symbol: 'XYZ:CL',
+            price: 70,
+            priceVs24hHigh: -0.5,
+            priceVs24hLow: 1.1,
+            oiUsd: 1_000_000,
+            oiDelta1hPct: 2,
+            oiDelta4hPct: 1,
+            fundingRatePct: 0,
+            volumeVs24hAvgPct: 120,
+            priceVsEma20_1h: 0.2,
+            trendBias: 'up',
+          },
+        ],
+      }));
+
+      expect(mockGatherMarketContext).toHaveBeenCalledWith(
+        expect.objectContaining({ domain: 'energy', message: 'energy markets overview for XYZ:CL' }),
+        expect.any(Function)
+      );
     });
 
     it('includes system prompt with wealth-accumulation framing', async () => {
