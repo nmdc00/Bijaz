@@ -18,7 +18,9 @@ describe('dashboard page route', () => {
     }
   });
 
-  it('serves dashboard html on GET /dashboard', () => {
+  it('serves inline dashboard html on GET /dashboard when no built dist is available', () => {
+    dashboardDir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-inline-'));
+    process.env.THUFIR_DASHBOARD_DIST_PATH = dashboardDir;
     const req = {
       method: 'GET',
       url: '/dashboard',
@@ -41,6 +43,10 @@ describe('dashboard page route', () => {
     expect(state.status).toBe(200);
     expect(state.contentType).toContain('text/html');
     expect(state.body).toContain('Thufir Dashboard');
+    expect(state.body).toContain('Overview');
+    expect(state.body).toContain('Learning');
+    expect(state.body).toContain('Comparable Prediction Accuracy');
+    expect(state.body).toContain('Exclusion Reasons');
   });
 
   it('serves built static index and assets when dashboard-dist exists', () => {
