@@ -130,6 +130,10 @@ function buildDashboardHtml(): string {
       .filter label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
       .filter select, .filter input, .filter button { width: 100%; border: 1px solid rgba(245, 217, 183, 0.24); background: rgba(8, 18, 35, 0.9); color: var(--text-main); border-radius: 9px; padding: 8px 10px; font-size: 0.9rem; }
       .filter button { cursor: pointer; background: linear-gradient(135deg, var(--sunset-orange), var(--sunset-red)); border-color: rgba(255, 167, 103, 0.55); font-weight: 600; }
+      .tabs { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+      .tab-btn { border: 1px solid var(--border); background: rgba(8, 18, 35, 0.7); color: var(--text-main); border-radius: 999px; padding: 9px 14px; font-size: 0.84rem; font-weight: 600; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
+      .tab-btn:hover { border-color: rgba(245, 217, 183, 0.35); transform: translateY(-1px); }
+      .tab-btn.active { background: linear-gradient(135deg, rgba(216, 106, 43, 0.26), rgba(78, 179, 217, 0.16)); border-color: rgba(245, 217, 183, 0.38); }
       .kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 10px; margin-bottom: 16px; }
       .kpi { border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(180deg, rgba(16, 34, 62, 0.85), rgba(8, 19, 36, 0.9)); padding: 12px; }
       .kpi .label { font-size: 0.72rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
@@ -155,6 +159,12 @@ function buildDashboardHtml(): string {
       .policy-card { border: 1px solid var(--border); background: var(--card-2); border-radius: 10px; padding: 10px; }
       .policy-card .k { color: var(--text-dim); font-size: 0.74rem; }
       .policy-card .v { margin-top: 4px; font-size: 0.96rem; font-weight: 700; }
+      .learning-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; margin-bottom: 12px; }
+      .learning-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+      .learning-stat { border: 1px solid var(--border); border-radius: 10px; background: var(--card-2); padding: 10px; }
+      .learning-stat .k { color: var(--text-dim); font-size: 0.74rem; }
+      .learning-stat .v { margin-top: 4px; font-size: 0.98rem; font-weight: 700; }
+      .learning-note { margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(211, 168, 90, 0.28); border-radius: 10px; background: rgba(211, 168, 90, 0.08); color: #f4cd85; font-size: 0.8rem; }
       .muted { color: var(--text-dim); }
       .small { font-size: 0.75rem; }
       .perf-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -165,6 +175,8 @@ function buildDashboardHtml(): string {
         .filters { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
         .kpi-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
         .grid { grid-template-columns: 1fr; }
+        .learning-grid { grid-template-columns: 1fr; }
+        .learning-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .policy-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
         .perf-grid { grid-template-columns: 1fr; }
       }
@@ -173,6 +185,7 @@ function buildDashboardHtml(): string {
         .hero { grid-template-columns: 1fr; }
         .filters { grid-template-columns: 1fr; }
         .kpi-grid { grid-template-columns: 1fr; }
+        .learning-stat-grid { grid-template-columns: 1fr; }
         .policy-grid { grid-template-columns: 1fr; }
         .chart-wrap { height: 240px; }
       }
@@ -346,6 +359,180 @@ function buildDashboardHtml(): string {
         );
       }
 
+      function confidenceDelta(value) {
+        if (value == null || Number.isNaN(Number(value))) return '-';
+        const normalized = Number(value);
+        const sign = normalized > 0 ? '+' : '';
+        return sign + normalized.toFixed(4);
+      }
+
+      function MetricsTable({ rows }) {
+        if (!Array.isArray(rows) || rows.length === 0) {
+          return <div className="muted small">No comparable prediction windows available.</div>;
+        }
+        return (
+          <div className="scroll-x">
+            <table>
+              <thead>
+                <tr><th>Window</th><th>Samples</th><th>Accuracy</th><th>Brier Δ</th><th>Model</th><th>Market</th><th>Avg Edge</th><th>PnL</th></tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={String(row.windowSize)}>
+                    <td className="mono">{num(row.windowSize, 0)}</td>
+                    <td className="mono">{num(row.sampleCount, 0)}</td>
+                    <td className="mono">{row.accuracy == null ? '-' : pct(Number(row.accuracy) * 100)}</td>
+                    <td className="mono">{num(row.brierDelta, 4)}</td>
+                    <td className="mono">{num(row.brierModel, 4)}</td>
+                    <td className="mono">{num(row.brierMarket, 4)}</td>
+                    <td className="mono">{num(row.avgEdge, 4)}</td>
+                    <td className="mono">{money(row.totalPnl)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      }
+
+      function LearningTab({ observability, predictionAccuracy, learningAudit }) {
+        const runtime = observability && observability.runtimeContext ? observability.runtimeContext : {};
+        const activeWeights = Array.isArray(observability && observability.activeWeights) ? observability.activeWeights : [];
+        const runSummaries = Array.isArray(observability && observability.runSummaries) ? observability.runSummaries : [];
+        const recentAudits = Array.isArray(observability && observability.recentAudits) ? observability.recentAudits : [];
+        const windows = Array.isArray(predictionAccuracy && predictionAccuracy.global) ? predictionAccuracy.global : [];
+        const totalFinalPredictions = Number(predictionAccuracy && predictionAccuracy.totalFinalPredictions ? predictionAccuracy.totalFinalPredictions : 0);
+        const exclusions = Array.isArray(learningAudit && learningAudit.exclusions && learningAudit.exclusions.byReason)
+          ? learningAudit.exclusions.byReason
+          : [];
+
+        return (
+          <div>
+            <section className="learning-grid">
+              <article className="panel">
+                <div className="head"><h3>Learning Runtime</h3><p>Current run context and live shadow-learning counters.</p></div>
+                <div className="body">
+                  <div className="learning-stat-grid">
+                    <div className="learning-stat"><div className="k">Run ID</div><div className="v small">{runtime.runId || 'default'}</div></div>
+                    <div className="learning-stat"><div className="k">Policy Version</div><div className="v small">{runtime.policyVersion || 'default'}</div></div>
+                    <div className="learning-stat"><div className="k">Shadow Audits</div><div className="v mono">{num(observability && observability.totalShadowAudits, 0)}</div></div>
+                    <div className="learning-stat"><div className="k">Runtime Source</div><div className="v">{runtime.source || '-'}</div></div>
+                  </div>
+                  <div className="footer-note">Updated {fmtTime(runtime.updatedAt)}</div>
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="head"><h3>Comparable Prediction Accuracy</h3><p>Final comparable windows used for forecast-quality measurement.</p></div>
+                <div className="body">
+                  <div className="learning-stat-grid" style={{ marginBottom: '10px' }}>
+                    <div className="learning-stat"><div className="k">Final Comparable Predictions</div><div className="v mono">{num(totalFinalPredictions, 0)}</div></div>
+                    <div className="learning-stat"><div className="k">Comparable Cases</div><div className="v mono">{num(learningAudit && learningAudit.comparable && learningAudit.comparable.totalCaseCount, 0)}</div></div>
+                    <div className="learning-stat"><div className="k">Excluded Rows</div><div className="v mono">{num(learningAudit && learningAudit.exclusions && learningAudit.exclusions.totalCaseCount, 0)}</div></div>
+                    <div className="learning-stat"><div className="k">Execution Cases</div><div className="v mono">{num(learningAudit && learningAudit.execution && learningAudit.execution.totalCaseCount, 0)}</div></div>
+                  </div>
+                  <MetricsTable rows={windows} />
+                  {totalFinalPredictions === 0 ? (
+                    <div className="learning-note">
+                      No final comparable predictions are available yet. This is expected when the comparable pipeline has not produced rows in <span className="mono">learning_examples</span>.
+                    </div>
+                  ) : null}
+                </div>
+              </article>
+            </section>
+
+            <section className="learning-grid">
+              <article className="panel">
+                <div className="head"><h3>Active Learned Weights</h3><p>Current weight rows being consumed by the runtime.</p></div>
+                <div className="body scroll-x">
+                  <table>
+                    <thead><tr><th>Domain</th><th>Technical</th><th>News</th><th>On-Chain</th><th>Samples</th><th>Updated</th></tr></thead>
+                    <tbody>
+                      {activeWeights.length === 0 ? <tr><td colSpan="6" className="muted">No learned weight rows.</td></tr> : activeWeights.map((row) => (
+                        <tr key={String(row.domain || 'domain')}>
+                          <td>{row.domain || '-'}</td>
+                          <td className="mono">{num(row.weights && row.weights.technical, 4)}</td>
+                          <td className="mono">{num(row.weights && row.weights.news, 4)}</td>
+                          <td className="mono">{num(row.weights && row.weights.onChain, 4)}</td>
+                          <td className="mono">{num(row.samples, 0)}</td>
+                          <td className="mono">{fmtTime(row.updatedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="head"><h3>Exclusion Reasons</h3><p>Why predictions were filtered out of comparable forecast scoring.</p></div>
+                <div className="body scroll-x">
+                  <table>
+                    <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+                    <tbody>
+                      {exclusions.length === 0 ? <tr><td colSpan="2" className="muted">No excluded comparable rows.</td></tr> : exclusions.map((row, idx) => (
+                        <tr key={String(row.reason || 'reason') + '_' + idx}>
+                          <td>{row.reason}</td>
+                          <td className="mono">{num(row.count, 0)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section className="learning-grid">
+              <article className="panel">
+                <div className="head"><h3>Run Summaries</h3><p>Per-run shadow-learning rollups for changed behavior and confidence drift.</p></div>
+                <div className="body scroll-x">
+                  <table>
+                    <thead><tr><th>Run</th><th>Policy</th><th>Events</th><th>Changed vs Default</th><th>Changed After Update</th><th>Avg Δ vs Default</th><th>Avg Δ After Update</th><th>Last Recorded</th></tr></thead>
+                    <tbody>
+                      {runSummaries.length === 0 ? <tr><td colSpan="8" className="muted">No run summaries yet.</td></tr> : runSummaries.map((row, idx) => (
+                        <tr key={String(row.runId || 'run') + '_' + idx}>
+                          <td>{row.runId || '-'}</td>
+                          <td>{row.policyVersion || '-'}</td>
+                          <td className="mono">{num(row.eventCount, 0)}</td>
+                          <td className="mono">{num(row.changedVsDefaultCount, 0)}</td>
+                          <td className="mono">{num(row.changedAfterUpdateCount, 0)}</td>
+                          <td className="mono">{confidenceDelta(row.avgConfidenceDeltaVsDefault)}</td>
+                          <td className="mono">{confidenceDelta(row.avgConfidenceDeltaAfterUpdate)}</td>
+                          <td className="mono">{fmtTime(row.lastRecordedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="head"><h3>Recent Shadow Audits</h3><p>Latest before/after comparisons against default and updated weights.</p></div>
+                <div className="body scroll-x">
+                  <table>
+                    <thead><tr><th>When</th><th>Domain</th><th>Run</th><th>Policy</th><th>Baseline</th><th>Decision</th><th>After Update</th><th>Δ vs Default</th><th>Δ After Update</th></tr></thead>
+                    <tbody>
+                      {recentAudits.length === 0 ? <tr><td colSpan="9" className="muted">No shadow audits yet.</td></tr> : recentAudits.map((row, idx) => (
+                        <tr key={String(row.domain || 'audit') + '_' + idx}>
+                          <td className="mono">{fmtTime(row.createdAt)}</td>
+                          <td>{row.domain || '-'}</td>
+                          <td>{row.runId || '-'}</td>
+                          <td>{row.policyVersion || '-'}</td>
+                          <td>{row.baselineDirection || '-'}</td>
+                          <td>{row.decisionDirection || '-'}</td>
+                          <td>{row.activeDirectionAfter || '-'}</td>
+                          <td className="mono">{confidenceDelta(row.confidenceDeltaVsDefault)}</td>
+                          <td className="mono">{confidenceDelta(row.confidenceDeltaAfterUpdate)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+          </div>
+        );
+      }
+
       function App() {
         const [mode, setMode] = useState('paper');
         const [timeframe, setTimeframe] = useState('all');
@@ -356,6 +543,7 @@ function buildDashboardHtml(): string {
         const [loading, setLoading] = useState(false);
         const [error, setError] = useState('');
         const [lastSync, setLastSync] = useState('');
+        const [tab, setTab] = useState('overview');
 
         const query = useMemo(() => {
           const params = new URLSearchParams();
@@ -399,6 +587,9 @@ function buildDashboardHtml(): string {
         const promotion = sections.promotionGates || { rows: [] };
         const policy = sections.policyState || {};
         const perf = sections.performanceBreakdown || {};
+        const predictionAccuracy = sections.predictionAccuracy || { global: [], byDomain: {}, totalFinalPredictions: 0 };
+        const learningAudit = sections.learningAudit || { comparable: { totalCaseCount: 0, byDomain: [] }, execution: { totalCaseCount: 0, byDomain: [] }, exclusions: { totalCaseCount: 0, byReason: [] }, policyOutputs: [] };
+        const learningObservability = sections.learningObservability || { runtimeContext: {}, activeWeights: [], totalShadowAudits: 0, runSummaries: [], recentAudits: [] };
 
         const chartPoints = Array.isArray(equity.points)
           ? equity.points.map((p) => ({ ...p, tsLabel: new Date(p.timestamp).toLocaleString() }))
@@ -427,6 +618,13 @@ function buildDashboardHtml(): string {
               <div className="filter"><label>To</label><input type="datetime-local" value={to} disabled={timeframe !== 'custom'} onChange={(e) => setTo(e.target.value)} /></div>
             </section>
 
+            <section className="tabs" aria-label="Dashboard tabs">
+              <button type="button" className={tab === 'overview' ? 'tab-btn active' : 'tab-btn'} onClick={() => setTab('overview')}>Overview</button>
+              <button type="button" className={tab === 'learning' ? 'tab-btn active' : 'tab-btn'} onClick={() => setTab('learning')}>Learning</button>
+            </section>
+
+            {tab === 'overview' ? (
+              <div>
             <section className="kpi-grid">
               <div className="kpi"><div className="label">Account Equity</div><div className="value mono">{money(equity.summary?.endEquity)}</div><div className="sub">Start {money(equity.summary?.startEquity)}</div></div>
               <div className="kpi"><div className="label">Return</div><div className="value mono">{pct(equity.summary?.returnPct)}</div><div className="sub">Max DD {pct(equity.summary?.maxDrawdownPct)}</div></div>
@@ -528,6 +726,14 @@ function buildDashboardHtml(): string {
             </section>
 
             <div className="footer-note">{loading ? 'Loading latest dashboard snapshot...' : 'Snapshot loaded.'}</div>
+              </div>
+            ) : (
+              <LearningTab
+                observability={learningObservability}
+                predictionAccuracy={predictionAccuracy}
+                learningAudit={learningAudit}
+              />
+            )}
           </div>
         );
       }
