@@ -47,6 +47,11 @@ export interface TradeSignal {
   direction: 'long' | 'short' | 'neutral';
   confidence: number;
   timeframe: Timeframe;
+  signalWeightsUsed: {
+    technical: number;
+    news: number;
+    onChain: number;
+  };
   technicalScore: number;
   newsScore: number;
   onChainScore: number;

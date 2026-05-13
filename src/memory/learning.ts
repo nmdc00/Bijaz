@@ -156,6 +156,18 @@ export function getSignalWeights(domain = 'global'): SignalWeights | null {
   return parse<SignalWeights>(row.weights);
 }
 
+export function getSignalWeightsWithFallback(domains: readonly string[]): SignalWeights | null {
+  const seen = new Set<string>();
+  for (const domain of domains) {
+    const normalized = String(domain ?? '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    const weights = getSignalWeights(normalized);
+    if (weights) return weights;
+  }
+  return null;
+}
+
 export function setSignalWeights(domain: string, weights: SignalWeights, samples = 0): void {
   const db = openDatabase();
   db.prepare(
