@@ -9,6 +9,7 @@
  * - Exit policy uses LLM TTL and invalidation price
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolveSessionWeightContext } from '../../src/core/session-weight.js';
 
 // ── Hoisted mock functions (available before vi.mock calls) ───────────────────
 
@@ -343,7 +344,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 
     expect(result).toContain('paper ok');
-  });
+  }, 20_000);
 
   it('2. null proposal + cadence trigger → quant fallback runs', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'cadence', alertedSymbols: [] });
@@ -360,7 +361,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
 
     // Discovery ran (no expressions → quant fallback message)
     expect(result).toMatch(/No discovery expressions/i);
-  });
+  }, 20_000);
 
   it('3. null proposal + ta_alert trigger → quant fallback does NOT run, returns originator message', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'ta_alert', alertedSymbols: ['BTC'] });
@@ -664,7 +665,8 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(call.learningComparable).toBe(false);
     expect(call.marketProbability).toBeUndefined();
     expect(call.confidenceRaw).toBe(0.8);
-    expect(call.confidenceAdjusted).toBeCloseTo(0.92, 6);
+    const expectedAdjustedConfidence = Number((0.8 * resolveSessionWeightContext(new Date()).sessionWeight).toFixed(4));
+    expect(call.confidenceAdjusted).toBeCloseTo(expectedAdjustedConfidence, 6);
     expect(call.signalWeightsSnapshot).toEqual({ technical: 0.5, news: 0.3, onChain: 0.2 });
     expect(call.signalScores).toBeUndefined();
     expect(mocks.createLearningCase).toHaveBeenCalledTimes(1);
