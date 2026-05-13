@@ -158,6 +158,66 @@ export type DashboardPayload = {
         createdAt: string;
       }>;
     };
+    gateAttribution: {
+      config: {
+        minEdge: number | null;
+        requireHighConfidence: boolean;
+        maxTradesPerScan: number | null;
+        llmEntryGateEnabled: boolean;
+        tradeQualityEnabled: boolean;
+        calibrationRiskEnabled: boolean;
+        signalPerformanceMinSharpe: number | null;
+        signalPerformanceMinSamples: number | null;
+      };
+      policyState: {
+        observationMode: boolean;
+        minEdgeOverride: number | null;
+        maxTradesPerScanOverride: number | null;
+        leverageCapOverride: number | null;
+        reason: string | null;
+        updatedAt: string | null;
+      };
+      entryGate: {
+        verdictCounts: {
+          approve: number;
+          reject: number;
+          resize: number;
+        };
+        reasonCounts: Array<{
+          reasonCode: string;
+          count: number;
+        }>;
+        recentDecisions: Array<{
+          createdAt: string;
+          symbol: string;
+          verdict: string;
+          reasonCode: string | null;
+          adjustedSizeUsd: number | null;
+          suggestedLeverage: number | null;
+          reasoning: string;
+        }>;
+      };
+      journal: {
+        outcomeCounts: {
+          executed: number;
+          failed: number;
+          blocked: number;
+        };
+        blockedReasons: Array<{
+          reason: string;
+          count: number;
+        }>;
+        recentPolicyAdjustments: Array<{
+          createdAt: string;
+          symbol: string;
+          policyReasonCode: string | null;
+          policySizeMultiplier: number | null;
+          entryGateVerdict: string | null;
+          entryGateReasonCode: string | null;
+          reasoning: string | null;
+        }>;
+      };
+    };
   };
 };
 

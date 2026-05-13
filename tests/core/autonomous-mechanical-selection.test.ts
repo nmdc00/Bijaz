@@ -86,7 +86,13 @@ vi.mock('../../src/core/autonomy_policy.js', () => ({
   classifyMarketRegime: () => 'trending',
   classifySignalClass: () => 'momentum_breakout',
   computeFractionalKellyFraction: () => 0.25,
-  evaluateGlobalTradeGate: () => ({ allowed: true, policyState: {} }),
+  evaluateGlobalTradeGate: () => ({
+    allowed: true,
+    sizeMultiplier: 0.5,
+    reasonCode: 'policy.decision_quality',
+    reason: 'quality.segment.downweight: score below threshold',
+    policyState: {},
+  }),
   evaluateNewsEntryGate: () => ({ allowed: true }),
   inferBroadMarketPosture: () => 'neutral',
   isSignalClassAllowedForRegime: () => true,
@@ -181,5 +187,6 @@ describe('AutonomousManager mechanical expression selection', () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
     const firstDecision = executor.execute.mock.calls[0]?.[1];
     expect(firstDecision?.symbol).toBe('BTC');
-  });
+    expect(firstDecision?.size).toBeCloseTo(0.0115, 8);
+  }, 20000);
 });

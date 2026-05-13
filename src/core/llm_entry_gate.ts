@@ -27,9 +27,24 @@ export interface EntryGateCandidate {
   expectedRMultiple?: number;
 }
 
+export type EntryGateReasonCode =
+  | 'approve'
+  | 'book_conflict'
+  | 'same_symbol_stacking'
+  | 'invalidation_missing'
+  | 'edge_too_low'
+  | 'confidence_too_low'
+  | 'regime_mismatch'
+  | 'no_fresh_catalyst'
+  | 'risk_reward_insufficient'
+  | 'size_downshift'
+  | 'llm_unavailable'
+  | 'discretionary_reject';
+
 export interface EntryGateDecision {
   verdict: 'approve' | 'reject' | 'resize';
   reasoning: string;
+  reasonCode?: EntryGateReasonCode;
   adjustedSizeUsd?: number;
   stopLevelPrice?: number | null;
   equityAtRiskPct?: number;
@@ -40,6 +55,7 @@ export interface EntryGateDecision {
 const DecisionSchema = z.object({
   verdict: z.enum(['approve', 'reject', 'resize']),
   reasoning: z.string(),
+  reasonCode: z.string().optional(),
   adjustedSizeUsd: z.number().optional(),
   stopLevelPrice: z.number().nullable(),
   equityAtRiskPct: z.number(),
@@ -83,6 +99,75 @@ function normalizeOptionalFieldPseudoJson(
     normalized = normalized.replace(pattern, '$1 null');
   }
   return normalized;
+}
+
+function normalizeReasonCode(
+  raw: unknown,
+  verdict: EntryGateDecision['verdict'],
+  reasoning: string
+): EntryGateReasonCode {
+  const normalized =
+    typeof raw === 'string' && raw.trim().length > 0
+      ? raw.trim()
+      : null;
+  switch (normalized) {
+    case 'approve':
+    case 'book_conflict':
+    case 'same_symbol_stacking':
+    case 'invalidation_missing':
+    case 'edge_too_low':
+    case 'confidence_too_low':
+    case 'regime_mismatch':
+    case 'no_fresh_catalyst':
+    case 'risk_reward_insufficient':
+    case 'size_downshift':
+    case 'llm_unavailable':
+    case 'discretionary_reject':
+      return normalized;
+    default:
+      break;
+  }
+
+  const lower = reasoning.toLowerCase();
+  if (
+    lower.includes('opposite-side') ||
+    lower.includes('opposite side') ||
+    lower.includes('conflicting trade') ||
+    lower.includes('book conflict')
+  ) {
+    return 'book_conflict';
+  }
+  if (lower.includes('stack') || lower.includes('same symbol')) {
+    return 'same_symbol_stacking';
+  }
+  if (lower.includes('no price invalidation') || lower.includes('concrete stop price')) {
+    return 'invalidation_missing';
+  }
+  if (lower.includes('fresh catalyst')) {
+    return 'no_fresh_catalyst';
+  }
+  if (lower.includes('risk reward') || lower.includes('reward-to-risk') || lower.includes('r:r')) {
+    return 'risk_reward_insufficient';
+  }
+  if (lower.includes('regime') || lower.includes('choppy')) {
+    return 'regime_mismatch';
+  }
+  if (lower.includes('confidence') && (lower.includes('too low') || lower.includes('below'))) {
+    return 'confidence_too_low';
+  }
+  if (lower.includes('edge') && (lower.includes('too low') || lower.includes('below') || lower.includes('moderate'))) {
+    return 'edge_too_low';
+  }
+  if (verdict === 'resize') {
+    return 'size_downshift';
+  }
+  if (lower.includes('llm unavailable')) {
+    return 'llm_unavailable';
+  }
+  if (verdict === 'approve') {
+    return 'approve';
+  }
+  return 'discretionary_reject';
 }
 
 function formatBookTable(entries: ReturnType<PositionBook['getAll']>): string {
@@ -138,7 +223,7 @@ The default is no trade. You need a compelling reason to approve. When in doubt,
 You are not a quant system. You reason about narrative, market context, and whether this setup makes sense right now.
 
 Respond ONLY with valid JSON matching this schema:
-{"verdict":"approve"|"reject"|"resize","reasoning":"...","adjustedSizeUsd":number|undefined,"stopLevelPrice":number|null,"equityAtRiskPct":number,"targetRR":number,"suggestedLeverage":number|undefined}
+{"verdict":"approve"|"reject"|"resize","reasoning":"...","reasonCode":"approve"|"book_conflict"|"same_symbol_stacking"|"invalidation_missing"|"edge_too_low"|"confidence_too_low"|"regime_mismatch"|"no_fresh_catalyst"|"risk_reward_insufficient"|"size_downshift"|"discretionary_reject","adjustedSizeUsd":number|undefined,"stopLevelPrice":number|null,"equityAtRiskPct":number,"targetRR":number,"suggestedLeverage":number|undefined}
 
 Fields:
 - stopLevelPrice: the price at which the thesis is invalidated. If the candidate does not provide one, derive it yourself from market structure (nearest support/resistance, recent swing, or a 2–3% move against the position). Only set null if you genuinely cannot reason about a stop at all — a missing explicit level is NOT grounds for rejection.
@@ -192,7 +277,7 @@ ${formatTrackRecord(signalStats)}
 ## Instruction
 
 Respond ONLY with valid JSON:
-{"verdict":"approve"|"reject"|"resize","reasoning":"<your reasoning>","adjustedSizeUsd":<number if resize, omit otherwise>,"stopLevelPrice":<price that invalidates thesis, or null>,"equityAtRiskPct":<% of book equity lost at stop>,"targetRR":<reward:risk ratio>,"suggestedLeverage":<integer 1–${candidate.leverageMax} if approving, omit if rejecting>}`;
+{"verdict":"approve"|"reject"|"resize","reasoning":"<your reasoning>","reasonCode":"<structured short code>","adjustedSizeUsd":<number if resize, omit otherwise>,"stopLevelPrice":<price that invalidates thesis, or null>,"equityAtRiskPct":<% of book equity lost at stop>,"targetRR":<reward:risk ratio>,"suggestedLeverage":<integer 1–${candidate.leverageMax} if approving, omit if rejecting>}`;
 
   return { system, user };
 }
@@ -234,6 +319,7 @@ async function callLlm(
   return {
     verdict: validated.verdict,
     reasoning: validated.reasoning,
+    reasonCode: normalizeReasonCode(validated.reasonCode, validated.verdict, validated.reasoning),
     stopLevelPrice: validated.stopLevelPrice,
     equityAtRiskPct: validated.equityAtRiskPct,
     targetRR: validated.targetRR,
@@ -274,6 +360,7 @@ export class LlmEntryGate {
       const decision: EntryGateDecision = {
         verdict: 'reject',
         reasoning: 'Opposite-side position already open on this symbol. Cannot open conflicting trade.',
+        reasonCode: 'book_conflict',
       };
       recordEntryGateDecision({
         symbol: candidate.symbol,
@@ -281,6 +368,7 @@ export class LlmEntryGate {
         notionalUsd: candidate.notionalUsd,
         verdict: decision.verdict,
         reasoning: decision.reasoning,
+        reasonCode: decision.reasonCode,
         adjustedSizeUsd: undefined,
         usedFallback: false,
         signalClass: candidate.signalClass,
@@ -302,6 +390,7 @@ export class LlmEntryGate {
         reasoning:
           `Opposite-side losers already open in the book (${loserSummary}). ` +
           'Resolve or reduce incompatible losing positions before expanding exposure in the other direction.',
+        reasonCode: 'book_conflict',
       };
       recordEntryGateDecision({
         symbol: candidate.symbol,
@@ -309,6 +398,7 @@ export class LlmEntryGate {
         notionalUsd: candidate.notionalUsd,
         verdict: decision.verdict,
         reasoning: decision.reasoning,
+        reasonCode: decision.reasonCode,
         adjustedSizeUsd: undefined,
         usedFallback: false,
         signalClass: candidate.signalClass,
@@ -324,6 +414,7 @@ export class LlmEntryGate {
       const decision: EntryGateDecision = {
         verdict: 'reject',
         reasoning: 'No price invalidation level set — cannot approve a trade without a concrete stop price.',
+        reasonCode: 'invalidation_missing',
       };
       recordEntryGateDecision({
         symbol: candidate.symbol,
@@ -331,6 +422,7 @@ export class LlmEntryGate {
         notionalUsd: candidate.notionalUsd,
         verdict: decision.verdict,
         reasoning: decision.reasoning,
+        reasonCode: decision.reasonCode,
         adjustedSizeUsd: undefined,
         usedFallback: false,
         signalClass: candidate.signalClass,
@@ -346,6 +438,7 @@ export class LlmEntryGate {
       const decision: EntryGateDecision = {
         verdict: 'reject',
         reasoning: calibration.reason ?? 'domain_calibration_below_market',
+        reasonCode: 'discretionary_reject',
       };
       recordEntryGateDecision({
         symbol: candidate.symbol,
@@ -353,6 +446,7 @@ export class LlmEntryGate {
         notionalUsd: candidate.notionalUsd,
         verdict: decision.verdict,
         reasoning: decision.reasoning,
+        reasonCode: decision.reasonCode,
         adjustedSizeUsd: undefined,
         usedFallback: false,
         signalClass: candidate.signalClass,
@@ -426,10 +520,12 @@ export class LlmEntryGate {
           ? {
               verdict: 'reject',
               reasoning: 'LLM unavailable — defaulting to reject (safe)',
+              reasonCode: 'llm_unavailable',
             }
           : {
               verdict: 'approve',
               reasoning: 'LLM unavailable and rejectOnBothFail=false — allowing execution',
+              reasonCode: 'llm_unavailable',
             };
       }
     }
@@ -453,6 +549,7 @@ export class LlmEntryGate {
       notionalUsd: candidate.notionalUsd,
       verdict: decision.verdict,
       reasoning: decision.reasoning,
+      reasonCode: decision.reasonCode,
       adjustedSizeUsd: decision.adjustedSizeUsd,
       usedFallback,
       signalClass: candidate.signalClass,

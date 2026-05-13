@@ -18,7 +18,7 @@ import type {
 } from './types';
 
 const PERIODS = ['1d', '7d', '14d', '30d', '90d'];
-const TABS = ['overview', 'positions', 'trades', 'performance', 'learning', 'policy', 'conversations', 'logs'] as const;
+const TABS = ['overview', 'positions', 'trades', 'performance', 'quality', 'learning', 'policy', 'conversations', 'logs'] as const;
 type DashboardTab = (typeof TABS)[number];
 
 function money(value: number | null | undefined): string {
@@ -481,6 +481,7 @@ export default function App() {
   const predictionAccuracy = payload?.sections.predictionAccuracy;
   const learningAudit = payload?.sections.learningAudit;
   const learningObservability = payload?.sections.learningObservability;
+  const gateAttribution = payload?.sections.gateAttribution;
 
   return (
     <main className="app-shell">
@@ -614,6 +615,125 @@ export default function App() {
               <PredictionAccuracyTable rows={rows} />
             </article>
           ))}
+        </section>
+      )}
+
+      {tab === 'quality' && (
+        <section className="subgrid">
+          <article className="subpanel">
+            <h3>Quality Controls</h3>
+            <DataTable
+              headers={['Control', 'Value']}
+              empty="No quality controls."
+              rows={[
+                ['Min edge', <span className="mono">{numberText(gateAttribution?.config.minEdge, 3)}</span>],
+                ['Require high confidence', <span className={badgeClass(gateAttribution?.config.requireHighConfidence)}>{gateAttribution?.config.requireHighConfidence ? 'yes' : 'no'}</span>],
+                ['Max trades per scan', <span className="mono">{numberText(gateAttribution?.config.maxTradesPerScan, 0)}</span>],
+                ['LLM entry gate', <span className={badgeClass(gateAttribution?.config.llmEntryGateEnabled)}>{gateAttribution?.config.llmEntryGateEnabled ? 'on' : 'off'}</span>],
+                ['Decision quality gate', <span className={badgeClass(gateAttribution?.config.tradeQualityEnabled)}>{gateAttribution?.config.tradeQualityEnabled ? 'on' : 'off'}</span>],
+                ['Calibration risk gate', <span className={badgeClass(gateAttribution?.config.calibrationRiskEnabled)}>{gateAttribution?.config.calibrationRiskEnabled ? 'on' : 'off'}</span>],
+                ['Signal Sharpe gate', <span className="mono">{numberText(gateAttribution?.config.signalPerformanceMinSharpe, 2)} / {numberText(gateAttribution?.config.signalPerformanceMinSamples, 0)} samples</span>],
+              ]}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Adaptive Policy State</h3>
+            <DataTable
+              headers={['Field', 'Value']}
+              empty="No adaptive policy state."
+              rows={[
+                ['Observation mode', <span className={badgeClass(gateAttribution?.policyState.observationMode)}>{gateAttribution?.policyState.observationMode ? 'on' : 'off'}</span>],
+                ['Min edge override', <span className="mono">{numberText(gateAttribution?.policyState.minEdgeOverride, 3)}</span>],
+                ['Max trades override', <span className="mono">{numberText(gateAttribution?.policyState.maxTradesPerScanOverride, 0)}</span>],
+                ['Leverage cap override', <span className="mono">{numberText(gateAttribution?.policyState.leverageCapOverride, 2)}</span>],
+                ['Reason', gateAttribution?.policyState.reason ?? '-'],
+                ['Updated', <span className="mono">{timeText(gateAttribution?.policyState.updatedAt)}</span>],
+              ]}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>LLM Entry Gate Verdicts</h3>
+            <DataTable
+              headers={['Verdict', 'Count']}
+              empty="No entry-gate verdicts."
+              rows={[
+                ['approve', <span className="mono">{numberText(gateAttribution?.entryGate.verdictCounts.approve, 0)}</span>],
+                ['reject', <span className="mono">{numberText(gateAttribution?.entryGate.verdictCounts.reject, 0)}</span>],
+                ['resize', <span className="mono">{numberText(gateAttribution?.entryGate.verdictCounts.resize, 0)}</span>],
+              ]}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Top Entry-Gate Reasons</h3>
+            <DataTable
+              headers={['Reason Code', 'Count']}
+              empty="No structured entry-gate reasons."
+              rows={(gateAttribution?.entryGate.reasonCounts ?? []).map((row) => [
+                row.reasonCode,
+                <span className="mono">{numberText(row.count, 0)}</span>,
+              ])}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Trade Journal Outcomes</h3>
+            <DataTable
+              headers={['Outcome', 'Count']}
+              empty="No journal outcomes."
+              rows={[
+                ['executed', <span className="mono">{numberText(gateAttribution?.journal.outcomeCounts.executed, 0)}</span>],
+                ['failed', <span className="mono">{numberText(gateAttribution?.journal.outcomeCounts.failed, 0)}</span>],
+                ['blocked', <span className="mono">{numberText(gateAttribution?.journal.outcomeCounts.blocked, 0)}</span>],
+              ]}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Blocked Trade Reasons</h3>
+            <DataTable
+              headers={['Reason', 'Count']}
+              empty="No blocked trade journal rows."
+              rows={(gateAttribution?.journal.blockedReasons ?? []).map((row) => [
+                row.reason,
+                <span className="mono">{numberText(row.count, 0)}</span>,
+              ])}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Recent Policy Size Adjustments</h3>
+            <DataTable
+              headers={['When', 'Symbol', 'Policy Code', 'Size Mult', 'Entry Gate', 'Gate Reason']}
+              empty="No recent policy size adjustments."
+              rows={(gateAttribution?.journal.recentPolicyAdjustments ?? []).map((row) => [
+                <span className="mono">{timeText(row.createdAt)}</span>,
+                row.symbol,
+                row.policyReasonCode ?? '-',
+                <span className="mono">{numberText(row.policySizeMultiplier, 2)}</span>,
+                row.entryGateVerdict ?? '-',
+                row.entryGateReasonCode ?? '-',
+              ])}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Recent Entry-Gate Decisions</h3>
+            <DataTable
+              headers={['When', 'Symbol', 'Verdict', 'Reason Code', 'Adj Size', 'Lev']}
+              empty="No recent entry-gate decisions."
+              rows={(gateAttribution?.entryGate.recentDecisions ?? []).map((row) => [
+                <span className="mono">{timeText(row.createdAt)}</span>,
+                row.symbol,
+                <span className={badgeClass(row.verdict === 'approve' ? 'good' : row.verdict === 'reject' ? 'bad' : 'mixed')}>{row.verdict}</span>,
+                row.reasonCode ?? '-',
+                <span className="mono">{row.adjustedSizeUsd == null ? '-' : money(row.adjustedSizeUsd)}</span>,
+                <span className="mono">{numberText(row.suggestedLeverage, 0)}</span>,
+              ])}
+            />
+          </article>
         </section>
       )}
 

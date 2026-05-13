@@ -6,6 +6,7 @@ export interface EntryGateLogEntry {
   notionalUsd: number;
   verdict: string;
   reasoning: string;
+  reasonCode?: string;
   adjustedSizeUsd?: number;
   usedFallback: boolean;
   signalClass?: string;
@@ -29,6 +30,7 @@ function ensureSchema(): void {
       notional_usd        REAL NOT NULL,
       verdict             TEXT NOT NULL,
       reasoning           TEXT NOT NULL,
+      reason_code         TEXT,
       adjusted_size_usd   REAL,
       used_fallback       INTEGER NOT NULL DEFAULT 0,
       signal_class        TEXT,
@@ -55,6 +57,7 @@ function ensureSchema(): void {
   addColumnIfMissing('equity_at_risk_pct', 'equity_at_risk_pct REAL');
   addColumnIfMissing('target_rr', 'target_rr REAL');
   addColumnIfMissing('suggested_leverage', 'suggested_leverage REAL');
+  addColumnIfMissing('reason_code', 'reason_code TEXT');
 }
 
 export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
@@ -62,15 +65,16 @@ export function recordEntryGateDecision(entry: EntryGateLogEntry): void {
   const db = openDatabase();
   db.prepare(
     `INSERT INTO llm_entry_gate_log
-       (symbol, side, notional_usd, verdict, reasoning, adjusted_size_usd, used_fallback, signal_class, regime, session, edge, stop_level_price, equity_at_risk_pct, target_rr, suggested_leverage)
+       (symbol, side, notional_usd, verdict, reasoning, reason_code, adjusted_size_usd, used_fallback, signal_class, regime, session, edge, stop_level_price, equity_at_risk_pct, target_rr, suggested_leverage)
      VALUES
-       (@symbol, @side, @notionalUsd, @verdict, @reasoning, @adjustedSizeUsd, @usedFallback, @signalClass, @regime, @session, @edge, @stopLevelPrice, @equityAtRiskPct, @targetRR, @suggestedLeverage)`
+       (@symbol, @side, @notionalUsd, @verdict, @reasoning, @reasonCode, @adjustedSizeUsd, @usedFallback, @signalClass, @regime, @session, @edge, @stopLevelPrice, @equityAtRiskPct, @targetRR, @suggestedLeverage)`
   ).run({
     symbol: entry.symbol,
     side: entry.side,
     notionalUsd: entry.notionalUsd,
     verdict: entry.verdict,
     reasoning: entry.reasoning,
+    reasonCode: entry.reasonCode ?? null,
     adjustedSizeUsd: entry.adjustedSizeUsd ?? null,
     usedFallback: entry.usedFallback ? 1 : 0,
     signalClass: entry.signalClass ?? null,

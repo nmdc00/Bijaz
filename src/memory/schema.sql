@@ -961,6 +961,7 @@ CREATE TABLE IF NOT EXISTS llm_entry_gate_log (
   notional_usd      REAL NOT NULL,
   verdict           TEXT NOT NULL,
   reasoning         TEXT NOT NULL,
+  reason_code       TEXT,
   adjusted_size_usd REAL,
   used_fallback     INTEGER NOT NULL DEFAULT 0,
   signal_class      TEXT,
