@@ -914,6 +914,67 @@ type LearningObservabilitySection = {
   recentAudits: LearningObservabilityRecentAudit[];
 };
 
+type GateAttributionSection = {
+  config: {
+    minEdge: number | null;
+    requireHighConfidence: boolean;
+    maxTradesPerScan: number | null;
+    llmEntryGateEnabled: boolean;
+    tradeQualityEnabled: boolean;
+    calibrationRiskEnabled: boolean;
+    signalPerformanceMinSharpe: number | null;
+    signalPerformanceMinSamples: number | null;
+  };
+  policyState: {
+    observationMode: boolean;
+    minEdgeOverride: number | null;
+    maxTradesPerScanOverride: number | null;
+    leverageCapOverride: number | null;
+    reason: string | null;
+    updatedAt: string | null;
+  };
+  entryGate: {
+    verdictCounts: {
+      approve: number;
+      reject: number;
+      resize: number;
+    };
+    reasonCounts: Array<{
+      reasonCode: string;
+      count: number;
+    }>;
+    recentDecisions: Array<{
+      createdAt: string;
+      symbol: string;
+      verdict: string;
+      reasonCode: string | null;
+      adjustedSizeUsd: number | null;
+      suggestedLeverage: number | null;
+      reasoning: string;
+    }>;
+  };
+  journal: {
+    outcomeCounts: {
+      executed: number;
+      failed: number;
+      blocked: number;
+    };
+    blockedReasons: Array<{
+      reason: string;
+      count: number;
+    }>;
+    recentPolicyAdjustments: Array<{
+      createdAt: string;
+      symbol: string;
+      policyReasonCode: string | null;
+      policySizeMultiplier: number | null;
+      entryGateVerdict: string | null;
+      entryGateReasonCode: string | null;
+      reasoning: string | null;
+    }>;
+  };
+};
+
 function buildPredictionAccuracySection(db: Database.Database): PredictionAccuracySection {
   try {
     const total = (
@@ -2598,6 +2659,248 @@ function buildPolicyStateSection(db: Database.Database): {
   };
 }
 
+function buildGateAttributionSection(db: Database.Database): GateAttributionSection {
+  let config: ThufirConfig | null = null;
+  try {
+    config = loadConfig();
+  } catch {
+    config = null;
+  }
+
+  const section: GateAttributionSection = {
+    config: {
+      minEdge: null,
+      requireHighConfidence: false,
+      maxTradesPerScan: null,
+      llmEntryGateEnabled: false,
+      tradeQualityEnabled: false,
+      calibrationRiskEnabled: false,
+      signalPerformanceMinSharpe: null,
+      signalPerformanceMinSamples: null,
+    },
+    policyState: {
+      observationMode: false,
+      minEdgeOverride: null,
+      maxTradesPerScanOverride: null,
+      leverageCapOverride: null,
+      reason: null,
+      updatedAt: null,
+    },
+    entryGate: {
+      verdictCounts: {
+        approve: 0,
+        reject: 0,
+        resize: 0,
+      },
+      reasonCounts: [],
+      recentDecisions: [],
+    },
+    journal: {
+      outcomeCounts: {
+        executed: 0,
+        failed: 0,
+        blocked: 0,
+      },
+      blockedReasons: [],
+      recentPolicyAdjustments: [],
+    },
+  };
+
+  if (config) {
+    section.config = {
+      minEdge: Number.isFinite(Number((config.autonomy as any)?.minEdge))
+        ? Number((config.autonomy as any)?.minEdge)
+        : null,
+      requireHighConfidence: Boolean((config.autonomy as any)?.requireHighConfidence),
+      maxTradesPerScan: Number.isFinite(Number((config.autonomy as any)?.maxTradesPerScan))
+        ? Number((config.autonomy as any)?.maxTradesPerScan)
+        : null,
+      llmEntryGateEnabled: (config.autonomy as any)?.llmEntryGate?.enabled !== false,
+      tradeQualityEnabled: Boolean((config.autonomy as any)?.tradeQuality?.enabled),
+      calibrationRiskEnabled: (config.autonomy as any)?.calibrationRisk?.enabled !== false,
+      signalPerformanceMinSharpe: Number.isFinite(Number((config.autonomy as any)?.signalPerformance?.minSharpe))
+        ? Number((config.autonomy as any)?.signalPerformance?.minSharpe)
+        : null,
+      signalPerformanceMinSamples: Number.isFinite(Number((config.autonomy as any)?.signalPerformance?.minSamples))
+        ? Number((config.autonomy as any)?.signalPerformance?.minSamples)
+        : null,
+    };
+  }
+
+  if (tableExists(db, 'autonomy_policy_state')) {
+    try {
+      const row = db.prepare(
+        `
+          SELECT payload, updated_at
+          FROM autonomy_policy_state
+          WHERE id = 1
+        `
+      ).get() as { payload?: string | null; updated_at?: string | null } | undefined;
+      if (row?.payload) {
+        const payload = JSON.parse(row.payload) as Record<string, unknown>;
+        const observationOnlyUntilMs = Number(payload.observationOnlyUntilMs ?? NaN);
+        section.policyState = {
+          observationMode: Number.isFinite(observationOnlyUntilMs) && observationOnlyUntilMs > Date.now(),
+          minEdgeOverride: Number.isFinite(Number(payload.minEdgeOverride))
+            ? Number(payload.minEdgeOverride)
+            : null,
+          maxTradesPerScanOverride: Number.isFinite(Number(payload.maxTradesPerScanOverride))
+            ? Number(payload.maxTradesPerScanOverride)
+            : null,
+          leverageCapOverride: Number.isFinite(Number(payload.leverageCapOverride))
+            ? Number(payload.leverageCapOverride)
+            : null,
+          reason: typeof payload.reason === 'string' && payload.reason.trim().length > 0
+            ? payload.reason
+            : null,
+          updatedAt: row.updated_at ? String(row.updated_at) : null,
+        };
+      }
+    } catch {
+      // keep defaults
+    }
+  }
+
+  if (tableExists(db, 'llm_entry_gate_log')) {
+    try {
+      const verdictRows = db.prepare(
+        `
+          SELECT verdict, COUNT(*) AS count
+          FROM llm_entry_gate_log
+          GROUP BY verdict
+        `
+      ).all() as Array<{ verdict?: string | null; count?: number | null }>;
+      for (const row of verdictRows) {
+        const verdict = String(row.verdict ?? '').trim().toLowerCase();
+        const count = Number(row.count ?? 0);
+        if (verdict === 'approve' || verdict === 'reject' || verdict === 'resize') {
+          section.entryGate.verdictCounts[verdict] = count;
+        }
+      }
+
+      const hasReasonCode = tableHasColumn(db, 'llm_entry_gate_log', 'reason_code');
+      if (hasReasonCode) {
+        section.entryGate.reasonCounts = (db.prepare(
+          `
+            SELECT COALESCE(NULLIF(TRIM(reason_code), ''), 'unknown') AS reasonCode,
+                   COUNT(*) AS count
+            FROM llm_entry_gate_log
+            GROUP BY 1
+            ORDER BY count DESC, reasonCode ASC
+            LIMIT 12
+          `
+        ).all() as Array<{ reasonCode?: string | null; count?: number | null }>).map((row) => ({
+          reasonCode: String(row.reasonCode ?? 'unknown'),
+          count: Number(row.count ?? 0),
+        }));
+      }
+
+      const recentSql = hasReasonCode
+        ? `
+            SELECT created_at, symbol, verdict, reason_code, adjusted_size_usd, suggested_leverage, reasoning
+            FROM llm_entry_gate_log
+            ORDER BY id DESC
+            LIMIT 15
+          `
+        : `
+            SELECT created_at, symbol, verdict, NULL AS reason_code, adjusted_size_usd, suggested_leverage, reasoning
+            FROM llm_entry_gate_log
+            ORDER BY id DESC
+            LIMIT 15
+          `;
+      section.entryGate.recentDecisions = (db.prepare(recentSql).all() as Array<{
+        created_at?: string | null;
+        symbol?: string | null;
+        verdict?: string | null;
+        reason_code?: string | null;
+        adjusted_size_usd?: number | null;
+        suggested_leverage?: number | null;
+        reasoning?: string | null;
+      }>).map((row) => ({
+        createdAt: String(row.created_at ?? ''),
+        symbol: String(row.symbol ?? ''),
+        verdict: String(row.verdict ?? ''),
+        reasonCode: row.reason_code == null ? null : String(row.reason_code),
+        adjustedSizeUsd: Number.isFinite(Number(row.adjusted_size_usd)) ? Number(row.adjusted_size_usd) : null,
+        suggestedLeverage: Number.isFinite(Number(row.suggested_leverage)) ? Number(row.suggested_leverage) : null,
+        reasoning: String(row.reasoning ?? ''),
+      }));
+    } catch {
+      // keep defaults
+    }
+  }
+
+  if (!tableExists(db, 'decision_artifacts')) {
+    return section;
+  }
+
+  try {
+    const rows = db.prepare(
+      `
+        SELECT payload, created_at
+        FROM decision_artifacts
+        WHERE kind = 'perp_trade_journal'
+        ORDER BY created_at DESC
+        LIMIT 2000
+      `
+    ).all() as Array<{ payload?: string | null; created_at?: string | null }>;
+
+    const blockedReasonCounts = new Map<string, number>();
+    for (const row of rows) {
+      const payload = parseJson<Record<string, unknown>>(row.payload ?? null);
+      if (!payload) continue;
+
+      const outcome = resolveJournalOutcome(payload);
+      if (outcome === 'executed' || outcome === 'failed' || outcome === 'blocked') {
+        section.journal.outcomeCounts[outcome] += 1;
+      }
+
+      if (outcome === 'blocked') {
+        const reason = String(payload.reasoning ?? payload.error ?? 'unknown').trim().slice(0, 120) || 'unknown';
+        blockedReasonCounts.set(reason, (blockedReasonCounts.get(reason) ?? 0) + 1);
+      }
+
+      const policySizeMultiplier = Number(payload.policySizeMultiplier ?? NaN);
+      if (
+        Number.isFinite(policySizeMultiplier) &&
+        policySizeMultiplier < 1 &&
+        section.journal.recentPolicyAdjustments.length < 12
+      ) {
+        section.journal.recentPolicyAdjustments.push({
+          createdAt: row.created_at ? String(row.created_at) : '',
+          symbol: typeof payload.symbol === 'string' ? payload.symbol : '',
+          policyReasonCode:
+            typeof payload.policyReasonCode === 'string' && payload.policyReasonCode.trim().length > 0
+              ? payload.policyReasonCode
+              : null,
+          policySizeMultiplier,
+          entryGateVerdict:
+            typeof payload.entryGateVerdict === 'string' && payload.entryGateVerdict.trim().length > 0
+              ? payload.entryGateVerdict
+              : null,
+          entryGateReasonCode:
+            typeof payload.entryGateReasonCode === 'string' && payload.entryGateReasonCode.trim().length > 0
+              ? payload.entryGateReasonCode
+              : null,
+          reasoning:
+            typeof payload.reasoning === 'string' && payload.reasoning.trim().length > 0
+              ? payload.reasoning
+              : null,
+        });
+      }
+    }
+
+    section.journal.blockedReasons = [...blockedReasonCounts.entries()]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+      .slice(0, 12);
+  } catch {
+    return section;
+  }
+
+  return section;
+}
+
 export function buildDashboardApiPayload(params?: {
   db?: Database.Database;
   filters?: DashboardFilters;
@@ -2658,6 +2961,7 @@ export function buildDashboardApiPayload(params?: {
     predictionAccuracy: PredictionAccuracySection;
     learningAudit: LearningAuditSection;
     learningObservability: LearningObservabilitySection;
+    gateAttribution: GateAttributionSection;
   };
 } {
   const db = params?.db ?? openDatabase();
@@ -2694,6 +2998,7 @@ export function buildDashboardApiPayload(params?: {
   const policyState = buildPolicyStateSection(db);
   const performanceBreakdown = listPerformanceBreakdown(db, filters);
   const predictionAccuracy = buildPredictionAccuracySection(db);
+  const gateAttribution = buildGateAttributionSection(db);
 
   return {
     meta: {
@@ -2743,6 +3048,7 @@ export function buildDashboardApiPayload(params?: {
       predictionAccuracy,
       learningAudit: buildLearningAuditSection(db, predictionAccuracy, policyState),
       learningObservability: buildLearningObservabilitySection(db),
+      gateAttribution,
     },
   };
 }
