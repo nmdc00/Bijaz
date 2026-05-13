@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../../src/memory/db.js';
 import { storeDecisionArtifact } from '../../src/memory/decision_artifacts.js';
+import { recordEntryGateDecision } from '../../src/memory/llm_entry_gate_log.js';
 import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
 import { recordPerpTradeJournal } from '../../src/memory/perp_trade_journal.js';
 import { recordOutcome } from '../../src/memory/calibration.js';
@@ -92,8 +93,129 @@ describe('dashboard api payload', () => {
     expect(payload.sections.learningObservability.runtimeContext.policyVersion).toBe('default');
     expect(payload.sections.learningObservability.totalShadowAudits).toBe(0);
     expect(payload.sections.learningObservability.runSummaries).toEqual([]);
+    expect(payload.sections.gateAttribution.entryGate.verdictCounts).toEqual({
+      approve: 0,
+      reject: 0,
+      resize: 0,
+    });
+    expect(payload.sections.gateAttribution.entryGate.reasonCounts).toEqual([]);
+    expect(payload.sections.gateAttribution.journal.outcomeCounts).toEqual({
+      executed: 0,
+      failed: 0,
+      blocked: 0,
+    });
     expect(typeof payload.meta.recordCounts.perpTrades).toBe('number');
     expect(typeof payload.meta.recordCounts.journals).toBe('number');
+  });
+
+  it('builds gate attribution metrics from structured gate logs and trade journals', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-gate-attribution-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordEntryGateDecision({
+      symbol: 'BTC',
+      side: 'buy',
+      notionalUsd: 50,
+      verdict: 'reject',
+      reasoning: 'Opposite-side position already open on this symbol. Cannot open conflicting trade.',
+      reasonCode: 'book_conflict',
+      usedFallback: false,
+      signalClass: 'momentum_breakout',
+      regime: 'trending',
+      session: 'us',
+      edge: 0.08,
+    });
+    recordEntryGateDecision({
+      symbol: 'ETH',
+      side: 'sell',
+      notionalUsd: 40,
+      verdict: 'resize',
+      reasoning: 'Reduce size for risk',
+      reasonCode: 'size_downshift',
+      adjustedSizeUsd: 25,
+      usedFallback: false,
+      signalClass: 'mean_reversion',
+      regime: 'choppy',
+      session: 'us',
+      edge: 0.05,
+      suggestedLeverage: 2,
+    });
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      execution_mode: 'paper',
+      symbol: 'BTC',
+      side: 'buy',
+      signalClass: 'momentum_breakout',
+      outcome: 'blocked',
+      reasoning: 'LLM entry gate rejected: Opposite-side position already open',
+      error: 'Opposite-side position already open',
+      policyReasonCode: 'policy.decision_quality',
+      policyReason: 'quality.segment.downweight: score below threshold',
+      policySizeMultiplier: 0.5,
+      entryGateVerdict: 'reject',
+      entryGateReasonCode: 'book_conflict',
+    });
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      execution_mode: 'paper',
+      symbol: 'ETH',
+      side: 'sell',
+      signalClass: 'mean_reversion',
+      outcome: 'executed',
+      reasoning: 'Executed after resize',
+      policyReasonCode: 'policy.decision_quality',
+      policyReason: 'quality.segment.downweight: score below threshold',
+      policySizeMultiplier: 0.5,
+      entryGateVerdict: 'resize',
+      entryGateReasonCode: 'size_downshift',
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.gateAttribution.entryGate.verdictCounts).toEqual({
+      approve: 0,
+      reject: 1,
+      resize: 1,
+    });
+    expect(payload.sections.gateAttribution.entryGate.reasonCounts).toEqual([
+      { reasonCode: 'book_conflict', count: 1 },
+      { reasonCode: 'size_downshift', count: 1 },
+    ]);
+    expect(payload.sections.gateAttribution.entryGate.recentDecisions[0]).toMatchObject({
+      symbol: 'ETH',
+      verdict: 'resize',
+      reasonCode: 'size_downshift',
+      adjustedSizeUsd: 25,
+      suggestedLeverage: 2,
+    });
+    expect(payload.sections.gateAttribution.journal.outcomeCounts).toEqual({
+      executed: 1,
+      failed: 0,
+      blocked: 1,
+    });
+    expect(payload.sections.gateAttribution.journal.blockedReasons[0]?.reason).toContain('LLM entry gate rejected');
+    expect(
+      payload.sections.gateAttribution.journal.recentPolicyAdjustments.some((row) =>
+        row.symbol === 'ETH' &&
+        row.policyReasonCode === 'policy.decision_quality' &&
+        row.policySizeMultiplier === 0.5 &&
+        row.entryGateVerdict === 'resize' &&
+        row.entryGateReasonCode === 'size_downshift'
+      )
+    ).toBe(true);
   });
 
   it('includes prediction-accuracy windows once final comparable rows exist', () => {

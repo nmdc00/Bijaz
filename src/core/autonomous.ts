@@ -666,9 +666,35 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       expectedRMultiple: proposal.expectedRMultiple,
     };
 
+    let originatorGateVerdict: 'approve' | 'reject' | 'resize' | null = null;
+    let originatorGateReasonCode: string | null = null;
     if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
       const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
+      originatorGateVerdict = gateDecision.verdict;
+      originatorGateReasonCode = gateDecision.reasonCode ?? null;
       if (gateDecision.verdict === 'reject') {
+        try {
+          recordPerpTradeJournal({
+            kind: 'perp_trade_journal',
+            execution_mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+            tradeId: null,
+            symbol,
+            side,
+            size: markPrice > 0 ? probeUsd / markPrice : probeUsd,
+            leverage: targetLeverage ?? null,
+            orderType: 'market',
+            reduceOnly: false,
+            markPrice: markPrice || null,
+            confidence: String(proposal.confidence),
+            reasoning: `LLM entry gate rejected: ${gateDecision.reasoning}`,
+            signalClass: 'llm_originator',
+            expectedEdge: 0.1,
+            entryGateVerdict: originatorGateVerdict,
+            entryGateReasonCode: originatorGateReasonCode,
+            outcome: 'blocked',
+            error: gateDecision.reasoning,
+          });
+        } catch { /* best-effort */ }
         this.limiter.release(probeUsd);
         if (proposal.proposalRecordId != null) {
           updateTradeProposalOutcome(proposal.proposalRecordId, gateDecision.verdict, false);
@@ -1052,6 +1078,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         return limiterRemaining;
       })();
       const desiredUsd = Number.isFinite(expr.probeSizeUsd) ? expr.probeSizeUsd : 0;
+      const policySizeMultiplierRaw = Number(globalGate.sizeMultiplier ?? 1);
+      const policySizeMultiplier =
+        Number.isFinite(policySizeMultiplierRaw) && policySizeMultiplierRaw > 0
+          ? Math.max(0.05, Math.min(1, policySizeMultiplierRaw))
+          : 1;
+      const policyReasoning =
+        policySizeMultiplier < 1
+          ? `policy=${globalGate.reasonCode ?? 'policy.size_adjust'} size_multiplier=${policySizeMultiplier.toFixed(2)} reason=${globalGate.reason ?? 'size adjustment applied'}`
+          : null;
       const perf = summarizeSignalPerformance(listPerpTradeJournals({ limit: 200 }), signalClass);
       const kellyFraction = computeFractionalKellyFraction({
         expectedEdge: expr.expectedEdge,
@@ -1060,7 +1095,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         sampleCount: perf.sampleCount,
         maxFraction: Number((this.thufirConfig.autonomy as any)?.newsEntry?.maxKellyFraction ?? 0.25),
       });
-      const signalAdjustedUsd = desiredUsd * Math.max(0.25, kellyFraction * 4) * sizingModifier;
+      const signalAdjustedUsd =
+        desiredUsd * Math.max(0.25, kellyFraction * 4) * sizingModifier * policySizeMultiplier;
       const newsSizeCapFraction = Number((this.thufirConfig.autonomy as any)?.newsEntry?.sizeCapFraction ?? 0.5);
       const cappedForNews =
         expr.newsTrigger?.enabled === true
@@ -1134,9 +1170,42 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         entryReasoning: expr.expectedMove ?? '',
       };
       let gateStopLevelPrice: number | null = null;
+      let entryGateVerdict: 'approve' | 'reject' | 'resize' | null = null;
+      let entryGateReasonCode: string | null = null;
       if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
         const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
+        entryGateVerdict = gateDecision.verdict;
+        entryGateReasonCode = gateDecision.reasonCode ?? null;
         if (gateDecision.verdict === 'reject') {
+          try {
+            recordPerpTradeJournal({
+              kind: 'perp_trade_journal',
+              execution_mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+              tradeId: null,
+              hypothesisId: expr.hypothesisId ?? null,
+              symbol,
+              side: expr.side,
+              size,
+              leverage: targetLeverage ?? null,
+              orderType: expr.orderType ?? null,
+              reduceOnly: false,
+              markPrice: markPrice || null,
+              confidence: String(confidenceWeighted),
+              reasoning: `LLM entry gate rejected: ${gateDecision.reasoning}${policyReasoning ? ` | ${policyReasoning}` : ''}`,
+              signalClass,
+              marketRegime: regime,
+              volatilityBucket,
+              liquidityBucket,
+              expectedEdge: expr.expectedEdge,
+              policyReasonCode: globalGate.reasonCode ?? null,
+              policyReason: globalGate.reason ?? null,
+              policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
+              entryGateVerdict,
+              entryGateReasonCode,
+              outcome: 'blocked',
+              error: gateDecision.reasoning,
+            });
+          } catch { /* best-effort */ }
           outputs.push(`${symbol}: Rejected by LLM entry gate — ${gateDecision.reasoning}`);
           this.limiter.release(probeUsd);
           continue;
@@ -1167,7 +1236,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           2
         )} confidenceRaw=${confidenceRaw.toFixed(3)} confidenceWeighted=${confidenceWeighted.toFixed(
           3
-        )} sizingModifier=${sizingModifier.toFixed(2)} ${formatContextPackTrace({
+        )} sizingModifier=${sizingModifier.toFixed(2)}${policyReasoning ? ` ${policyReasoning}` : ''} ${formatContextPackTrace({
           marketRegime: expr.contextPack?.regime.marketRegime ?? regime,
           volatilityBucket: expr.contextPack?.regime.volatilityBucket ?? volatilityBucket,
           liquidityBucket: expr.contextPack?.regime.liquidityBucket ?? liquidityBucket,
@@ -1344,6 +1413,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           markPrice: markPrice || null,
           confidence: String(confidenceWeighted),
           reasoning: decision.reasoning ?? null,
+          policyReasonCode: globalGate.reasonCode ?? null,
+          policyReason: globalGate.reason ?? null,
+          policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
+          entryGateVerdict,
+          entryGateReasonCode,
           signalClass,
           marketRegime: regime,
           volatilityBucket,

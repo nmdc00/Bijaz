@@ -17,6 +17,11 @@ export type PerpTradeJournalEntry = {
   markPrice?: number | null;
   confidence?: string | null;
   reasoning?: string | null;
+  policyReasonCode?: string | null;
+  policyReason?: string | null;
+  policySizeMultiplier?: number | null;
+  entryGateVerdict?: 'approve' | 'reject' | 'resize' | null;
+  entryGateReasonCode?: string | null;
   estimatedNotionalUsd?: number | null;
   estimatedFeeRate?: number | null;
   estimatedFeeType?: 'taker' | 'maker' | null;
