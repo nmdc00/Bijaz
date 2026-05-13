@@ -51,13 +51,16 @@ import { buildLegacyExitContract, serializeExitContract } from './exit_contract.
 import { TaSurface } from './ta_surface.js';
 import { OriginationTrigger } from './origination_trigger.js';
 import { LlmTradeOriginator } from './llm_trade_originator.js';
-import { listEvents } from '../memory/events.js';
+import { getLatestThought, listEvents, listForecastsForEvent, listOutcomesForEvent } from '../memory/events.js';
 import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import type { ToolExecutorContext } from './tool-executor.js';
 import { isSuppressed } from '../memory/signal_class_suppression.js';
 import { createLearningCase } from '../memory/learning_cases.js';
 import { getSignalWeights } from '../memory/learning.js';
+import { searchHistoricalCases } from '../events/casebase.js';
+import { buildOriginationEventContext, resolveOriginationContextDomain } from './origination_context.js';
+import type { MarketContextDomain } from '../markets/context.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -397,13 +400,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     return this.runDiscoveryScan(scanInput);
   }
 
-  private async getMarketContextCached(signalSymbols: string[] = []): Promise<string> {
+  private async getMarketContextCached(domain: MarketContextDomain, signalSymbols: string[]): Promise<string> {
     const now = Date.now();
     const normalizedSymbols = signalSymbols
       .map((symbol) => String(symbol ?? '').trim().toUpperCase())
       .filter(Boolean)
       .slice(0, 3);
-    const cacheKey = normalizedSymbols.join(',') || 'default';
+    const cacheKey = `${domain}:${normalizedSymbols.join(',') || 'default'}`;
     if (
       this.marketContextCache &&
       this.marketContextCache.key === cacheKey &&
@@ -423,10 +426,10 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         {
           message:
             normalizedSymbols.length > 0
-              ? `crypto perpetual markets overview for ${normalizedSymbols.join(', ')}`
-              : 'crypto perpetual markets overview',
-          domain: 'crypto',
-          marketLimit: 20,
+              ? `${domain} markets overview for ${normalizedSymbols.join(', ')}`
+              : `${domain} markets overview`,
+          domain,
+          marketLimit: domain === 'crypto' ? 20 : 50,
           signalSymbols: normalizedSymbols,
         },
         executeTool
@@ -439,11 +442,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         })
         .join('\n')
         .slice(0, 1000);
-      this.marketContextCache = {
-        key: cacheKey,
-        value,
-        expiresAt: now + 10 * 60 * 1000,
-      };
+      this.marketContextCache = { key: cacheKey, value, expiresAt: now + 10 * 60 * 1000 };
       return value;
     } catch {
       return '';
@@ -508,7 +507,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     // Assemble recent events text
     const twoHoursAgo = new Date(now - 2 * 60 * 60 * 1000).toISOString();
-    const recentRaw = listEvents({ limit: 20 });
+    const recentRaw = listEvents({ limit: 20, sinceIso: new Date(now - 24 * 60 * 60 * 1000).toISOString() });
     const recent = recentRaw.filter((e) => e.createdAt > twoHoursAgo);
     const recentEvents =
       recent.length === 0
@@ -518,8 +517,20 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             .join('\n')
             .slice(0, 500);
 
+    const contextSymbols = taSnapshots.length > 0 ? taSnapshots.map((snapshot) => snapshot.symbol) : topMarkets;
+    const contextDomain = resolveOriginationContextDomain(contextSymbols, recentRaw);
+    const eventContext = buildOriginationEventContext({
+      topMarkets: contextSymbols,
+      recentEvents: recentRaw,
+      focusDomain: contextDomain,
+      getLatestThought,
+      listForecastsForEvent,
+      listOutcomesForEvent,
+      searchHistoricalCases,
+    });
+
     // Fetch market context (10-min cached)
-    const marketContext = await this.getMarketContextCached(topMarkets);
+    const marketContext = await this.getMarketContextCached(contextDomain, contextSymbols);
 
     if (isSuppressed('llm_originator')) {
       this.logger.info('Originator skipped: signal class llm_originator is currently suppressed.');
@@ -541,6 +552,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       taSnapshots,
       marketContext,
       recentEvents,
+      eventContext,
+      contextDomain,
       alertedSymbols: triggerResult.alertedSymbols,
       triggerReason: triggerResult.reason,
       performanceSummary,

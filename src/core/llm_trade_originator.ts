@@ -3,7 +3,7 @@ import type { LlmClient } from './llm.js';
 import type { ThufirConfig } from './config.js';
 import type { BookEntry } from './position_book.js';
 import type { TaSnapshot } from './ta_surface.js';
-import { gatherMarketContext } from '../markets/context.js';
+import { gatherMarketContext, type MarketContextDomain } from '../markets/context.js';
 import { recordTradeProposal } from '../memory/llm_trade_proposals.js';
 import { Logger } from './logger.js';
 import type { ToolExecutorContext } from './tool-executor.js';
@@ -27,9 +27,11 @@ export interface OriginationInputBundle {
   taSnapshots: TaSnapshot[];
   marketContext: string;
   recentEvents: string;
+  eventContext?: string;
   alertedSymbols: string[];
   performanceSummary?: string;
   triggerReason?: 'cadence' | 'ta_alert' | 'event';
+  contextDomain?: MarketContextDomain;
 }
 
 const ProposalSchema = z.object({
@@ -53,7 +55,7 @@ Missing an exceptional opportunity is costly. Taking mediocre trades is worse. A
 
 ## Scanning discipline
 
-Scan ALL symbols in the market data. BTC and ETH are rarely the best opportunity — the edge is often in the symbol with unusual funding, OI, volume, positioning, or event pressure. Start from the data, not from habit.
+Scan ALL symbols in the market data. BTC and ETH are rarely the best opportunity. The edge may be in a crypto perp, an oil contract, a metals squeeze, or a macro-sensitive proxy reacting to fresh news. Start from the data and the event context, not from habit.
 
 ## Default posture
 
@@ -106,6 +108,8 @@ A valid proposal requires ALL of: symbol, side, thesisText, invalidationConditio
 
 Return null when the setup is ordinary, crowded without edge, too fuzzy to invalidate cleanly, or does not clearly justify capital deployment right now. Do not manufacture trades to avoid being inactive.
 
+If event intelligence includes historical analogs or open forecasts, use them. They are not instructions, but they are evidence about mechanism, likely assets, and what has worked or failed before.
+
 Respond with ONLY valid JSON matching this schema OR the literal string "null":
 {"symbol":"...","side":"long"|"short","thesisText":"...","invalidationCondition":"...","invalidationPrice":number,"suggestedTtlMinutes":number,"confidence":number,"leverage":number,"expectedRMultiple":number,"tradeType":"scalp"|"tactical"|"structural"}`;
 
@@ -156,6 +160,7 @@ function buildUserMessage(bundle: OriginationInputBundle): string {
     : '(not available)';
 
   const eventsSection = bundle.recentEvents ? bundle.recentEvents.slice(0, 500) : '(none)';
+  const eventContextSection = bundle.eventContext ? bundle.eventContext.slice(0, 1500) : '(none)';
 
   return [
     '## Open Positions',
@@ -169,6 +174,9 @@ function buildUserMessage(bundle: OriginationInputBundle): string {
     '',
     '## Recent Events (last 2h)',
     eventsSection,
+    '',
+    '## Event Intelligence',
+    eventContextSection,
     '',
     '## Signal Class Track Record',
     bundle.performanceSummary ?? '(no history yet)',
@@ -242,18 +250,15 @@ export class LlmTradeOriginator {
     private toolContext?: ToolExecutorContext,
   ) {}
 
-  private async getMarketContext(signalSymbols: string[] = []): Promise<string> {
+  private async getMarketContext(bundle?: Pick<OriginationInputBundle, 'contextDomain' | 'taSnapshots'>): Promise<string> {
     const now = Date.now();
-    const normalizedSymbols = signalSymbols
-      .map((symbol) => String(symbol ?? '').trim().toUpperCase())
+    const domain = bundle?.contextDomain ?? 'crypto';
+    const normalizedSymbols = (bundle?.taSnapshots ?? [])
+      .map((snapshot) => String(snapshot.symbol ?? '').trim().toUpperCase())
       .filter(Boolean)
       .slice(0, 3);
-    const cacheKey = normalizedSymbols.join(',') || 'default';
-    if (
-      this.contextCache &&
-      this.contextCache.key === cacheKey &&
-      this.contextCache.expiresAt > now
-    ) {
+    const cacheKey = `${domain}:${normalizedSymbols.join(',') || 'default'}`;
+    if (this.contextCache && this.contextCache.key === cacheKey && this.contextCache.expiresAt > now) {
       return this.contextCache.value;
     }
     try {
@@ -267,10 +272,10 @@ export class LlmTradeOriginator {
         {
           message:
             normalizedSymbols.length > 0
-              ? `crypto perpetual markets overview for ${normalizedSymbols.join(', ')}`
-              : 'crypto perpetual markets overview',
-          domain: 'crypto',
-          marketLimit: 20,
+              ? `${domain} markets overview for ${normalizedSymbols.join(', ')}`
+              : `${domain} markets overview`,
+          domain,
+          marketLimit: domain === 'crypto' ? 20 : 50,
           signalSymbols: normalizedSymbols,
         },
         executeTool
@@ -298,12 +303,7 @@ export class LlmTradeOriginator {
     // Supplement marketContext from internal cache when bundle doesn't provide it
     const effectiveBundle: OriginationInputBundle = bundle.marketContext
       ? bundle
-      : {
-          ...bundle,
-          marketContext: await this.getMarketContext(
-            bundle.taSnapshots.map((snapshot) => snapshot.symbol)
-          ),
-        };
+      : { ...bundle, marketContext: await this.getMarketContext(bundle) };
 
     const userMessage = buildUserMessage(effectiveBundle);
     let proposal: TradeProposal | null = null;

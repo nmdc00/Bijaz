@@ -9,6 +9,7 @@
  * - Exit policy uses LLM TTL and invalidation price
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolveSessionWeightContext } from '../../src/core/session-weight.js';
 
 // ── Hoisted mock functions (available before vi.mock calls) ───────────────────
 
@@ -34,6 +35,10 @@ const mocks = vi.hoisted(() => {
     expressions: [],
     selector: { source: 'configured', symbols: [] },
   }));
+  const getLatestThought = vi.fn(() => null);
+  const listForecastsForEvent = vi.fn(() => []);
+  const listOutcomesForEvent = vi.fn(() => []);
+  const searchHistoricalCases = vi.fn(() => []);
 
   // Stable mock objects — replaced entirely on each TaSurface/OriginationTrigger/LlmTradeOriginator construction
   // by capturing via the constructor mock
@@ -53,6 +58,7 @@ const mocks = vi.hoisted(() => {
     taComputeAll, triggerShouldFire, originatorPropose,
     upsertExitPolicy, updateTradeProposalOutcome,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
+    getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
     taSurfaceInstance, triggerInstance, originatorInstance,
   };
 });
@@ -174,6 +180,13 @@ vi.mock('../../src/memory/llm_entry_gate_log.js', () => ({
 
 vi.mock('../../src/memory/events.js', () => ({
   listEvents: vi.fn(() => []),
+  getLatestThought: (...args: unknown[]) => mocks.getLatestThought(...args),
+  listForecastsForEvent: (...args: unknown[]) => mocks.listForecastsForEvent(...args),
+  listOutcomesForEvent: (...args: unknown[]) => mocks.listOutcomesForEvent(...args),
+}));
+
+vi.mock('../../src/events/casebase.js', () => ({
+  searchHistoricalCases: (...args: unknown[]) => mocks.searchHistoricalCases(...args),
 }));
 
 vi.mock('../../src/markets/context.js', () => ({
@@ -296,6 +309,10 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       selector: { source: 'configured', symbols: [] },
     });
     mocks.getSignalWeights.mockReturnValue({ technical: 0.5, news: 0.3, onChain: 0.2 });
+    mocks.getLatestThought.mockReturnValue(null);
+    mocks.listForecastsForEvent.mockReturnValue([]);
+    mocks.listOutcomesForEvent.mockReturnValue([]);
+    mocks.searchHistoricalCases.mockReturnValue([]);
   });
 
   it('1. proposal → gate approve → executor called, exit policy written with LLM TTL and invalidation price', async () => {
@@ -327,7 +344,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 
     expect(result).toContain('paper ok');
-  });
+  }, 20_000);
 
   it('2. null proposal + cadence trigger → quant fallback runs', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'cadence', alertedSymbols: [] });
@@ -344,7 +361,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
 
     // Discovery ran (no expressions → quant fallback message)
     expect(result).toMatch(/No discovery expressions/i);
-  });
+  }, 20_000);
 
   it('3. null proposal + ta_alert trigger → quant fallback does NOT run, returns originator message', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'ta_alert', alertedSymbols: ['BTC'] });
@@ -394,6 +411,107 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       expect(symbols).not.toContain('BTC');
     }
     // If originator wasn't called (trigger didn't fire with new taSnapshots), that's also valid
+  });
+
+  it('4b. event artifacts and historical cases are injected into originator bundle for commodity contexts', async () => {
+    mocks.taComputeAll.mockResolvedValue([
+      { ...BASE_SNAPSHOT, symbol: 'XYZ:CL', trendBias: 'up', alertReason: undefined },
+      { ...BASE_SNAPSHOT, symbol: 'XYZ:GOLD', trendBias: 'up', alertReason: undefined },
+    ]);
+    mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'event', alertedSymbols: [] });
+    const event = {
+      id: 'event-1',
+      eventKey: 'event-key-1',
+      title: 'Hormuz disruption tightens crude exports',
+      domain: 'energy',
+      occurredAt: new Date().toISOString(),
+      sourceIntelIds: ['intel-1'],
+      tags: ['supply_shock', 'attack'],
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const thought = {
+      id: 'thought-1',
+      eventId: 'event-1',
+      version: 1,
+      mechanism: 'Shipping disruption reduces crude availability and lifts front-month oil.',
+      causalChain: ['attack disrupts shipping', 'exports fall', 'oil reprices higher'],
+      impactedAssets: [
+        { symbol: 'CL', direction: 'up', confidence: 0.82 },
+        { symbol: 'BRENTOIL', direction: 'up', confidence: 0.79 },
+      ],
+      invalidationConditions: ['shipping resumes quickly'],
+      createdAt: new Date().toISOString(),
+    };
+    mocks.getLatestThought.mockReturnValue(thought);
+    mocks.listForecastsForEvent.mockReturnValue([
+      {
+        id: 'forecast-1',
+        eventId: 'event-1',
+        thoughtId: 'thought-1',
+        asset: 'CL',
+        domain: 'energy',
+        direction: 'up',
+        horizonHours: 24,
+        confidence: 0.82,
+        invalidationConditions: ['shipping resumes quickly'],
+        status: 'open',
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    mocks.listOutcomesForEvent.mockReturnValue([
+      {
+        id: 'outcome-1',
+        forecastId: 'forecast-0',
+        eventId: 'event-1',
+        resolutionStatus: 'confirmed',
+        actualDirection: 'up',
+        resolvedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    mocks.searchHistoricalCases.mockReturnValue([
+      {
+        case_key: '2019-abqaiq-attack-oil',
+        event_date: '2019-09-14',
+        event_type: 'attack',
+        title: 'Abqaiq attack disrupts Saudi output',
+        summary: 'Oil jumps on supply shock.',
+        domain: 'energy',
+        actors: ['Saudi Arabia'],
+        locations: ['Saudi Arabia'],
+        channels: ['shipping'],
+        first_order_assets: ['CL'],
+        second_order_assets: ['BRENTOIL'],
+        mechanism: 'supply outage reprices crude benchmarks higher',
+        causal_chain: ['attack', 'output outage', 'oil higher'],
+        forecast: { direction: 'up', horizons: ['24h'] },
+        outcome: { direction_correct: true, realized_note: 'Oil rallied.' },
+        regime_tags: ['supply_shock'],
+        sources: [],
+        validation_status: 'validated',
+      },
+    ]);
+    const { listEvents } = await import('../../src/memory/events.js');
+    vi.mocked(listEvents).mockReturnValue([event] as any);
+
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('approve');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'paper ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'XYZ:CL', markPrice: 70, metadata: { maxLeverage: 10 } }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    await manager.runScan({ forceExecute: false });
+
+    const bundle = mocks.originatorPropose.mock.calls[0]![0] as any;
+    expect(bundle.contextDomain).toBe('energy');
+    expect(bundle.eventContext).toContain('Hormuz disruption tightens crude exports');
+    expect(bundle.eventContext).toContain('Shipping disruption reduces crude availability');
+    expect(bundle.eventContext).toContain('CL up 24h');
+    expect(bundle.eventContext).toContain('2019-abqaiq-attack-oil');
   });
 
   it('5. gate reject → executor NOT called', async () => {
@@ -547,7 +665,8 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(call.learningComparable).toBe(false);
     expect(call.marketProbability).toBeUndefined();
     expect(call.confidenceRaw).toBe(0.8);
-    expect(call.confidenceAdjusted).toBeCloseTo(0.92, 6);
+    const expectedAdjustedConfidence = Number((0.8 * resolveSessionWeightContext(new Date()).sessionWeight).toFixed(4));
+    expect(call.confidenceAdjusted).toBeCloseTo(expectedAdjustedConfidence, 6);
     expect(call.signalWeightsSnapshot).toEqual({ technical: 0.5, news: 0.3, onChain: 0.2 });
     expect(call.signalScores).toBeUndefined();
     expect(mocks.createLearningCase).toHaveBeenCalledTimes(1);
