@@ -10,6 +10,7 @@ import { placePaperPerpOrder } from '../../src/memory/paper_perps.js';
 import { recordPerpTradeJournal } from '../../src/memory/perp_trade_journal.js';
 import { recordOutcome } from '../../src/memory/calibration.js';
 import { createPrediction } from '../../src/memory/predictions.js';
+import { setLearningRuntimeContext } from '../../src/memory/learning_observability.js';
 import {
   buildDashboardApiPayload,
   handleDashboardApiRequest,
@@ -87,6 +88,10 @@ describe('dashboard api payload', () => {
     expect(payload.sections.learningAudit.execution.totalCaseCount).toBe(0);
     expect(payload.sections.learningAudit.exclusions.totalCaseCount).toBe(0);
     expect(payload.sections.learningAudit.policyOutputs).toEqual([]);
+    expect(payload.sections.learningObservability.runtimeContext.runId).toBe('default');
+    expect(payload.sections.learningObservability.runtimeContext.policyVersion).toBe('default');
+    expect(payload.sections.learningObservability.totalShadowAudits).toBe(0);
+    expect(payload.sections.learningObservability.runSummaries).toEqual([]);
     expect(typeof payload.meta.recordCounts.perpTrades).toBe('number');
     expect(typeof payload.meta.recordCounts.journals).toBe('number');
   });
@@ -133,6 +138,71 @@ describe('dashboard api payload', () => {
     expect(payload.sections.predictionAccuracy.byDomain.binary?.find((row) => row.windowSize === 20)?.brierDelta).not.toBeNull();
     expect(payload.sections.learningAudit.comparable.totalCaseCount).toBe(20);
     expect(payload.sections.learningAudit.comparable.byDomain).toEqual([{ domain: 'binary', count: 20 }]);
+  });
+
+  it('surfaces learning observability run summaries and recent shadow audits', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-learning-observability-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    setLearningRuntimeContext({ runId: 'paper-reset-2026-05-13', policyVersion: 'weights-v2' }, db);
+    const predictionId = createPrediction({
+      marketId: 'perp:BTC',
+      marketTitle: 'BTC dashboard observability',
+      predictedOutcome: 'YES',
+      predictedProbability: 0.7,
+      modelProbability: 0.7,
+      marketProbability: 0.45,
+      domain: 'perp',
+      learningComparable: true,
+      signalScores: {
+        technical: 0.9,
+        news: 0.2,
+        onChain: 0.1,
+      },
+      signalWeightsSnapshot: {
+        technical: 0.5,
+        news: 0.3,
+        onChain: 0.2,
+      },
+    });
+    recordOutcome({ id: predictionId, outcome: 'YES', outcomeBasis: 'final', pnl: 5 });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'combined',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.learningObservability.runtimeContext.runId).toBe('paper-reset-2026-05-13');
+    expect(payload.sections.learningObservability.runtimeContext.policyVersion).toBe('weights-v2');
+    expect(payload.sections.learningObservability.totalShadowAudits).toBe(1);
+    expect(payload.sections.learningObservability.activeWeights.some((row) => row.domain === 'perp')).toBe(true);
+    expect(payload.sections.learningObservability.runSummaries).toEqual([
+      expect.objectContaining({
+        runId: 'paper-reset-2026-05-13',
+        policyVersion: 'weights-v2',
+        eventCount: 1,
+        changedVsDefaultCount: 0,
+        changedAfterUpdateCount: 1,
+      }),
+    ]);
+    expect(payload.sections.learningObservability.recentAudits).toEqual([
+      expect.objectContaining({
+        domain: 'perp',
+        runId: 'paper-reset-2026-05-13',
+        policyVersion: 'weights-v2',
+        changedVsDefault: false,
+        changedAfterUpdate: true,
+      }),
+    ]);
   });
 
   it('derives learning audit surfaces from legacy comparable rows, journals, and policy state', () => {

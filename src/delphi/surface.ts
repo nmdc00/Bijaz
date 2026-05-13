@@ -191,7 +191,7 @@ export async function generateDelphiPredictions(
           newsScore: signal.newsScore,
           onChainScore: signal.onChainScore,
           signalConfidence: signal.confidence,
-          signalWeights: config.technical?.signals?.weights,
+          signalWeights: signal.signalWeightsUsed,
           inputSource: 'real-signals',
         } as DelphiSignalInputs;
       } catch {

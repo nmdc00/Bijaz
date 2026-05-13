@@ -7,6 +7,7 @@ import { loadConfig, type ThufirConfig } from '../core/config.js';
 import { getDailyPnLRollup } from '../core/daily_pnl.js';
 import { HyperliquidClient } from '../execution/hyperliquid/client.js';
 import { openDatabase } from '../memory/db.js';
+import { getLearningRuntimeContext } from '../memory/learning_observability.js';
 import {
   computeDomainWindowMetrics,
   computeRollingWindowMetrics,
@@ -864,6 +865,55 @@ type LearningAuditSection = {
   policyOutputs: LearningAuditPolicyOutput[];
 };
 
+type LearningObservabilityWeightsRow = {
+  domain: string;
+  weights: {
+    technical: number;
+    news: number;
+    onChain: number;
+  } | null;
+  samples: number;
+  updatedAt: string | null;
+};
+
+type LearningObservabilityRunSummary = {
+  runId: string;
+  policyVersion: string;
+  eventCount: number;
+  changedVsDefaultCount: number;
+  changedAfterUpdateCount: number;
+  avgConfidenceDeltaVsDefault: number | null;
+  avgConfidenceDeltaAfterUpdate: number | null;
+  lastRecordedAt: string | null;
+};
+
+type LearningObservabilityRecentAudit = {
+  domain: string;
+  runId: string;
+  policyVersion: string;
+  baselineDirection: string;
+  decisionDirection: string;
+  activeDirectionAfter: string;
+  changedVsDefault: boolean;
+  changedAfterUpdate: boolean;
+  confidenceDeltaVsDefault: number | null;
+  confidenceDeltaAfterUpdate: number | null;
+  createdAt: string | null;
+};
+
+type LearningObservabilitySection = {
+  runtimeContext: {
+    runId: string;
+    policyVersion: string;
+    source: 'db' | 'env' | 'default';
+    updatedAt: string | null;
+  };
+  activeWeights: LearningObservabilityWeightsRow[];
+  totalShadowAudits: number;
+  runSummaries: LearningObservabilityRunSummary[];
+  recentAudits: LearningObservabilityRecentAudit[];
+};
+
 function buildPredictionAccuracySection(db: Database.Database): PredictionAccuracySection {
   try {
     const total = (
@@ -1295,6 +1345,146 @@ function buildLearningAuditSection(
   }
 
   return buildLearningAuditSectionFromFallback(db, predictionAccuracy, policyState);
+}
+
+function parseSignalWeightRecord(value: string | null): LearningObservabilityWeightsRow['weights'] {
+  const parsed = parseJson<Record<string, unknown>>(value);
+  if (!parsed) return null;
+  const technical = Number(parsed.technical);
+  const news = Number(parsed.news);
+  const onChain = Number(parsed.onChain);
+  if (![technical, news, onChain].every((entry) => Number.isFinite(entry))) {
+    return null;
+  }
+  return { technical, news, onChain };
+}
+
+function buildLearningObservabilitySection(
+  db: Database.Database
+): LearningObservabilitySection {
+  const runtime = getLearningRuntimeContext(db);
+  const activeWeights = tableExists(db, 'signal_weights')
+    ? (() => {
+        try {
+          const rows = db.prepare(
+            `
+              SELECT domain, weights, samples, updated_at AS updatedAt
+              FROM signal_weights
+              ORDER BY domain ASC
+            `
+          ).all() as Array<{
+            domain?: string | null;
+            weights?: string | null;
+            samples?: number | null;
+            updatedAt?: string | null;
+          }>;
+          return rows.map((row) => ({
+            domain: typeof row.domain === 'string' && row.domain.trim().length > 0 ? row.domain : 'unknown',
+            weights: parseSignalWeightRecord(row.weights ?? null),
+            samples: Number(row.samples ?? 0),
+            updatedAt: row.updatedAt ?? null,
+          }));
+        } catch {
+          return [] as LearningObservabilityWeightsRow[];
+        }
+      })()
+    : [];
+
+  if (!tableExists(db, 'learning_signal_audits')) {
+    return {
+      runtimeContext: runtime,
+      activeWeights,
+      totalShadowAudits: 0,
+      runSummaries: [],
+      recentAudits: [],
+    };
+  }
+
+  const totalShadowAudits = safeCount(db, 'SELECT COUNT(*) AS c FROM learning_signal_audits');
+  const runSummaries = (() => {
+    try {
+      const rows = db.prepare(
+        `
+          SELECT
+            run_id AS runId,
+            policy_version AS policyVersion,
+            COUNT(*) AS eventCount,
+            SUM(changed_vs_default) AS changedVsDefaultCount,
+            SUM(changed_after_update) AS changedAfterUpdateCount,
+            AVG(decision_confidence - baseline_confidence) AS avgConfidenceDeltaVsDefault,
+            AVG(active_confidence_after - decision_confidence) AS avgConfidenceDeltaAfterUpdate,
+            MAX(created_at) AS lastRecordedAt
+          FROM learning_signal_audits
+          GROUP BY run_id, policy_version
+          ORDER BY lastRecordedAt DESC, eventCount DESC
+          LIMIT 20
+        `
+      ).all() as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        runId: String(row.runId ?? 'unknown'),
+        policyVersion: String(row.policyVersion ?? 'unknown'),
+        eventCount: Number(row.eventCount ?? 0),
+        changedVsDefaultCount: Number(row.changedVsDefaultCount ?? 0),
+        changedAfterUpdateCount: Number(row.changedAfterUpdateCount ?? 0),
+        avgConfidenceDeltaVsDefault:
+          row.avgConfidenceDeltaVsDefault == null ? null : Number(row.avgConfidenceDeltaVsDefault),
+        avgConfidenceDeltaAfterUpdate:
+          row.avgConfidenceDeltaAfterUpdate == null ? null : Number(row.avgConfidenceDeltaAfterUpdate),
+        lastRecordedAt: row.lastRecordedAt == null ? null : String(row.lastRecordedAt),
+      }));
+    } catch {
+      return [] as LearningObservabilityRunSummary[];
+    }
+  })();
+
+  const recentAudits = (() => {
+    try {
+      const rows = db.prepare(
+        `
+          SELECT
+            domain,
+            run_id AS runId,
+            policy_version AS policyVersion,
+            baseline_direction AS baselineDirection,
+            decision_direction AS decisionDirection,
+            active_direction_after AS activeDirectionAfter,
+            changed_vs_default AS changedVsDefault,
+            changed_after_update AS changedAfterUpdate,
+            (decision_confidence - baseline_confidence) AS confidenceDeltaVsDefault,
+            (active_confidence_after - decision_confidence) AS confidenceDeltaAfterUpdate,
+            created_at AS createdAt
+          FROM learning_signal_audits
+          ORDER BY created_at DESC, id DESC
+          LIMIT 20
+        `
+      ).all() as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        domain: String(row.domain ?? 'unknown'),
+        runId: String(row.runId ?? 'unknown'),
+        policyVersion: String(row.policyVersion ?? 'unknown'),
+        baselineDirection: String(row.baselineDirection ?? 'unknown'),
+        decisionDirection: String(row.decisionDirection ?? 'unknown'),
+        activeDirectionAfter: String(row.activeDirectionAfter ?? 'unknown'),
+        changedVsDefault: Number(row.changedVsDefault ?? 0) === 1,
+        changedAfterUpdate: Number(row.changedAfterUpdate ?? 0) === 1,
+        confidenceDeltaVsDefault:
+          row.confidenceDeltaVsDefault == null ? null : Number(row.confidenceDeltaVsDefault),
+        confidenceDeltaAfterUpdate:
+          row.confidenceDeltaAfterUpdate == null ? null : Number(row.confidenceDeltaAfterUpdate),
+        createdAt: row.createdAt == null ? null : String(row.createdAt),
+      }));
+    } catch {
+      return [] as LearningObservabilityRecentAudit[];
+    }
+  })();
+
+  return {
+    runtimeContext: runtime,
+    activeWeights,
+    totalShadowAudits,
+    runSummaries,
+    recentAudits,
+  };
 }
 
 function buildLearningAuditSectionFromFallback(
@@ -2467,6 +2657,7 @@ export function buildDashboardApiPayload(params?: {
     };
     predictionAccuracy: PredictionAccuracySection;
     learningAudit: LearningAuditSection;
+    learningObservability: LearningObservabilitySection;
   };
 } {
   const db = params?.db ?? openDatabase();
@@ -2551,6 +2742,7 @@ export function buildDashboardApiPayload(params?: {
       },
       predictionAccuracy,
       learningAudit: buildLearningAuditSection(db, predictionAccuracy, policyState),
+      learningObservability: buildLearningObservabilitySection(db),
     },
   };
 }
