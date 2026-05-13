@@ -116,6 +116,48 @@ export type DashboardPayload = {
         updatedAt: string | null;
       }>;
     };
+    learningObservability: {
+      runtimeContext: {
+        runId: string;
+        policyVersion: string;
+        updatedAt: string | null;
+        source: string | null;
+      };
+      activeWeights: Array<{
+        domain: string;
+        weights: {
+          technical: number;
+          news: number;
+          onChain: number;
+        };
+        samples: number;
+        updatedAt: string | null;
+      }>;
+      totalShadowAudits: number;
+      runSummaries: Array<{
+        runId: string;
+        policyVersion: string;
+        eventCount: number;
+        changedVsDefaultCount: number;
+        changedAfterUpdateCount: number;
+        avgConfidenceDeltaVsDefault: number | null;
+        avgConfidenceDeltaAfterUpdate: number | null;
+        lastRecordedAt: string | null;
+      }>;
+      recentAudits: Array<{
+        domain: string;
+        runId: string;
+        policyVersion: string;
+        baselineDirection: string | null;
+        decisionDirection: string | null;
+        activeDirectionAfter: string | null;
+        changedVsDefault: boolean;
+        changedAfterUpdate: boolean;
+        confidenceDeltaVsDefault: number | null;
+        confidenceDeltaAfterUpdate: number | null;
+        createdAt: string;
+      }>;
+    };
   };
 };
 

@@ -18,7 +18,7 @@ import type {
 } from './types';
 
 const PERIODS = ['1d', '7d', '14d', '30d', '90d'];
-const TABS = ['overview', 'positions', 'trades', 'performance', 'policy', 'conversations', 'logs'] as const;
+const TABS = ['overview', 'positions', 'trades', 'performance', 'learning', 'policy', 'conversations', 'logs'] as const;
 type DashboardTab = (typeof TABS)[number];
 
 function money(value: number | null | undefined): string {
@@ -266,6 +266,12 @@ function LearningAuditPolicyTable({
   );
 }
 
+function signedDelta(value: number | null | undefined, digits = 4): string {
+  if (value == null || Number.isNaN(Number(value))) return '-';
+  const normalized = Number(value);
+  return `${normalized > 0 ? '+' : ''}${normalized.toFixed(digits)}`;
+}
+
 function ConversationThread({ thread }: { thread: ConversationThreadResponse | null }) {
   if (!thread || thread.messages.length === 0) {
     return <div className="empty-state">No messages in this thread.</div>;
@@ -474,6 +480,7 @@ export default function App() {
   const performance = payload?.sections.performanceBreakdown;
   const predictionAccuracy = payload?.sections.predictionAccuracy;
   const learningAudit = payload?.sections.learningAudit;
+  const learningObservability = payload?.sections.learningObservability;
 
   return (
     <main className="app-shell">
@@ -607,6 +614,122 @@ export default function App() {
               <PredictionAccuracyTable rows={rows} />
             </article>
           ))}
+        </section>
+      )}
+
+      {tab === 'learning' && (
+        <section className="subgrid">
+          <article className="subpanel">
+            <h3>Learning Runtime</h3>
+            <div className="subgrid">
+              <div className="subpanel">
+                <h3>Run ID</h3>
+                <div className="mono">{learningObservability?.runtimeContext.runId ?? 'default'}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Policy Version</h3>
+                <div className="mono">{learningObservability?.runtimeContext.policyVersion ?? 'default'}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Shadow Audits</h3>
+                <div className="mono">{numberText(learningObservability?.totalShadowAudits, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Runtime Source</h3>
+                <div>{learningObservability?.runtimeContext.source ?? '-'}</div>
+              </div>
+            </div>
+            <div className="footnote">Updated {timeText(learningObservability?.runtimeContext.updatedAt)}</div>
+          </article>
+
+          <article className="subpanel">
+            <h3>Comparable Prediction Accuracy</h3>
+            <div className="subgrid">
+              <div className="subpanel">
+                <h3>Final Comparable Predictions</h3>
+                <div className="mono">{numberText(predictionAccuracy?.totalFinalPredictions, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Comparable Cases</h3>
+                <div className="mono">{numberText(learningAudit?.comparable.totalCaseCount, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Excluded Cases</h3>
+                <div className="mono">{numberText(learningAudit?.exclusions.totalCaseCount, 0)}</div>
+              </div>
+              <div className="subpanel">
+                <h3>Execution Cases</h3>
+                <div className="mono">{numberText(learningAudit?.execution.totalCaseCount, 0)}</div>
+              </div>
+            </div>
+            <PredictionAccuracyTable rows={predictionAccuracy?.global ?? []} />
+            {Number(predictionAccuracy?.totalFinalPredictions ?? 0) === 0 ? (
+              <div className="footnote">
+                No final comparable predictions are available yet. This is expected while the comparable pipeline has produced zero rows in <span className="mono">learning_examples</span>.
+              </div>
+            ) : null}
+          </article>
+
+          <article className="subpanel">
+            <h3>Active Learned Weights</h3>
+            <DataTable
+              headers={['Domain', 'Technical', 'News', 'On-Chain', 'Samples', 'Updated']}
+              empty="No learned weight rows."
+              rows={(learningObservability?.activeWeights ?? []).map((row) => [
+                row.domain,
+                <span className="mono">{numberText(row.weights.technical, 4)}</span>,
+                <span className="mono">{numberText(row.weights.news, 4)}</span>,
+                <span className="mono">{numberText(row.weights.onChain, 4)}</span>,
+                <span className="mono">{numberText(row.samples, 0)}</span>,
+                <span className="mono">{timeText(row.updatedAt)}</span>,
+              ])}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Exclusion Reasons</h3>
+            <LearningAuditCountTable
+              rows={(learningAudit?.exclusions.byReason ?? []).map((row) => ({ label: row.reason, count: row.count }))}
+              empty="No excluded comparable rows."
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Run Summaries</h3>
+            <DataTable
+              headers={['Run', 'Policy', 'Events', 'Changed vs Default', 'Changed After Update', 'Avg Δ vs Default', 'Avg Δ After Update', 'Last Recorded']}
+              empty="No run summaries yet."
+              rows={(learningObservability?.runSummaries ?? []).map((row) => [
+                row.runId,
+                row.policyVersion,
+                <span className="mono">{numberText(row.eventCount, 0)}</span>,
+                <span className="mono">{numberText(row.changedVsDefaultCount, 0)}</span>,
+                <span className="mono">{numberText(row.changedAfterUpdateCount, 0)}</span>,
+                <span className="mono">{signedDelta(row.avgConfidenceDeltaVsDefault)}</span>,
+                <span className="mono">{signedDelta(row.avgConfidenceDeltaAfterUpdate)}</span>,
+                <span className="mono">{timeText(row.lastRecordedAt)}</span>,
+              ])}
+            />
+          </article>
+
+          <article className="subpanel">
+            <h3>Recent Shadow Audits</h3>
+            <DataTable
+              headers={['When', 'Domain', 'Run', 'Policy', 'Baseline', 'Decision', 'After Update', 'Δ vs Default', 'Δ After Update']}
+              empty="No shadow audits yet."
+              rows={(learningObservability?.recentAudits ?? []).map((row) => [
+                <span className="mono">{timeText(row.createdAt)}</span>,
+                row.domain,
+                row.runId,
+                row.policyVersion,
+                row.baselineDirection ?? '-',
+                row.decisionDirection ?? '-',
+                row.activeDirectionAfter ?? '-',
+                <span className="mono">{signedDelta(row.confidenceDeltaVsDefault)}</span>,
+                <span className="mono">{signedDelta(row.confidenceDeltaAfterUpdate)}</span>,
+              ])}
+            />
+          </article>
         </section>
       )}
 
