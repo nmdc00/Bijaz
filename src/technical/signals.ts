@@ -2,7 +2,7 @@ import type { ThufirConfig } from '../core/config.js';
 import type { TechnicalSnapshot, TradeSignal, Timeframe } from './types.js';
 import { getNewsSentiment } from './news.js';
 import { getOnChainSnapshot } from './onchain.js';
-import { getSignalWeights } from '../memory/learning.js';
+import { getSignalWeightsWithFallback } from '../memory/learning.js';
 
 function clamp(value: number, min = 0, max = 1): number {
   return Math.min(Math.max(value, min), max);
@@ -32,13 +32,22 @@ function calculateTechnicalScore(snapshot: TechnicalSnapshot): {
   return { score, reasoning };
 }
 
+function resolveLearnedWeightDomains(config: ThufirConfig): string[] {
+  const domains: string[] = [];
+  if (config.execution?.provider === 'hyperliquid') {
+    domains.push('perp');
+  }
+  domains.push('global');
+  return domains;
+}
+
 export async function buildTradeSignal(params: {
   config: ThufirConfig;
   snapshot: TechnicalSnapshot;
   timeframe: Timeframe;
 }): Promise<TradeSignal> {
   const { config, snapshot } = params;
-  const learned = getSignalWeights('global');
+  const learned = getSignalWeightsWithFallback(resolveLearnedWeightDomains(config));
   const weights = learned ?? config.technical?.signals?.weights;
   const technicalWeight = weights?.technical ?? 0.5;
   const newsWeight = weights?.news ?? 0.3;
@@ -85,6 +94,11 @@ export async function buildTradeSignal(params: {
     direction,
     confidence: clamp(confidence),
     timeframe: snapshot.timeframe,
+    signalWeightsUsed: {
+      technical: technicalWeight,
+      news: newsWeight,
+      onChain: onChainWeight,
+    },
     technicalScore: technicalScore.score,
     newsScore: news.sentiment,
     onChainScore: onChain.score,
