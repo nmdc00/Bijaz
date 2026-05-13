@@ -381,6 +381,49 @@ CREATE TABLE IF NOT EXISTS weight_updates (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS learning_runtime_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    run_id TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO learning_runtime_state (id, run_id, policy_version)
+VALUES (1, 'default', 'default');
+
+CREATE TABLE IF NOT EXISTS learning_signal_audits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    learning_event_id INTEGER,
+    prediction_id TEXT,
+    domain TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    signal_scores TEXT NOT NULL,
+    default_weights TEXT NOT NULL,
+    decision_weights TEXT NOT NULL,
+    active_weights_before TEXT NOT NULL,
+    active_weights_after TEXT NOT NULL,
+    baseline_direction TEXT NOT NULL,
+    decision_direction TEXT NOT NULL,
+    active_direction_before TEXT NOT NULL,
+    active_direction_after TEXT NOT NULL,
+    baseline_confidence REAL NOT NULL,
+    decision_confidence REAL NOT NULL,
+    active_confidence_before REAL NOT NULL,
+    active_confidence_after REAL NOT NULL,
+    baseline_score REAL NOT NULL,
+    decision_score REAL NOT NULL,
+    active_score_before REAL NOT NULL,
+    active_score_after REAL NOT NULL,
+    changed_vs_default INTEGER NOT NULL DEFAULT 0 CHECK(changed_vs_default IN (0, 1)),
+    changed_after_update INTEGER NOT NULL DEFAULT 0 CHECK(changed_after_update IN (0, 1)),
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_signal_audits_event ON learning_signal_audits(learning_event_id);
+CREATE INDEX IF NOT EXISTS idx_learning_signal_audits_run ON learning_signal_audits(run_id, policy_version, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_signal_audits_domain ON learning_signal_audits(domain, created_at DESC);
+
 -- ============================================================================
 -- Market Cache
 -- ============================================================================
