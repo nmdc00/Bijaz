@@ -58,6 +58,7 @@ describe('recordEntryGateDecision schema migration', () => {
       notionalUsd: 100,
       verdict: 'approve',
       reasoning: 'ok',
+      reasonCode: 'approve',
       usedFallback: false,
       stopLevelPrice: 95,
       equityAtRiskPct: 0.5,
@@ -81,6 +82,31 @@ describe('recordEntryGateDecision schema migration', () => {
       equity_at_risk_pct: 0.5,
       target_rr: 2,
     });
+    db.close();
+  });
+
+  it('adds missing reason_code column to a legacy llm_entry_gate_log table before insert', async () => {
+    const dbPath = createLegacyDb();
+    process.env.THUFIR_DB_PATH = dbPath;
+
+    const { recordEntryGateDecision } = await import('../../src/memory/llm_entry_gate_log.js');
+    recordEntryGateDecision({
+      symbol: 'ETH',
+      side: 'short',
+      notionalUsd: 80,
+      verdict: 'reject',
+      reasoning: 'Opposite-side position already open on this symbol. Cannot open conflicting trade.',
+      reasonCode: 'book_conflict',
+      usedFallback: false,
+    });
+
+    const db = new Database(dbPath, { readonly: true });
+    const columns = db.prepare("PRAGMA table_info('llm_entry_gate_log')").all() as Array<{ name: string }>;
+    expect(new Set(columns.map((column) => column.name)).has('reason_code')).toBe(true);
+    const row = db
+      .prepare('SELECT reason_code FROM llm_entry_gate_log ORDER BY id DESC LIMIT 1')
+      .get() as { reason_code: string };
+    expect(row.reason_code).toBe('book_conflict');
     db.close();
   });
 });

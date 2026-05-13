@@ -155,6 +155,7 @@ describe('LlmEntryGate', () => {
 
       expect(result.verdict).toBe('reject');
       expect(result.reasoning).toMatch(/opposite-side/i);
+      expect(result.reasonCode).toBe('book_conflict');
       expect((mainLlm.complete as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
       expect((fallbackLlm.complete as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
@@ -175,6 +176,7 @@ describe('LlmEntryGate', () => {
       const call = mockRecordEntryGateDecision.mock.calls[0][0];
       expect(call.verdict).toBe('reject');
       expect(call.symbol).toBe('ETH');
+      expect(call.reasonCode).toBe('book_conflict');
     });
 
     it('rejects without calling LLM when opposite-side losers are already open elsewhere in the book', async () => {
@@ -244,6 +246,7 @@ describe('LlmEntryGate', () => {
 
       expect(result.verdict).toBe('approve');
       expect(result.reasoning).toBe('Strong setup');
+      expect(result.reasonCode).toBe('approve');
     });
 
     it('records DB log for approve', async () => {
@@ -255,6 +258,7 @@ describe('LlmEntryGate', () => {
 
       expect(mockRecordEntryGateDecision).toHaveBeenCalledOnce();
       expect(mockRecordEntryGateDecision.mock.calls[0][0].verdict).toBe('approve');
+      expect(mockRecordEntryGateDecision.mock.calls[0][0].reasonCode).toBe('approve');
     });
   });
 
@@ -268,6 +272,7 @@ describe('LlmEntryGate', () => {
 
       expect(result.verdict).toBe('reject');
       expect(result.reasoning).toBe('Choppy conditions');
+      expect(result.reasonCode).toBe('regime_mismatch');
     });
 
     it('records DB log for reject', async () => {
@@ -297,6 +302,7 @@ describe('LlmEntryGate', () => {
       expect(result.verdict).toBe('resize');
       expect(result.adjustedSizeUsd).toBe(25);
       expect(result.reasoning).toBe('Reduce size for risk');
+      expect(result.reasonCode).toBe('size_downshift');
     });
 
     it('records DB log for resize with adjustedSizeUsd', async () => {
@@ -426,6 +432,7 @@ describe('LlmEntryGate', () => {
       expect(result).toEqual({
         verdict: 'reject',
         reasoning: 'fallback-shaped reject',
+        reasonCode: 'discretionary_reject',
         ...defaultRiskFields,
       });
     });
@@ -445,6 +452,7 @@ describe('LlmEntryGate', () => {
       expect(result).toEqual({
         verdict: 'reject',
         reasoning: 'pseudo-json reject',
+        reasonCode: 'discretionary_reject',
         stopLevelPrice: 47000,
         equityAtRiskPct: 3.0,
         targetRR: 1.5,
