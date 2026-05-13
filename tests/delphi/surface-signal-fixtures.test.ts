@@ -116,6 +116,7 @@ describe('delphi real-signal fixture coverage', () => {
         direction: variant.expectedDirection === 'above' ? 'long' : 'short',
         confidence: variant.signalConfidence,
         timeframe: '4h',
+        signalWeightsUsed: fixture.signalWeights,
         technicalScore: variant.technicalScore,
         newsScore: variant.newsScore,
         onChainScore: variant.onChainScore,
