@@ -67,6 +67,8 @@ import {
   buildPerpExecutionLearningCase,
   toPerpExecutionLearningCaseInput,
 } from './perp_lifecycle.js';
+import { computePerpInterventionEvidence } from './thesis_learning.js';
+import type { TradeReviewBand, TradeThesisVerdict } from './trade_review.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
 export interface ToolSpendingLimiter {
@@ -651,11 +653,31 @@ function persistExecutionLearningCase(params: {
   });
 }
 
-function toReviewBand(score: number | null | undefined): 'strong' | 'acceptable' | 'weak' | 'unknown' {
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function toReviewBand(score: number | null | undefined): TradeReviewBand {
   if (score == null || !Number.isFinite(score)) return 'unknown';
-  if (score >= 0.75) return 'strong';
-  if (score >= 0.5) return 'acceptable';
-  return 'weak';
+  if (score >= 0.8) return 'strong';
+  if (score >= 0.55) return 'adequate';
+  if (score >= 0.3) return 'weak';
+  return 'poor';
 }
 
 function buildTradeDossierReview(params: {
@@ -666,41 +688,121 @@ function buildTradeDossierReview(params: {
   gateVerdict: 'approve' | 'reject' | 'resize' | null;
   requestedSize: number | null;
   executedSize: number | null;
+  requestedLeverage: number | null;
+  approvedLeverage: number | null;
   exitMode: string | null;
   thesisEvaluationReason: string | null;
+  marketRegime: string | null;
+  netRealizedPnlUsd: number | null;
 }): Record<string, unknown> {
+  const interventionEvidence = computePerpInterventionEvidence({
+    requestedSize: params.requestedSize,
+    approvedSize: params.executedSize,
+    requestedLeverage: params.requestedLeverage,
+    approvedLeverage: params.approvedLeverage,
+    netRealizedPnlUsd: params.netRealizedPnlUsd,
+    gateVerdict: params.gateVerdict,
+  });
   const lessons: string[] = [];
+  const repeatTags: string[] = [];
+  const avoidTags: string[] = [];
   const entryQuality = toReviewBand(params.timingScore);
   const sizingQuality = toReviewBand(params.sizingScore);
   const exitQuality = toReviewBand(params.exitScore);
-  if (entryQuality === 'weak') {
-    lessons.push('Entry timing degraded trade quality; do not treat outcome alone as thesis truth.');
+  const gateInterventionQuality = toReviewBand(interventionEvidence?.interventionScore ?? null);
+  const leverageQuality = toReviewBand(
+    interventionEvidence?.leverageFillRatio != null
+      ? Math.max(0, Math.min(1, interventionEvidence.leverageFillRatio))
+      : null
+  );
+  const contextFit = params.marketRegime === 'unknown'
+    ? (params.thesisCorrect == null ? 'unknown' : params.thesisCorrect ? 'adequate' : 'weak')
+    : params.thesisCorrect == null
+      ? 'unknown'
+      : params.thesisCorrect
+        ? 'strong'
+        : 'poor';
+
+  let thesisVerdict: TradeThesisVerdict = 'unclear';
+  if (params.thesisCorrect === true) thesisVerdict = 'correct';
+  if (params.thesisCorrect === false) thesisVerdict = 'incorrect';
+
+  if (entryQuality === 'weak' || entryQuality === 'poor') {
+    lessons.push('Entry timing degraded trade quality; keep similar setups size-capped or wait for cleaner entry.');
+    avoidTags.push('late_entry');
   }
   if (params.gateVerdict === 'resize') {
-    lessons.push('Gate resized the trade; future similar setups should be compared against the capped-size path, not full requested size.');
+    lessons.push('Gate resized the trade; compare future expectancy against the capped-size path, not the full request.');
   }
-  if (sizingQuality === 'weak') {
+  if (gateInterventionQuality === 'strong' || gateInterventionQuality === 'adequate') {
+    lessons.push('Gate intervention added value on this path and should influence future sizing decisions.');
+    repeatTags.push('gate_intervention_helpful');
+  } else if (params.gateVerdict === 'resize' || params.gateVerdict === 'reject') {
+    avoidTags.push('gate_intervention_questionable');
+  }
+  if (sizingQuality === 'weak' || sizingQuality === 'poor') {
     lessons.push('Sizing quality was weak relative to the realized path.');
+    avoidTags.push('oversized_entry');
+  }
+  if (exitQuality === 'strong' || exitQuality === 'adequate') {
+    repeatTags.push('disciplined_exit');
   }
   if (params.exitMode === 'manual' || params.exitMode === 'unknown') {
     lessons.push('Exit discipline was discretionary; avoid teaching broad setup rules from this path without more review.');
+    avoidTags.push('discretionary_exit');
+  }
+  if (thesisVerdict === 'correct') {
+    repeatTags.push('thesis_valid');
+  } else if (thesisVerdict === 'incorrect') {
+    avoidTags.push('thesis_invalid');
   }
   if (lessons.length === 0) {
     lessons.push('Trade lifecycle was orderly enough to reuse as structured evidence.');
   }
+  const mainSuccessDriver =
+    gateInterventionQuality === 'strong'
+      ? 'gate intervention preserved edge'
+      : entryQuality === 'strong'
+        ? 'clean entry timing'
+        : exitQuality === 'strong'
+          ? 'disciplined exit management'
+          : thesisVerdict === 'correct'
+            ? 'thesis directionality held'
+            : null;
+  const mainFailureMode =
+    entryQuality === 'poor'
+      ? 'late or stretched entry'
+      : sizingQuality === 'poor'
+        ? 'oversized position relative to path'
+        : exitQuality === 'poor'
+          ? 'exit management degraded realized outcome'
+          : thesisVerdict === 'incorrect'
+            ? 'directional thesis failed'
+            : null;
   return {
     reviewVersion: 'v2.1',
-    thesisVerdict:
-      params.thesisCorrect == null ? 'unknown' : params.thesisCorrect ? 'correct' : 'incorrect',
+    thesisVerdict,
     entryQuality,
     sizingQuality,
+    leverageQuality,
     exitQuality,
+    gateInterventionQuality,
+    contextFit,
     gateVerdict: params.gateVerdict ?? 'unknown',
-    counterfactualNeeded: params.gateVerdict === 'resize',
+    counterfactualNeeded:
+      params.gateVerdict === 'resize' ||
+      params.gateVerdict === 'reject' ||
+      interventionEvidence == null,
     requestedSize: params.requestedSize,
     executedSize: params.executedSize,
+    requestedLeverage: params.requestedLeverage,
+    approvedLeverage: params.approvedLeverage,
+    mainSuccessDriver,
+    mainFailureMode,
     thesisEvaluationReason: params.thesisEvaluationReason,
     lessons,
+    repeatTags: Array.from(new Set(repeatTags)),
+    avoidTags: Array.from(new Set(avoidTags)),
   };
 }
 
@@ -2679,17 +2781,55 @@ export async function executeToolCall(
             lifecycleTradeId != null && lifecycleTradeId > 0
               ? findTradeDossierByTradeId(lifecycleTradeId)
               : findOpenTradeDossierBySymbol(symbol);
+          const existingDossierPayload = readRecord(existingDossier?.dossier) ?? {};
+          const existingDossierGate = readRecord(existingDossierPayload.gate) ?? {};
+          const existingDossierExecution = readRecord(existingDossierPayload.execution) ?? {};
+          const requestedEntrySize =
+            readNumber(existingDossierExecution.requestedSize) ??
+            readNumber(existingDossierGate.requestedNotionalUsd) ??
+            requestedSize;
+          const approvedEntrySize =
+            readNumber(existingDossierExecution.size) ??
+            readNumber(existingDossierExecution.filledNotionalUsd) ??
+            readNumber(existingDossierGate.approvedNotionalUsd) ??
+            size;
+          const requestedEntryLeverage =
+            readNumber(existingDossierGate.requestedLeverage) ??
+            (closeReference?.leverage ?? leverage ?? null);
+          const approvedEntryLeverage =
+            readNumber(existingDossierGate.approvedLeverage) ??
+            (closeReference?.leverage ?? leverage ?? null);
+          const gateVerdictForReview =
+            closeReference?.entryGateVerdict ?? readString(existingDossierGate.verdict);
+          const interventionEvidence = computePerpInterventionEvidence({
+            requestedSize: requestedEntrySize,
+            approvedSize: approvedEntrySize,
+            requestedLeverage: requestedEntryLeverage,
+            approvedLeverage: approvedEntryLeverage,
+            netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
+            realizedFeeUsd: closeSummary?.feeUsd ?? realizedFee.realized_fee_usd ?? null,
+            gateVerdict: gateVerdictForReview,
+          });
           const dossierReview = closedPositionCompletely
             ? buildTradeDossierReview({
                 thesisCorrect: exitAssessment.thesisCorrect,
                 timingScore: componentScores?.timingScore ?? null,
                 sizingScore: componentScores?.sizingScore ?? null,
                 exitScore: componentScores?.exitScore ?? null,
-                gateVerdict: closeReference?.entryGateVerdict ?? null,
-                requestedSize: closeReference?.size ?? requestedSize,
-                executedSize: size,
+                gateVerdict:
+                  gateVerdictForReview === 'approve' ||
+                  gateVerdictForReview === 'reject' ||
+                  gateVerdictForReview === 'resize'
+                    ? gateVerdictForReview
+                    : null,
+                requestedSize: requestedEntrySize,
+                executedSize: approvedEntrySize,
+                requestedLeverage: requestedEntryLeverage,
+                approvedLeverage: approvedEntryLeverage,
                 exitMode: exitAssessment.exitMode,
                 thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+                marketRegime: marketRegime ?? closeReference?.marketRegime ?? null,
+                netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
               })
             : null;
           const dossierId = upsertTradeDossier({
@@ -2728,10 +2868,12 @@ export async function executeToolCall(
                 entryTrigger: entryTrigger ?? closeReference?.entryTrigger ?? null,
               },
               gate: {
-                verdict: closeReference?.entryGateVerdict ?? null,
-                reasonCode: closeReference?.entryGateReasonCode ?? null,
+                verdict: gateVerdictForReview ?? null,
+                reasonCode: closeReference?.entryGateReasonCode ?? readString(existingDossierGate.reasonCode),
                 policyReasonCode: closeReference?.policyReasonCode ?? null,
                 policySizeMultiplier: closeReference?.policySizeMultiplier ?? null,
+                requestedLeverage: requestedEntryLeverage,
+                approvedLeverage: approvedEntryLeverage,
               },
               execution: {
                 tradeId: lifecycleTradeId,
@@ -2752,6 +2894,7 @@ export async function executeToolCall(
                 netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
                 feeUsd: closeSummary?.feeUsd ?? realizedFee.realized_fee_usd ?? null,
               },
+              counterfactuals: interventionEvidence,
             },
             review: dossierReview,
           }).id;
@@ -2799,6 +2942,13 @@ export async function executeToolCall(
               reasoning: policyReasoning,
               planContext: planContext ?? closeReference?.planContext ?? null,
               snapshot: executedSnapshot,
+              requestedSize: requestedEntrySize,
+              approvedSize: approvedEntrySize,
+              requestedLeverage: requestedEntryLeverage,
+              approvedLeverage: approvedEntryLeverage,
+              gateVerdict: gateVerdictForReview ?? null,
+              gateReasonCode:
+                closeReference?.entryGateReasonCode ?? readString(existingDossierGate.reasonCode),
             });
             persistExecutionLearningCase({
               symbol,

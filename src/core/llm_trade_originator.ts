@@ -27,6 +27,7 @@ export interface OriginationInputBundle {
   marketContext: string;
   recentEvents: string;
   eventContext?: string;
+  similarityContext?: string;
   alertedSymbols: string[];
   performanceSummary?: string;
   triggerReason?: 'cadence' | 'ta_alert' | 'event';
@@ -137,6 +138,9 @@ function buildUserMessage(bundle: OriginationInputBundle): string {
 
   const eventsSection = bundle.recentEvents ? bundle.recentEvents.slice(0, 500) : '(none)';
   const eventContextSection = bundle.eventContext ? bundle.eventContext.slice(0, 1500) : '(none)';
+  const similarityContextSection = bundle.similarityContext
+    ? bundle.similarityContext.slice(0, 1200)
+    : '(none)';
 
   return [
     '## Open Positions',
@@ -153,6 +157,9 @@ function buildUserMessage(bundle: OriginationInputBundle): string {
     '',
     '## Event Intelligence',
     eventContextSection,
+    '',
+    '## Similar Historical Cases',
+    similarityContextSection,
     '',
     '## Signal Class Track Record',
     bundle.performanceSummary ?? '(no history yet)',
