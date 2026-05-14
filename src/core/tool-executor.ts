@@ -29,6 +29,7 @@ import { findOpenPerpPrediction, findOpenPerpPredictionById } from '../memory/pr
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { storeDecisionArtifact } from '../memory/decision_artifacts.js';
 import { createLearningCase } from '../memory/learning_cases.js';
+import { findOpenTradeDossierBySymbol, findTradeDossierByTradeId, upsertTradeDossier } from '../memory/trade_dossiers.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
 import {
@@ -648,6 +649,59 @@ function persistExecutionLearningCase(params: {
       persistence: 'decision_artifacts_compat',
     },
   });
+}
+
+function toReviewBand(score: number | null | undefined): 'strong' | 'acceptable' | 'weak' | 'unknown' {
+  if (score == null || !Number.isFinite(score)) return 'unknown';
+  if (score >= 0.75) return 'strong';
+  if (score >= 0.5) return 'acceptable';
+  return 'weak';
+}
+
+function buildTradeDossierReview(params: {
+  thesisCorrect: boolean | null;
+  timingScore: number | null;
+  sizingScore: number | null;
+  exitScore: number | null;
+  gateVerdict: 'approve' | 'reject' | 'resize' | null;
+  requestedSize: number | null;
+  executedSize: number | null;
+  exitMode: string | null;
+  thesisEvaluationReason: string | null;
+}): Record<string, unknown> {
+  const lessons: string[] = [];
+  const entryQuality = toReviewBand(params.timingScore);
+  const sizingQuality = toReviewBand(params.sizingScore);
+  const exitQuality = toReviewBand(params.exitScore);
+  if (entryQuality === 'weak') {
+    lessons.push('Entry timing degraded trade quality; do not treat outcome alone as thesis truth.');
+  }
+  if (params.gateVerdict === 'resize') {
+    lessons.push('Gate resized the trade; future similar setups should be compared against the capped-size path, not full requested size.');
+  }
+  if (sizingQuality === 'weak') {
+    lessons.push('Sizing quality was weak relative to the realized path.');
+  }
+  if (params.exitMode === 'manual' || params.exitMode === 'unknown') {
+    lessons.push('Exit discipline was discretionary; avoid teaching broad setup rules from this path without more review.');
+  }
+  if (lessons.length === 0) {
+    lessons.push('Trade lifecycle was orderly enough to reuse as structured evidence.');
+  }
+  return {
+    reviewVersion: 'v2.1',
+    thesisVerdict:
+      params.thesisCorrect == null ? 'unknown' : params.thesisCorrect ? 'correct' : 'incorrect',
+    entryQuality,
+    sizingQuality,
+    exitQuality,
+    gateVerdict: params.gateVerdict ?? 'unknown',
+    counterfactualNeeded: params.gateVerdict === 'resize',
+    requestedSize: params.requestedSize,
+    executedSize: params.executedSize,
+    thesisEvaluationReason: params.thesisEvaluationReason,
+    lessons,
+  };
 }
 
 type ReduceOnlyPositionSnapshot = {
@@ -2621,11 +2675,92 @@ export async function executeToolCall(
             signalClass: effectiveSignalClass,
             confidence: 0.5,
           });
+          const existingDossier =
+            lifecycleTradeId != null && lifecycleTradeId > 0
+              ? findTradeDossierByTradeId(lifecycleTradeId)
+              : findOpenTradeDossierBySymbol(symbol);
+          const dossierReview = closedPositionCompletely
+            ? buildTradeDossierReview({
+                thesisCorrect: exitAssessment.thesisCorrect,
+                timingScore: componentScores?.timingScore ?? null,
+                sizingScore: componentScores?.sizingScore ?? null,
+                exitScore: componentScores?.exitScore ?? null,
+                gateVerdict: closeReference?.entryGateVerdict ?? null,
+                requestedSize: closeReference?.size ?? requestedSize,
+                executedSize: size,
+                exitMode: exitAssessment.exitMode,
+                thesisEvaluationReason: exitAssessment.thesisEvaluationReason,
+              })
+            : null;
+          const dossierId = upsertTradeDossier({
+            id: existingDossier?.id ?? undefined,
+            symbol,
+            status: closedPositionCompletely ? 'closed' : 'open',
+            direction:
+              existingDossier?.direction ??
+              (reduceOnly
+                ? ((side as 'buy' | 'sell') === 'buy' ? 'short' : 'long')
+                : ((side as 'buy' | 'sell') === 'buy' ? 'long' : 'short')),
+            strategySource: existingDossier?.strategySource ?? 'tool_executor',
+            executionMode: bookMode,
+            sourceTradeId: lifecycleTradeId,
+            sourcePredictionId: existingDossier?.sourcePredictionId ?? null,
+            triggerReason:
+              existingDossier?.triggerReason ??
+              entryTrigger ??
+              closeReference?.entryTrigger ??
+              null,
+            openedAt: existingDossier?.openedAt ?? new Date(executionStartMs).toISOString(),
+            closedAt: closedPositionCompletely ? new Date().toISOString() : null,
+            dossier: {
+              version: 'v2.1',
+              thesis: {
+                reasoning: policyReasoning,
+                expectedEdge: expectedEdge ?? closeReference?.expectedEdge ?? null,
+                invalidationPrice: invalidationPrice ?? closeReference?.invalidationPrice ?? null,
+                timeStopAtMs: timeStopAtMs ?? closeReference?.timeStopAtMs ?? null,
+              },
+              context: {
+                signalClass: effectiveSignalClass ?? closeReference?.signalClass ?? null,
+                marketRegime: marketRegime ?? closeReference?.marketRegime ?? null,
+                volatilityBucket: volatilityBucket ?? closeReference?.volatilityBucket ?? null,
+                liquidityBucket: liquidityBucket ?? closeReference?.liquidityBucket ?? null,
+                entryTrigger: entryTrigger ?? closeReference?.entryTrigger ?? null,
+              },
+              gate: {
+                verdict: closeReference?.entryGateVerdict ?? null,
+                reasonCode: closeReference?.entryGateReasonCode ?? null,
+                policyReasonCode: closeReference?.policyReasonCode ?? null,
+                policySizeMultiplier: closeReference?.policySizeMultiplier ?? null,
+              },
+              execution: {
+                tradeId: lifecycleTradeId,
+                side,
+                size,
+                requestedSize,
+                fillPrice: market.markPrice ?? null,
+                orderId: inferredOrderId,
+                executionMessage: result.message,
+                estimatedNotionalUsd: feeEstimate.estimated_notional_usd,
+              },
+              close: {
+                closedPositionCompletely,
+                exitMode: exitAssessment.exitMode,
+                thesisCorrect: exitAssessment.thesisCorrect,
+                thesisInvalidationHit: exitAssessment.thesisInvalidationHit,
+                realizedPnlUsd: closeSummary?.realizedPnlUsd ?? null,
+                netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
+                feeUsd: closeSummary?.feeUsd ?? realizedFee.realized_fee_usd ?? null,
+              },
+            },
+            review: dossierReview,
+          }).id;
           if (closedPositionCompletely) {
             const learningCase = buildPerpExecutionLearningCase({
               symbol,
               executionMode: bookMode,
               tradeId: lifecycleTradeId,
+              dossierId,
               hypothesisId,
               capturedAtMs: executionStartMs,
               side: side as 'buy' | 'sell',

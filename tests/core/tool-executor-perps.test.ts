@@ -11,6 +11,7 @@ import { countFinalPredictions } from '../../src/memory/calibration.js';
 import { openDatabase } from '../../src/memory/db.js';
 import { listLearningCases } from '../../src/memory/learning_cases.js';
 import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
+import { listTradeDossiers } from '../../src/memory/trade_dossiers.js';
 
 describe('tool-executor perps', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
@@ -1444,11 +1445,19 @@ describe('tool-executor perps', () => {
     expect(learningCase.caseType).toBe('execution_quality');
     expect(learningCase.comparable).toBe(false);
     expect(learningCase.exclusionReason).toBe('execution_quality_case');
+    expect(typeof learningCase.sourceDossierId).toBe('string');
     expect(learningCase.context?.signalClass).toBe('momentum_breakout');
     expect(learningCase.action?.reduceOnly).toBe(true);
     expect(learningCase.outcome?.exitMode).toBe('take_profit');
     expect(learningCase.outcome?.thesisCorrect).toBe(true);
     expect(typeof learningCase.qualityScores?.compositeScore).toBe('number');
+
+    const dossier = listTradeDossiers({ symbol: 'BTCLEARN', limit: 1 })[0];
+    expect(dossier).toBeTruthy();
+    expect(dossier.id).toBe(learningCase.sourceDossierId);
+    expect(dossier.status).toBe('closed');
+    expect(dossier.review?.entryQuality).toBeTruthy();
+    expect(Array.isArray(dossier.review?.lessons)).toBe(true);
   });
 
   it('get_fills live mode returns mapped fills from Hyperliquid API', async () => {

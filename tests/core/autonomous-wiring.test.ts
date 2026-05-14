@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => {
   const updateTradeProposalOutcome = vi.fn();
   const updateTradeProposalStatus = vi.fn();
   const recordDecisionAudit = vi.fn();
+  const recordPerpTradeJournal = vi.fn();
+  const upsertTradeDossier = vi.fn(() => ({ id: 'dossier-mock-id' }));
   const createPrediction = vi.fn(() => 'pred-mock-id');
   const createLearningCase = vi.fn(() => ({ id: 'case-mock-id' }));
   const getSignalWeights = vi.fn(() => ({ technical: 0.5, news: 0.3, onChain: 0.2 }));
@@ -81,7 +83,7 @@ const mocks = vi.hoisted(() => {
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit,
+    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit, recordPerpTradeJournal, upsertTradeDossier,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
     getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
     taSurfaceInstance, triggerInstance, originatorInstance, positionBookInstance,
@@ -144,11 +146,16 @@ vi.mock('../../src/discovery/market_selector.js', () => ({
 
 vi.mock('../../src/memory/perp_trades.js', () => ({
   recordPerpTrade: vi.fn(() => 1),
+  setActivePerpPositionLifecycle: vi.fn(),
 }));
 
 vi.mock('../../src/memory/perp_trade_journal.js', () => ({
-  recordPerpTradeJournal: vi.fn(),
+  recordPerpTradeJournal: (...args: unknown[]) => mocks.recordPerpTradeJournal(...args),
   listPerpTradeJournals: vi.fn(() => []),
+}));
+
+vi.mock('../../src/memory/trade_dossiers.js', () => ({
+  upsertTradeDossier: (...args: unknown[]) => mocks.upsertTradeDossier(...args),
 }));
 
 vi.mock('../../src/execution/perp-risk.js', () => ({
@@ -386,6 +393,17 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       originatorExitStage: 'executed',
       originatorExitReason: 'paper ok',
       requestedLeverage: 5,
+    }));
+    expect(mocks.createLearningCase).toHaveBeenCalledWith(expect.objectContaining({
+      caseType: 'comparable_forecast',
+      sourcePredictionId: 'pred-mock-id',
+      sourceDossierId: 'dossier-mock-id',
+    }));
+    expect(mocks.recordPerpTradeJournal).toHaveBeenCalledWith(expect.objectContaining({
+      symbol: 'BTC',
+      reduceOnly: false,
+      outcome: 'executed',
+      signalClass: 'llm_originator',
     }));
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 

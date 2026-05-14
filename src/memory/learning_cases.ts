@@ -17,6 +17,7 @@ export interface LearningCasePayloadMap {
 export interface LearningCaseSourceLinks {
   sourcePredictionId?: string | null;
   sourceTradeId?: number | null;
+  sourceDossierId?: string | null;
   sourceArtifactId?: number | null;
 }
 
@@ -62,6 +63,7 @@ export interface ListLearningCasesFilters {
   entityId?: string;
   sourcePredictionId?: string;
   sourceTradeId?: number;
+  sourceDossierId?: string;
   sourceArtifactId?: number;
   limit?: number;
 }
@@ -90,6 +92,7 @@ type LearningCaseRow = {
   comparator_kind: string | null;
   source_prediction_id: string | null;
   source_trade_id: number | null;
+  source_dossier_id: string | null;
   source_artifact_id: number | null;
   belief_payload: string | null;
   baseline_payload: string | null;
@@ -132,6 +135,7 @@ function toLearningCase(row: LearningCaseRow): LearningCase {
     comparatorKind: row.comparator_kind,
     sourcePredictionId: row.source_prediction_id,
     sourceTradeId: row.source_trade_id,
+    sourceDossierId: row.source_dossier_id,
     sourceArtifactId: row.source_artifact_id,
     belief: parseJson(row.belief_payload),
     baseline: parseJson(row.baseline_payload),
@@ -161,6 +165,7 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
         comparator_kind,
         source_prediction_id,
         source_trade_id,
+        source_dossier_id,
         source_artifact_id,
         belief_payload,
         baseline_payload,
@@ -180,6 +185,7 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
         @comparatorKind,
         @sourcePredictionId,
         @sourceTradeId,
+        @sourceDossierId,
         @sourceArtifactId,
         @belief,
         @baseline,
@@ -201,6 +207,7 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
     comparatorKind: input.comparatorKind ?? null,
     sourcePredictionId: input.sourcePredictionId ?? null,
     sourceTradeId: input.sourceTradeId ?? null,
+    sourceDossierId: input.sourceDossierId ?? null,
     sourceArtifactId: input.sourceArtifactId ?? null,
     belief: serializeJson(input.belief),
     baseline: serializeJson(input.baseline),
@@ -268,6 +275,7 @@ export function listLearningCases(filters: ListLearningCasesFilters = {}): Learn
           AND (@entityId IS NULL OR entity_id = @entityId)
           AND (@sourcePredictionId IS NULL OR source_prediction_id = @sourcePredictionId)
           AND (@sourceTradeId IS NULL OR source_trade_id = @sourceTradeId)
+          AND (@sourceDossierId IS NULL OR source_dossier_id = @sourceDossierId)
           AND (@sourceArtifactId IS NULL OR source_artifact_id = @sourceArtifactId)
         ORDER BY created_at DESC, id DESC
         LIMIT @limit
@@ -282,6 +290,7 @@ export function listLearningCases(filters: ListLearningCasesFilters = {}): Learn
       entityId: filters.entityId ?? null,
       sourcePredictionId: filters.sourcePredictionId ?? null,
       sourceTradeId: filters.sourceTradeId ?? null,
+      sourceDossierId: filters.sourceDossierId ?? null,
       sourceArtifactId: filters.sourceArtifactId ?? null,
       limit: filters.limit ?? 100,
     }) as LearningCaseRow[];

@@ -36,6 +36,7 @@ export const LEARNING_CASES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS learning_cas
     comparator_kind TEXT,
     source_prediction_id TEXT,
     source_trade_id INTEGER,
+    source_dossier_id TEXT,
     source_artifact_id INTEGER,
     belief_payload TEXT,
     baseline_payload TEXT,
@@ -55,6 +56,7 @@ const LEARNING_CASES_INDEX_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_comparable ON learning_cases(comparable);',
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_prediction ON learning_cases(source_prediction_id);',
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_trade ON learning_cases(source_trade_id);',
+  'CREATE INDEX IF NOT EXISTS idx_learning_cases_dossier ON learning_cases(source_dossier_id);',
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_entity ON learning_cases(entity_type, entity_id);',
 ];
 
@@ -97,6 +99,11 @@ function hasPredictionColumns(db: Database.Database, columnNames: string[]): boo
 
 export function ensureLearningSchema(db: Database.Database): void {
   db.exec(LEARNING_CASES_TABLE_SQL);
+  const columns = db.prepare("PRAGMA table_info('learning_cases')").all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  if (!columnNames.has('source_dossier_id')) {
+    db.exec('ALTER TABLE learning_cases ADD COLUMN source_dossier_id TEXT');
+  }
   for (const statement of LEARNING_CASES_INDEX_SQL) {
     db.exec(statement);
   }

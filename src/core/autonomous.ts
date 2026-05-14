@@ -17,7 +17,7 @@ import { DbSpendingLimitEnforcer } from '../execution/wallet/limits_db.js';
 import { runDiscovery } from '../discovery/engine.js';
 import { selectDiscoveryMarkets } from '../discovery/market_selector.js';
 import { createPrediction } from '../memory/predictions.js';
-import { recordPerpTrade } from '../memory/perp_trades.js';
+import { recordPerpTrade, setActivePerpPositionLifecycle } from '../memory/perp_trades.js';
 import { listPerpTradeJournals, recordPerpTradeJournal } from '../memory/perp_trade_journal.js';
 import { checkPerpRiskLimits } from '../execution/perp-risk.js';
 import { getDailyPnLRollup } from './daily_pnl.js';
@@ -57,6 +57,7 @@ import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { isSuppressed } from '../memory/signal_class_suppression.js';
 import { createLearningCase } from '../memory/learning_cases.js';
 import { getSignalWeights } from '../memory/learning.js';
+import { upsertTradeDossier } from '../memory/trade_dossiers.js';
 import { searchHistoricalCases } from '../events/casebase.js';
 import { executeToolCall } from './tool-executor.js';
 import { buildOriginationEventContext, resolveOriginationContextDomain } from './origination_context.js';
@@ -845,6 +846,18 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
       // Record learning prediction — resolved when position closes
       let predictionId: string | null = null;
+      let dossierId: string | null = null;
+      const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+      const lifecycleTradeId = tradeResult.tradeId ?? null;
+      if (lifecycleTradeId != null && lifecycleTradeId > 0) {
+        try {
+          setActivePerpPositionLifecycle({
+            symbol,
+            tradeId: lifecycleTradeId,
+            side: proposal.side === 'long' ? 'long' : 'short',
+          });
+        } catch { /* best-effort */ }
+      }
       try {
         const predictedOutcome = side === 'buy' ? 'YES' : 'NO';
         predictionId = createPrediction({
@@ -862,6 +875,57 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           executionPrice: markPrice || undefined,
           positionSize: size,
         });
+        dossierId = upsertTradeDossier({
+          symbol,
+          status: 'open',
+          direction: proposal.side === 'long' ? 'long' : 'short',
+          strategySource: 'autonomous_originator',
+          executionMode,
+          sourceTradeId: lifecycleTradeId,
+          sourcePredictionId: predictionId,
+          proposalRecordId: proposal.proposalRecordId ?? null,
+          triggerReason: triggerResult.reason,
+          openedAt: new Date().toISOString(),
+          dossier: {
+            version: 'v2.1',
+            thesis: {
+              thesisText: proposal.thesisText,
+              invalidationCondition: proposal.invalidationCondition,
+              invalidationPrice: proposal.invalidationPrice,
+              suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+              tradeType: proposal.tradeType ?? null,
+              expectedRMultiple: proposal.expectedRMultiple ?? null,
+              confidence: proposal.confidence,
+            },
+            context: {
+              triggerReason: triggerResult.reason,
+              signalClass: 'llm_originator',
+              marketRegime: 'unknown',
+              session: sessionContext.session,
+            },
+            gate: {
+              verdict: originatorGateVerdict,
+              reasonCode: originatorGateReasonCode,
+              requestedNotionalUsd: gateCandidate.notionalUsd,
+              approvedNotionalUsd: probeUsd,
+              requestedLeverage: proposal.leverage,
+              approvedLeverage: targetLeverage,
+            },
+            execution: {
+              tradeId: lifecycleTradeId,
+              side,
+              size,
+              fillPrice: markPrice || null,
+              filledNotionalUsd: markPrice > 0 ? size * markPrice : probeUsd,
+              orderId: tradeResult.orderId ?? null,
+              executionMessage: tradeResult.message,
+            },
+            exitPlan: {
+              invalidationPrice: proposal.invalidationPrice,
+              predictionId,
+            },
+          },
+        }).id;
         createLearningCase({
           caseType: 'comparable_forecast',
           domain: 'perp',
@@ -871,6 +935,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           comparatorKind: null,
           exclusionReason: 'missing_comparator',
           sourcePredictionId: predictionId,
+          sourceTradeId: lifecycleTradeId,
+          sourceDossierId: dossierId,
           belief: {
             modelProbability: proposal.confidence,
             predictedOutcome,
@@ -880,12 +946,56 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           },
           context: {
             horizonMinutes: proposal.suggestedTtlMinutes,
-            mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+            mode: executionMode,
+            signalClass: 'llm_originator',
+            triggerReason: triggerResult.reason,
+            entryGateVerdict: originatorGateVerdict,
+            entryGateReasonCode: originatorGateReasonCode,
+            requestedNotionalUsd: gateCandidate.notionalUsd,
+            approvedNotionalUsd: probeUsd,
+            invalidationPrice: proposal.invalidationPrice,
           },
           action: {
             side,
             executed: true,
             executionPrice: markPrice || null,
+            positionSize: size,
+          },
+        });
+        const timeStopAtMs = now + proposal.suggestedTtlMinutes * 60_000;
+        recordPerpTradeJournal({
+          kind: 'perp_trade_journal',
+          execution_mode: executionMode,
+          tradeId: lifecycleTradeId,
+          hypothesisId: null,
+          symbol,
+          side,
+          size,
+          leverage: targetLeverage ?? null,
+          orderType: 'market',
+          reduceOnly: false,
+          markPrice: markPrice || null,
+          confidence: String(proposal.confidence),
+          reasoning: decision.reasoning ?? null,
+          entryGateVerdict: originatorGateVerdict,
+          entryGateReasonCode: originatorGateReasonCode,
+          signalClass: 'llm_originator',
+          marketRegime: null,
+          volatilityBucket: null,
+          liquidityBucket: null,
+          expectedEdge: null,
+          entryTrigger: triggerResult.reason === 'event' ? 'news' : 'technical',
+          thesisExpiresAtMs: timeStopAtMs,
+          invalidationPrice: proposal.invalidationPrice,
+          timeStopAtMs,
+          thesisCorrect: null,
+          outcome: 'executed',
+          message: tradeResult.message,
+          snapshot: {
+            dossierId,
+            entryPrice: markPrice || null,
+            requestedNotionalUsd: gateCandidate.notionalUsd,
+            approvedNotionalUsd: probeUsd,
             positionSize: size,
           },
         });
@@ -1362,6 +1472,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       };
 
       const tradeResult = await this.executor.execute(market, decision);
+      let dossierId: string | null = null;
       if (tradeResult.executed) {
         executedCount += 1;
         this.limiter.confirm(probeUsd);
@@ -1370,6 +1481,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           ((this.thufirConfig.autonomy as any)?.newsEntry?.thesisTtlMinutes ?? 120) * 60_000;
         const timeStopAtMs = expr.newsTrigger?.expiresAtMs ?? Date.now() + defaultThesisTtlMs;
         let predictionId: string | null = null;
+        const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
         try {
           const predictedOutcome = expr.side === 'buy' ? 'YES' : 'NO';
           const signalWeightsSnapshot =
@@ -1393,6 +1505,56 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             executionPrice: markPrice || undefined,
             positionSize: size,
           });
+          dossierId = upsertTradeDossier({
+            symbol,
+            status: 'open',
+            direction: expr.side === 'buy' ? 'long' : 'short',
+            strategySource: 'autonomous_quant',
+            executionMode,
+            sourceTradeId: tradeResult.tradeId ?? null,
+            sourcePredictionId: predictionId,
+            triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+            openedAt: new Date().toISOString(),
+            dossier: {
+              version: 'v2.1',
+              thesis: {
+                reasoning: decision.reasoning ?? null,
+                confidenceRaw,
+                confidenceWeighted,
+                expectedEdge: expr.expectedEdge,
+              },
+              context: {
+                signalClass,
+                marketRegime: regime,
+                volatilityBucket,
+                liquidityBucket,
+                session: sessionContext.session,
+                triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+              },
+              gate: {
+                verdict: entryGateVerdict,
+                reasonCode: entryGateReasonCode,
+                requestedNotionalUsd: gateCandidate.notionalUsd,
+                approvedNotionalUsd: probeUsd,
+                approvedLeverage: targetLeverage,
+                stopLevelPrice: gateStopLevelPrice,
+              },
+              execution: {
+                tradeId: tradeResult.tradeId ?? null,
+                side: expr.side,
+                size,
+                fillPrice: markPrice || null,
+                filledNotionalUsd: markPrice > 0 ? size * markPrice : probeUsd,
+                orderId: tradeResult.orderId ?? null,
+                executionMessage: tradeResult.message,
+              },
+              exitPlan: {
+                timeStopAtMs,
+                invalidationPrice: gateStopLevelPrice,
+                predictionId,
+              },
+            },
+          }).id;
           createLearningCase({
             caseType: 'comparable_forecast',
             domain: 'perp',
@@ -1402,6 +1564,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             comparatorKind: null,
             exclusionReason: 'missing_comparator',
             sourcePredictionId: predictionId,
+            sourceTradeId: tradeResult.tradeId ?? null,
+            sourceDossierId: dossierId,
             belief: {
               modelProbability: confidenceWeighted,
               predictedOutcome,
@@ -1411,7 +1575,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             },
             context: {
               horizonMinutes: Math.round((timeStopAtMs - Date.now()) / 60_000),
-              mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+              mode: executionMode,
+              signalClass,
+              regime,
+              triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+              entryGateVerdict,
+              entryGateReasonCode,
+              requestedNotionalUsd: gateCandidate.notionalUsd,
+              approvedNotionalUsd: probeUsd,
             },
             action: {
               side: expr.side,
@@ -1473,6 +1644,34 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           orderType: expr.orderType,
           status: tradeResult.executed ? 'executed' : 'failed',
         });
+        if (tradeResult.executed) {
+          try {
+            setActivePerpPositionLifecycle({
+              symbol,
+              tradeId,
+              side: expr.side === 'buy' ? 'long' : 'short',
+            });
+          } catch { /* best-effort */ }
+          try {
+            upsertTradeDossier({
+              id: dossierId ?? undefined,
+              symbol,
+              status: 'open',
+              direction: expr.side === 'buy' ? 'long' : 'short',
+              strategySource: 'autonomous_quant',
+              executionMode,
+              sourceTradeId: tradeId,
+              dossier: {
+                execution: {
+                  tradeId,
+                  fillPrice: markPrice || null,
+                  orderId: tradeResult.orderId ?? null,
+                  executionMessage: tradeResult.message,
+                },
+              },
+            });
+          } catch { /* best-effort */ }
+        }
         const db = openDatabase();
         db.prepare(`
           INSERT INTO autonomous_trades (
