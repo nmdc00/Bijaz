@@ -28,7 +28,7 @@ WHERE outcome_basis     = 'final'
 
 export const LEARNING_CASES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS learning_cases (
     id TEXT PRIMARY KEY,
-    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality')),
+    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality', 'thesis_quality')),
     domain TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
@@ -37,6 +37,7 @@ export const LEARNING_CASES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS learning_cas
     source_prediction_id TEXT,
     source_trade_id INTEGER,
     source_dossier_id TEXT,
+    source_hypothesis_id TEXT,
     source_artifact_id INTEGER,
     belief_payload TEXT,
     baseline_payload TEXT,
@@ -57,6 +58,7 @@ const LEARNING_CASES_INDEX_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_prediction ON learning_cases(source_prediction_id);',
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_trade ON learning_cases(source_trade_id);',
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_dossier ON learning_cases(source_dossier_id);',
+  'CREATE INDEX IF NOT EXISTS idx_learning_cases_hypothesis ON learning_cases(source_hypothesis_id);',
   'CREATE INDEX IF NOT EXISTS idx_learning_cases_entity ON learning_cases(entity_type, entity_id);',
 ];
 
@@ -70,6 +72,11 @@ const EXECUTION_LEARNING_CASES_VIEW_SQL = `CREATE VIEW execution_learning_cases 
 SELECT *
 FROM learning_cases
 WHERE case_type = 'execution_quality';`;
+
+const THESIS_LEARNING_CASES_VIEW_SQL = `CREATE VIEW thesis_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'thesis_quality';`;
 
 export const LEGACY_PERP_CONTAMINATION_WHERE_SQL = `domain = 'perp'
   AND outcome_basis = 'final'
@@ -97,12 +104,87 @@ function hasPredictionColumns(db: Database.Database, columnNames: string[]): boo
   return columnNames.every((name) => present.has(name));
 }
 
-export function ensureLearningSchema(db: Database.Database): void {
+function rebuildLearningCasesTable(db: Database.Database): void {
+  const legacyColumns = db.prepare("PRAGMA table_info('learning_cases')").all() as Array<{ name?: string }>;
+  const legacyNames = new Set(legacyColumns.map((column) => String(column.name ?? '')));
+  const legacySourceDossier = legacyNames.has('source_dossier_id') ? 'source_dossier_id' : 'NULL';
+  const legacySourceHypothesis = legacyNames.has('source_hypothesis_id')
+    ? 'source_hypothesis_id'
+    : 'NULL';
+  db.exec('ALTER TABLE learning_cases RENAME TO learning_cases_legacy_v21');
   db.exec(LEARNING_CASES_TABLE_SQL);
+  db.exec(`
+    INSERT INTO learning_cases (
+      id,
+      case_type,
+      domain,
+      entity_type,
+      entity_id,
+      comparable,
+      comparator_kind,
+      source_prediction_id,
+      source_trade_id,
+      source_dossier_id,
+      source_hypothesis_id,
+      source_artifact_id,
+      belief_payload,
+      baseline_payload,
+      context_payload,
+      action_payload,
+      outcome_payload,
+      quality_payload,
+      policy_input_payload,
+      exclusion_reason,
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      case_type,
+      domain,
+      entity_type,
+      entity_id,
+      comparable,
+      comparator_kind,
+      source_prediction_id,
+      source_trade_id,
+      ${legacySourceDossier},
+      ${legacySourceHypothesis},
+      source_artifact_id,
+      belief_payload,
+      baseline_payload,
+      context_payload,
+      action_payload,
+      outcome_payload,
+      quality_payload,
+      policy_input_payload,
+      exclusion_reason,
+      created_at,
+      updated_at
+    FROM learning_cases_legacy_v21
+  `);
+  db.exec('DROP TABLE learning_cases_legacy_v21');
+}
+
+export function ensureLearningSchema(db: Database.Database): void {
+  const existingTableSql = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'learning_cases' LIMIT 1")
+    .get() as { sql?: string } | undefined;
+  if (!existingTableSql) {
+    db.exec(LEARNING_CASES_TABLE_SQL);
+  } else if (
+    !String(existingTableSql.sql ?? '').includes("'thesis_quality'") ||
+    !String(existingTableSql.sql ?? '').includes('source_hypothesis_id')
+  ) {
+    rebuildLearningCasesTable(db);
+  }
   const columns = db.prepare("PRAGMA table_info('learning_cases')").all() as Array<{ name?: string }>;
   const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
   if (!columnNames.has('source_dossier_id')) {
     db.exec('ALTER TABLE learning_cases ADD COLUMN source_dossier_id TEXT');
+  }
+  if (!columnNames.has('source_hypothesis_id')) {
+    db.exec('ALTER TABLE learning_cases ADD COLUMN source_hypothesis_id TEXT');
   }
   for (const statement of LEARNING_CASES_INDEX_SQL) {
     db.exec(statement);
@@ -117,6 +199,8 @@ export function ensureLearningSchema(db: Database.Database): void {
   db.exec(COMPARABLE_LEARNING_CASES_VIEW_SQL);
   db.exec('DROP VIEW IF EXISTS execution_learning_cases;');
   db.exec(EXECUTION_LEARNING_CASES_VIEW_SQL);
+  db.exec('DROP VIEW IF EXISTS thesis_learning_cases;');
+  db.exec(THESIS_LEARNING_CASES_VIEW_SQL);
 }
 
 export function cleanupLegacyPerpComparableRows(db: Database.Database): number {
