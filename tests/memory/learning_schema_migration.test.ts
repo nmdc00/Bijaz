@@ -108,6 +108,52 @@ describe('learning schema migration', () => {
     expect(executionViewExists).toBeTruthy();
   });
 
+  it('repairs legacy learning_cases tables before creating dossier and hypothesis indexes', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'thufir-legacy-learning-cases-')), 'thufir.sqlite');
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE learning_cases (
+        id TEXT PRIMARY KEY,
+        case_type TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        comparable INTEGER NOT NULL,
+        comparator_kind TEXT,
+        source_prediction_id TEXT,
+        source_trade_id INTEGER,
+        source_artifact_id INTEGER,
+        belief_payload TEXT,
+        baseline_payload TEXT,
+        context_payload TEXT,
+        action_payload TEXT,
+        outcome_payload TEXT,
+        quality_payload TEXT,
+        policy_input_payload TEXT,
+        exclusion_reason TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+    `);
+    raw.close();
+
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase();
+    const columns = db
+      .prepare("PRAGMA table_info('learning_cases')")
+      .all() as Array<{ name: string }>;
+    const columnNames = new Set(columns.map((column) => column.name));
+    expect(columnNames.has('source_dossier_id')).toBe(true);
+    expect(columnNames.has('source_hypothesis_id')).toBe(true);
+
+    const indexes = db
+      .prepare("PRAGMA index_list('learning_cases')")
+      .all() as Array<{ name: string }>;
+    const indexNames = new Set(indexes.map((index) => index.name));
+    expect(indexNames.has('idx_learning_cases_dossier')).toBe(true);
+    expect(indexNames.has('idx_learning_cases_hypothesis')).toBe(true);
+  });
+
   it('startup repair demotes open synthetic perp comparable rows before they resolve', () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), 'thufir-open-synth-')), 'thufir.sqlite');
     const raw = new Database(dbPath);
