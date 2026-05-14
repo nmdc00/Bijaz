@@ -52,7 +52,7 @@ import { TaSurface } from './ta_surface.js';
 import { OriginationTrigger } from './origination_trigger.js';
 import { LlmTradeOriginator } from './llm_trade_originator.js';
 import { getLatestThought, listEvents, listForecastsForEvent, listOutcomesForEvent } from '../memory/events.js';
-import { updateTradeProposalOutcome } from '../memory/llm_trade_proposals.js';
+import { updateTradeProposalOutcome, updateTradeProposalStatus } from '../memory/llm_trade_proposals.js';
 import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { isSuppressed } from '../memory/signal_class_suppression.js';
 import { createLearningCase } from '../memory/learning_cases.js';
@@ -270,7 +270,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       },
       async () => {
         try {
-          await this.runScan();
+          const result = await this.runScan();
+          this.logger.info(`Autonomous scan result: ${result}`);
         } catch (error) {
           this.logger.error('Autonomous scan failed', error);
           this.emit('error', error instanceof Error ? error : new Error(String(error)));
@@ -556,6 +557,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     // Track cooldown for proposed symbol regardless of outcome
     if (proposal !== null) {
       this.symbolCooldownMap.set(proposal.symbol, now);
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: input.executeTrades,
+          originatorExitStage: 'proposed',
+          requestedLeverage: proposal.leverage,
+        });
+      }
     }
 
     // Update lastFiredMs
@@ -571,6 +579,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     // Proposal is non-null — run through entry gate and execute
     if (!input.executeTrades) {
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: false,
+          originatorExitStage: 'execute_disabled',
+          originatorExitReason: 'runScan invoked with executeTrades=false',
+        });
+      }
       return `Originator proposed ${proposal.symbol} ${proposal.side} (confidence=${proposal.confidence.toFixed(2)}) but execute=false.`;
     }
 
@@ -618,6 +633,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     let probeUsd = Math.min(Math.max(minOrderUsd, signalAdjustedUsd), remainingDaily);
 
     if (probeUsd <= 0 || probeUsd < minOrderUsd) {
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: true,
+          originatorExitStage: 'budget_blocked',
+          originatorExitReason: `insufficient daily budget ${remainingDaily.toFixed(2)} below min order ${minOrderUsd.toFixed(2)}`,
+        });
+      }
       return `${symbol}: Skipped originator proposal (insufficient daily budget $${remainingDaily.toFixed(2)})`;
     }
 
@@ -639,11 +661,27 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     });
 
     if (!riskCheck.allowed) {
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: true,
+          originatorExitStage: 'risk_blocked',
+          originatorExitReason: riskCheck.reason ?? 'perp risk limits exceeded',
+          requestedLeverage: targetLeverage,
+        });
+      }
       return `${symbol}: Originator proposal blocked (${riskCheck.reason ?? 'perp risk limits exceeded'})`;
     }
 
     const limitCheck = await this.limiter.checkAndReserve(probeUsd);
     if (!limitCheck.allowed) {
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: true,
+          originatorExitStage: 'wallet_limit_blocked',
+          originatorExitReason: limitCheck.reason ?? 'wallet spending limiter blocked proposal',
+          requestedLeverage: targetLeverage,
+        });
+      }
       return `${symbol}: Originator proposal blocked (${limitCheck.reason})`;
     }
 
@@ -674,6 +712,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     let originatorGateVerdict: 'approve' | 'reject' | 'resize' | null = null;
     let originatorGateReasonCode: string | null = null;
     if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: true,
+          originatorExitStage: 'entry_gate_pending',
+          requestedLeverage: targetLeverage,
+        });
+      }
       const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
       originatorGateVerdict = gateDecision.verdict;
       originatorGateReasonCode = gateDecision.reasonCode ?? null;
@@ -702,6 +747,12 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         } catch { /* best-effort */ }
         this.limiter.release(probeUsd);
         if (proposal.proposalRecordId != null) {
+          updateTradeProposalStatus(proposal.proposalRecordId, {
+            executeTrades: true,
+            originatorExitStage: 'entry_gate_rejected',
+            originatorExitReason: gateDecision.reasoning,
+            requestedLeverage: targetLeverage,
+          });
           updateTradeProposalOutcome(proposal.proposalRecordId, gateDecision.verdict, false);
         }
         return `${symbol}: Originator proposal rejected by LLM entry gate — ${gateDecision.reasoning}`;
@@ -711,6 +762,14 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       }
       if (gateDecision.suggestedLeverage != null) {
         targetLeverage = gateDecision.suggestedLeverage;
+      }
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: true,
+          originatorExitStage: gateDecision.verdict === 'resize' ? 'entry_gate_resized' : 'entry_gate_approved',
+          originatorExitReason: gateDecision.reasoning,
+          requestedLeverage: targetLeverage,
+        });
       }
     }
 
@@ -729,6 +788,12 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     const tradeResult = await this.executor.execute(market, decision);
     if (proposal.proposalRecordId != null) {
+      updateTradeProposalStatus(proposal.proposalRecordId, {
+        executeTrades: true,
+        originatorExitStage: tradeResult.executed ? 'executed' : 'execution_failed',
+        originatorExitReason: tradeResult.message,
+        requestedLeverage: targetLeverage,
+      });
       updateTradeProposalOutcome(proposal.proposalRecordId, 'approve', tradeResult.executed);
     }
     if (tradeResult.executed) {
