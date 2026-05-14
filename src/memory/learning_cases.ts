@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
 
-export type LearningCaseType = 'comparable_forecast' | 'execution_quality';
+export type LearningCaseType = 'comparable_forecast' | 'execution_quality' | 'thesis_quality';
 
 export interface LearningCasePayloadMap {
   belief?: Record<string, unknown> | null;
@@ -30,6 +30,8 @@ export interface LearningCaseInput extends LearningCasePayloadMap, LearningCaseS
   comparable: boolean;
   comparatorKind?: string | null;
   exclusionReason?: string | null;
+  pairedCases?: LearningCaseInput[];
+  sourceHypothesisId?: string | null;
 }
 
 export interface LearningCase extends LearningCasePayloadMap, LearningCaseSourceLinks {
@@ -43,6 +45,7 @@ export interface LearningCase extends LearningCasePayloadMap, LearningCaseSource
   exclusionReason: string | null;
   createdAt: string;
   updatedAt: string | null;
+  sourceHypothesisId?: string | null;
 }
 
 export interface UpdateLearningCaseOutcomeInput {
@@ -93,6 +96,7 @@ type LearningCaseRow = {
   source_prediction_id: string | null;
   source_trade_id: number | null;
   source_dossier_id: string | null;
+  source_hypothesis_id: string | null;
   source_artifact_id: number | null;
   belief_payload: string | null;
   baseline_payload: string | null;
@@ -136,6 +140,7 @@ function toLearningCase(row: LearningCaseRow): LearningCase {
     sourcePredictionId: row.source_prediction_id,
     sourceTradeId: row.source_trade_id,
     sourceDossierId: row.source_dossier_id,
+    sourceHypothesisId: row.source_hypothesis_id,
     sourceArtifactId: row.source_artifact_id,
     belief: parseJson(row.belief_payload),
     baseline: parseJson(row.baseline_payload),
@@ -150,7 +155,7 @@ function toLearningCase(row: LearningCaseRow): LearningCase {
   };
 }
 
-export function createLearningCase(input: LearningCaseInput): LearningCase {
+function createLearningCaseRecord(input: LearningCaseInput): LearningCase {
   const db = openDatabase();
   const id = input.id ?? randomUUID();
   db.prepare(
@@ -166,6 +171,7 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
         source_prediction_id,
         source_trade_id,
         source_dossier_id,
+        source_hypothesis_id,
         source_artifact_id,
         belief_payload,
         baseline_payload,
@@ -186,6 +192,7 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
         @sourcePredictionId,
         @sourceTradeId,
         @sourceDossierId,
+        @sourceHypothesisId,
         @sourceArtifactId,
         @belief,
         @baseline,
@@ -208,6 +215,7 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
     sourcePredictionId: input.sourcePredictionId ?? null,
     sourceTradeId: input.sourceTradeId ?? null,
     sourceDossierId: input.sourceDossierId ?? null,
+    sourceHypothesisId: input.sourceHypothesisId ?? null,
     sourceArtifactId: input.sourceArtifactId ?? null,
     belief: serializeJson(input.belief),
     baseline: serializeJson(input.baseline),
@@ -220,6 +228,24 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
   });
 
   return getLearningCaseById(id);
+}
+
+export function createLearningCase(input: LearningCaseInput): LearningCase {
+  const db = openDatabase();
+  const transaction = db.transaction((rootInput: LearningCaseInput) => {
+    const primary = createLearningCaseRecord({
+      ...rootInput,
+      pairedCases: undefined,
+    });
+    for (const pairedCase of rootInput.pairedCases ?? []) {
+      createLearningCaseRecord({
+        ...pairedCase,
+        pairedCases: undefined,
+      });
+    }
+    return primary;
+  });
+  return transaction(input);
 }
 
 export function getLearningCaseById(id: string): LearningCase {

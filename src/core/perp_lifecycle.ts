@@ -1,6 +1,10 @@
 import type { ExecutionLearningCase } from './execution_learning.js';
 import type { TradeArchetype } from './trade_contract.js';
 import type { LearningCaseInput } from '../memory/learning_cases.js';
+import {
+  buildPerpThesisLearningCaseInput,
+  computePerpInterventionEvidence,
+} from './thesis_learning.js';
 
 function toFiniteOrNull(input: unknown): number | null {
   const value = Number(input);
@@ -17,7 +21,7 @@ export interface PerpExecutionLearningCaseInput {
   symbol: string;
   executionMode: 'paper' | 'live';
   tradeId: number | null;
-  dossierId: string | null;
+  dossierId?: string | null;
   hypothesisId: string | null;
   capturedAtMs: number;
   side: 'buy' | 'sell';
@@ -55,6 +59,12 @@ export interface PerpExecutionLearningCaseInput {
   reasoning: string | null;
   planContext: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
+  requestedSize?: number | null;
+  approvedSize?: number | null;
+  requestedLeverage?: number | null;
+  approvedLeverage?: number | null;
+  gateVerdict?: string | null;
+  gateReasonCode?: string | null;
 }
 
 export function buildPerpExecutionLearningCase(
@@ -64,6 +74,28 @@ export function buildPerpExecutionLearningCase(
   const timingScore = toFiniteOrNull(input.timingScore);
   const sizingScore = toFiniteOrNull(input.sizingScore);
   const exitScore = toFiniteOrNull(input.exitScore);
+  const interventionEvidence = computePerpInterventionEvidence({
+    requestedSize: input.requestedSize,
+    approvedSize: input.approvedSize ?? input.size,
+    requestedLeverage: input.requestedLeverage,
+    approvedLeverage: input.approvedLeverage ?? input.leverage,
+    netRealizedPnlUsd: input.netRealizedPnlUsd,
+    realizedFeeUsd: input.realizedFeeUsd,
+    gateVerdict: input.gateVerdict,
+  });
+  const thesisScore =
+    input.thesisCorrect == null ? null : input.thesisCorrect ? 1 : 0;
+  const thesisConfidenceScore = meanOrNull([
+    thesisScore,
+    toFiniteOrNull(input.expectedEdge),
+    input.directionScore,
+  ]);
+  const thesisPathScore = meanOrNull([
+    input.thesisInvalidationHit == null ? null : input.thesisInvalidationHit ? 0 : 1,
+    toFiniteOrNull(input.capturedR) != null ? Math.max(0, Math.min(1, Number(input.capturedR) / 2)) : null,
+    toFiniteOrNull(input.mfeProxy) != null ? Math.max(0, Math.min(1, Number(input.mfeProxy))) : null,
+  ]);
+  const thesisCompositeScore = meanOrNull([thesisScore, thesisConfidenceScore, thesisPathScore]);
 
   return {
     kind: 'execution_learning_case',
@@ -74,7 +106,7 @@ export function buildPerpExecutionLearningCase(
     entityId: input.symbol,
     executionMode: input.executionMode,
     sourceTradeId: input.tradeId,
-    sourceDossierId: input.dossierId,
+    sourceDossierId: input.dossierId ?? null,
     sourceHypothesisId: input.hypothesisId,
     createdAtMs: input.capturedAtMs,
     context: {
@@ -121,11 +153,72 @@ export function buildPerpExecutionLearningCase(
     },
     policyInputs: {
       reasoning: input.reasoning,
-      planContext: input.planContext,
+      gateVerdict: input.gateVerdict ?? null,
+      gateReasonCode: input.gateReasonCode ?? null,
+      interventionEvidence: interventionEvidence as unknown as Record<string, unknown> | null,
+      planContext: {
+        ...(input.planContext ?? {}),
+        gateVerdict: input.gateVerdict ?? null,
+        gateReasonCode: input.gateReasonCode ?? null,
+      },
     },
     sourceLinks: {
       snapshot: input.snapshot,
     },
+    pairedCases: [
+      buildPerpThesisLearningCaseInput({
+        sourceTradeId: input.tradeId,
+        sourceDossierId: input.dossierId ?? null,
+        sourceHypothesisId: input.hypothesisId,
+        createdAtMs: input.capturedAtMs,
+        executionMode: input.executionMode,
+        symbol: input.symbol,
+        context: {
+          signalClass: input.signalClass,
+          marketRegime: input.marketRegime,
+          volatilityBucket: input.volatilityBucket,
+          liquidityBucket: input.liquidityBucket,
+          tradeArchetype: input.tradeArchetype,
+          entryTrigger: input.entryTrigger,
+        },
+        action: {
+          side: input.side,
+          size: input.size,
+          leverage: input.leverage,
+          expectedEdge: input.expectedEdge,
+          invalidationPrice: input.invalidationPrice,
+          entryPrice: input.entryPrice,
+          exitPrice: input.exitPrice,
+        },
+        outcome: {
+          thesisCorrect: input.thesisCorrect,
+          thesisInvalidationHit: input.thesisInvalidationHit,
+          exitMode: input.exitMode,
+          realizedPnlUsd: input.realizedPnlUsd,
+          netRealizedPnlUsd: input.netRealizedPnlUsd,
+          pricePathHigh: input.pricePathHigh,
+          pricePathLow: input.pricePathLow,
+        },
+        quality: {
+          thesisScore,
+          thesisConfidenceScore,
+          thesisPathScore,
+          thesisCompositeScore,
+        },
+        policyInputs: {
+          reasoning: input.reasoning,
+          planContext: {
+            ...(input.planContext ?? {}),
+            gateVerdict: input.gateVerdict ?? null,
+            gateReasonCode: input.gateReasonCode ?? null,
+          },
+          interventionEvidence,
+        },
+        sourceLinks: {
+          snapshot: input.snapshot,
+        },
+      }),
+    ],
   };
 }
 
@@ -141,6 +234,7 @@ export function toPerpExecutionLearningCaseInput(
     comparatorKind: null,
     sourceTradeId: learningCase.sourceTradeId,
     sourceDossierId: learningCase.sourceDossierId,
+    sourceHypothesisId: learningCase.sourceHypothesisId,
     belief: null,
     baseline: null,
     context: learningCase.context as unknown as Record<string, unknown>,
@@ -149,5 +243,6 @@ export function toPerpExecutionLearningCaseInput(
     qualityScores: learningCase.quality as unknown as Record<string, unknown>,
     policyInputs: learningCase.policyInputs as unknown as Record<string, unknown>,
     exclusionReason: 'execution_quality_case',
+    pairedCases: learningCase.pairedCases,
   };
 }

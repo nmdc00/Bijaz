@@ -1,5 +1,6 @@
 import type { ThufirConfig } from './config.js';
 import type { PerpTradeJournalEntry } from '../memory/perp_trade_journal.js';
+import type { LearningCaseInput } from '../memory/learning_cases.js';
 
 export type ExecutionLearningSourceLevel =
   | 'exact'
@@ -72,10 +73,14 @@ export type ExecutionLearningCase = {
   policyInputs: {
     reasoning: string | null;
     planContext: Record<string, unknown> | null;
+    gateVerdict?: string | null;
+    gateReasonCode?: string | null;
+    interventionEvidence?: Record<string, unknown> | null;
   };
   sourceLinks: {
     snapshot: Record<string, unknown> | null;
   };
+  pairedCases?: LearningCaseInput[];
 };
 
 export type ExecutionSegmentSummary = {
