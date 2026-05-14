@@ -15,6 +15,10 @@ export interface TradeProposalRecord {
   executed?: boolean;
   tradeId?: string;
   usedFallback?: boolean;
+  executeTrades?: boolean;
+  originatorExitStage?: string;
+  originatorExitReason?: string;
+  requestedLeverage?: number;
 }
 
 function ensureSchema(): void {
@@ -36,9 +40,28 @@ function ensureSchema(): void {
       entry_gate_verdict     TEXT,
       executed               INTEGER NOT NULL DEFAULT 0,
       trade_id               TEXT,
-      used_fallback          INTEGER NOT NULL DEFAULT 0
+      used_fallback          INTEGER NOT NULL DEFAULT 0,
+      execute_trades         INTEGER,
+      originator_exit_stage  TEXT,
+      originator_exit_reason TEXT,
+      requested_leverage     REAL
     )
   `);
+
+  const columns = db.prepare("PRAGMA table_info('llm_trade_proposals')").all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  const addColumnIfMissing = (name: string, definition: string): void => {
+    if (columnNames.has(name)) {
+      return;
+    }
+    db.exec(`ALTER TABLE llm_trade_proposals ADD COLUMN ${definition}`);
+    columnNames.add(name);
+  };
+
+  addColumnIfMissing('execute_trades', 'execute_trades INTEGER');
+  addColumnIfMissing('originator_exit_stage', 'originator_exit_stage TEXT');
+  addColumnIfMissing('originator_exit_reason', 'originator_exit_reason TEXT');
+  addColumnIfMissing('requested_leverage', 'requested_leverage REAL');
 }
 
 export function recordTradeProposal(record: TradeProposalRecord): number {
@@ -48,11 +71,13 @@ export function recordTradeProposal(record: TradeProposalRecord): number {
     `INSERT INTO llm_trade_proposals
        (trigger_reason, alerted_symbols, proposed, symbol, side, thesis_text,
         invalidation_condition, invalidation_price, suggested_ttl_minutes, confidence,
-        entry_gate_verdict, executed, trade_id, used_fallback)
+        entry_gate_verdict, executed, trade_id, used_fallback, execute_trades,
+        originator_exit_stage, originator_exit_reason, requested_leverage)
      VALUES
        (@triggerReason, @alertedSymbols, @proposed, @symbol, @side, @thesisText,
         @invalidationCondition, @invalidationPrice, @suggestedTtlMinutes, @confidence,
-        @entryGateVerdict, @executed, @tradeId, @usedFallback)`
+        @entryGateVerdict, @executed, @tradeId, @usedFallback, @executeTrades,
+        @originatorExitStage, @originatorExitReason, @requestedLeverage)`
   ).run({
     triggerReason: record.triggerReason,
     alertedSymbols: record.alertedSymbols ? JSON.stringify(record.alertedSymbols) : null,
@@ -68,6 +93,11 @@ export function recordTradeProposal(record: TradeProposalRecord): number {
     executed: record.executed ? 1 : 0,
     tradeId: record.tradeId ?? null,
     usedFallback: record.usedFallback ? 1 : 0,
+    executeTrades:
+      typeof record.executeTrades === 'boolean' ? (record.executeTrades ? 1 : 0) : null,
+    originatorExitStage: record.originatorExitStage ?? null,
+    originatorExitReason: record.originatorExitReason ?? null,
+    requestedLeverage: record.requestedLeverage ?? null,
   });
   return Number(result.lastInsertRowid);
 }
@@ -89,5 +119,33 @@ export function updateTradeProposalOutcome(
     verdict,
     executed: executed ? 1 : 0,
     tradeId: tradeId ?? null,
+  });
+}
+
+export function updateTradeProposalStatus(
+  id: number,
+  patch: {
+    executeTrades?: boolean;
+    originatorExitStage?: string;
+    originatorExitReason?: string;
+    requestedLeverage?: number;
+  }
+): void {
+  ensureSchema();
+  const db = openDatabase();
+  db.prepare(
+    `UPDATE llm_trade_proposals
+     SET execute_trades = COALESCE(@executeTrades, execute_trades),
+         originator_exit_stage = COALESCE(@originatorExitStage, originator_exit_stage),
+         originator_exit_reason = COALESCE(@originatorExitReason, originator_exit_reason),
+         requested_leverage = COALESCE(@requestedLeverage, requested_leverage)
+     WHERE id = @id`
+  ).run({
+    id,
+    executeTrades:
+      typeof patch.executeTrades === 'boolean' ? (patch.executeTrades ? 1 : 0) : null,
+    originatorExitStage: patch.originatorExitStage ?? null,
+    originatorExitReason: patch.originatorExitReason ?? null,
+    requestedLeverage: patch.requestedLeverage ?? null,
   });
 }
