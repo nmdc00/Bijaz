@@ -337,4 +337,18 @@ describe('TaSurface', () => {
       expect(second[0]!.oiDelta1hPct).toBeCloseTo(10, 1);
     });
   });
+
+  describe('summarizeCoverage', () => {
+    it('reports missing markets and coverage ratio for collapsed TA fetches', () => {
+      const summary = surface.summarizeCoverage(
+        ['BTC', 'ETH', 'SOL'],
+        [{ symbol: 'BTC' } as TaSnapshot]
+      );
+
+      expect(summary.requestedCount).toBe(3);
+      expect(summary.snapshotCount).toBe(1);
+      expect(summary.coverageRatio).toBeCloseTo(1 / 3, 5);
+      expect(summary.missingMarkets).toEqual(['ETH', 'SOL']);
+    });
+  });
 });
