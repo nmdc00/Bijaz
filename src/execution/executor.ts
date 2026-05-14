@@ -23,6 +23,7 @@ export interface TradeResult {
   realizedPnlUsd?: number | null;
   feeUsd?: number | null;
   orderId?: string | null;
+  tradeId?: number | null;
 }
 
 export interface Order {

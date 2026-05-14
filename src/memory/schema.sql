@@ -115,7 +115,7 @@ WHERE outcome_basis     = 'final'
 
 CREATE TABLE IF NOT EXISTS learning_cases (
     id TEXT PRIMARY KEY,
-    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality')),
+    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality', 'thesis_quality')),
     domain TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
@@ -123,6 +123,8 @@ CREATE TABLE IF NOT EXISTS learning_cases (
     comparator_kind TEXT,
     source_prediction_id TEXT,
     source_trade_id INTEGER,
+    source_dossier_id TEXT,
+    source_hypothesis_id TEXT,
     source_artifact_id INTEGER,
     belief_payload TEXT,
     baseline_payload TEXT,
@@ -141,6 +143,8 @@ CREATE INDEX IF NOT EXISTS idx_learning_cases_domain ON learning_cases(domain);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_comparable ON learning_cases(comparable);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_prediction ON learning_cases(source_prediction_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_trade ON learning_cases(source_trade_id);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_dossier ON learning_cases(source_dossier_id);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_hypothesis ON learning_cases(source_hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_entity ON learning_cases(entity_type, entity_id);
 
 CREATE VIEW IF NOT EXISTS comparable_learning_cases AS
@@ -153,6 +157,39 @@ CREATE VIEW IF NOT EXISTS execution_learning_cases AS
 SELECT *
 FROM learning_cases
 WHERE case_type = 'execution_quality';
+
+CREATE VIEW IF NOT EXISTS thesis_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'thesis_quality';
+
+-- ============================================================================
+-- Canonical Trade Dossiers (v2.1)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS trade_dossiers (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open', 'closed')),
+    direction TEXT CHECK(direction IN ('long', 'short')),
+    strategy_source TEXT,
+    execution_mode TEXT CHECK(execution_mode IN ('paper', 'live')),
+    source_trade_id INTEGER,
+    source_prediction_id TEXT,
+    proposal_record_id INTEGER,
+    trigger_reason TEXT,
+    opened_at TEXT,
+    closed_at TEXT,
+    dossier_payload TEXT,
+    review_payload TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_dossiers_symbol ON trade_dossiers(symbol);
+CREATE INDEX IF NOT EXISTS idx_trade_dossiers_status ON trade_dossiers(status);
+CREATE INDEX IF NOT EXISTS idx_trade_dossiers_trade ON trade_dossiers(source_trade_id);
+CREATE INDEX IF NOT EXISTS idx_trade_dossiers_prediction ON trade_dossiers(source_prediction_id);
 
 -- ============================================================================
 -- Calibration Cache

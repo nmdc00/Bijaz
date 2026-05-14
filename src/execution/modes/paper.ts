@@ -57,7 +57,7 @@ export class PaperExecutor implements ExecutionAdapter {
         { initialCashUsdc: this.initialCashUsdc }
       );
 
-      recordPerpTrade({
+      const tradeId = recordPerpTrade({
         symbol,
         side,
         size,
@@ -87,6 +87,7 @@ export class PaperExecutor implements ExecutionAdapter {
         realizedPnlUsd: fill.realizedPnlUsd,
         feeUsd: fill.feeUsd,
         orderId: fill.orderId,
+        tradeId,
       };
     }
 
