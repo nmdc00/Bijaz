@@ -478,6 +478,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     // Compute TA surface for all top markets
     const allSnapshots = await this.taSurface.computeAll(topMarkets);
+    const rawCoverage = this.taSurface.summarizeCoverage(topMarkets, allSnapshots);
 
     // Filter out symbols already in the book or on cooldown
     const now = Date.now();
@@ -491,6 +492,49 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       }
       return true;
     });
+    const usableSnapshotCount = taSnapshots.length;
+    const filteredOutCount = allSnapshots.length - taSnapshots.length;
+    const coverageMeta = {
+      requestedCount: rawCoverage.requestedCount,
+      snapshotCount: rawCoverage.snapshotCount,
+      coverageRatio: Number(rawCoverage.coverageRatio.toFixed(3)),
+      usableSnapshotCount,
+      usableCoverageRatio: Number(
+        (rawCoverage.requestedCount > 0
+          ? usableSnapshotCount / rawCoverage.requestedCount
+          : 0).toFixed(3)
+      ),
+      filteredOutCount,
+      missingMarkets: rawCoverage.missingMarkets.slice(0, 10),
+    };
+    if (rawCoverage.snapshotCount === 0) {
+      this.logger.warn('Originator TA coverage collapsed upstream', coverageMeta);
+    } else {
+      this.logger.info('Originator TA coverage', coverageMeta);
+    }
+    if (rawCoverage.snapshotCount === 0 || usableSnapshotCount === 0) {
+      const reason =
+        rawCoverage.snapshotCount === 0
+          ? `TA coverage collapsed upstream: 0/${rawCoverage.requestedCount} snapshots from selected markets`
+          : `TA usable coverage collapsed after filters: 0/${rawCoverage.requestedCount} snapshots after position/cooldown filters`;
+      try {
+        recordDecisionAudit({
+          source: 'autonomous',
+          mode: 'autonomous',
+          tradeOutcome: 'skipped',
+          notes: {
+            originatorExitStage: 'ta_unavailable',
+            originatorExitReason: reason,
+            requestedCount: rawCoverage.requestedCount,
+            snapshotCount: rawCoverage.snapshotCount,
+            usableSnapshotCount,
+            filteredOutCount,
+            missingMarkets: rawCoverage.missingMarkets.slice(0, 10),
+          },
+        });
+      } catch { }
+      return `Originator skipped: ta_unavailable (${reason}).`;
+    }
 
     // Get pending events for trigger
     const pendingEvents = listEvents({ limit: 10 });
