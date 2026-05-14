@@ -652,6 +652,7 @@ describe('dashboard api payload', () => {
       kind: 'perp_trade_journal',
       symbol: 'BTC',
       side: 'buy',
+      reduceOnly: true,
       signalClass: 'breakout_15m',
       outcome: 'executed',
       directionScore: 0.9,
@@ -665,6 +666,7 @@ describe('dashboard api payload', () => {
       kind: 'perp_trade_journal',
       symbol: 'ETH',
       side: 'sell',
+      reduceOnly: true,
       signalClass: 'mean_reversion_5m',
       outcome: 'failed',
       directionScore: 0.2,
@@ -766,6 +768,42 @@ describe('dashboard api payload', () => {
     expect(scMap.get('momentum_breakout')?.expectancyR).toBeCloseTo(1.25);
     expect(scMap.get('mean_reversion')?.winRate).toBe(0);
     expect(scMap.get('mean_reversion')?.expectancyR).toBeCloseTo(-0.75);
+  });
+
+  it('excludes non-reduce-only entry journals from the closed-trade log', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-entry-journal-filter-'));
+    dbDir = dir;
+    dbPath = join(dir, 'thufir.sqlite');
+    process.env.THUFIR_DB_PATH = dbPath;
+    const db = openDatabase(dbPath);
+
+    recordPerpTradeJournal({
+      kind: 'perp_trade_journal',
+      symbol: 'TAO',
+      side: 'buy',
+      reduceOnly: false,
+      signalClass: 'momentum_breakout',
+      outcome: 'executed',
+      directionScore: null,
+      timingScore: null,
+      sizingScore: null,
+      exitScore: null,
+      capturedR: null,
+      thesisCorrect: null,
+    });
+
+    const payload = buildDashboardApiPayload({
+      db,
+      filters: {
+        mode: 'paper',
+        timeframe: 'all',
+        period: null,
+        from: null,
+        to: null,
+      },
+    });
+
+    expect(payload.sections.tradeLog.rows).toEqual([]);
   });
 
   it('returns promotion gate rows keyed by symbol:signalClass', () => {
@@ -938,10 +976,8 @@ describe('dashboard api payload', () => {
     expect(livePayload.meta.recordCounts.openPaperPositions).toBe(0);
 
     expect(paperPayload.sections.openPositions.rows.length).toBe(1);
-    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(true);
-    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(false);
-    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(true);
-    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(false);
+    expect(paperPayload.sections.tradeLog.rows).toEqual([]);
+    expect(livePayload.sections.tradeLog.rows).toEqual([]);
 
     expect(
       paperPayload.sections.promotionGates.rows.some((row) => row.setupKey === 'BTC:breakout_15m')
@@ -957,7 +993,7 @@ describe('dashboard api payload', () => {
     ).toBe(false);
   });
 
-  it('filters perp_trades fallback trade log by execution_mode', () => {
+  it('does not use perp_trades fallback for the closed-trade quality table', () => {
     const dir = mkdtempSync(join(tmpdir(), 'thufir-dashboard-perp-trades-mode-filter-'));
     dbDir = dir;
     dbPath = join(dir, 'thufir.sqlite');
@@ -998,10 +1034,8 @@ describe('dashboard api payload', () => {
       },
     });
 
-    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(true);
-    expect(paperPayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(false);
-    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'ETH')).toBe(true);
-    expect(livePayload.sections.tradeLog.rows.some((row) => row.symbol === 'BTC')).toBe(false);
+    expect(paperPayload.sections.tradeLog.rows).toEqual([]);
+    expect(livePayload.sections.tradeLog.rows).toEqual([]);
   });
 
   it('returns policy state from autonomy policy table', () => {
