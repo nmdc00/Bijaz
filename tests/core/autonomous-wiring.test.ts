@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
   const upsertExitPolicy = vi.fn();
   const updateTradeProposalOutcome = vi.fn();
   const updateTradeProposalStatus = vi.fn();
+  const recordDecisionAudit = vi.fn();
   const createPrediction = vi.fn(() => 'pred-mock-id');
   const createLearningCase = vi.fn(() => ({ id: 'case-mock-id' }));
   const getSignalWeights = vi.fn(() => ({ technical: 0.5, news: 0.3, onChain: 0.2 }));
@@ -46,6 +47,21 @@ const mocks = vi.hoisted(() => {
   const taSurfaceInstance = {
     computeAll: (...args: unknown[]) => taComputeAll(...args),
     hasAlert: (snap: any) => snap.alertReason !== undefined,
+    summarizeCoverage: (markets: string[], snapshots: Array<{ symbol: string }>) => {
+      const requestedMarkets = Array.from(
+        new Set(markets.map((market) => String(market ?? '').trim()).filter(Boolean))
+      );
+      const snapshotSymbols = new Set(
+        snapshots.map((snapshot) => String(snapshot.symbol ?? '').trim()).filter(Boolean)
+      );
+      return {
+        requestedMarkets,
+        requestedCount: requestedMarkets.length,
+        snapshotCount: snapshotSymbols.size,
+        coverageRatio: requestedMarkets.length > 0 ? snapshotSymbols.size / requestedMarkets.length : 0,
+        missingMarkets: requestedMarkets.filter((market) => !snapshotSymbols.has(market)),
+      };
+    },
   };
   const triggerInstance = {
     shouldFire: (...args: unknown[]) => triggerShouldFire(...args),
@@ -53,14 +69,22 @@ const mocks = vi.hoisted(() => {
   const originatorInstance = {
     propose: (...args: unknown[]) => originatorPropose(...args),
   };
+  const positionBookInstance = {
+    refresh: vi.fn(async () => {}),
+    getAll: vi.fn(() => []),
+    get: vi.fn(() => undefined),
+    hasPosition: vi.fn(() => false),
+    hasConflict: vi.fn(() => false),
+    findOppositeSideLosers: vi.fn(() => []),
+  };
 
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus,
+    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
     getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
-    taSurfaceInstance, triggerInstance, originatorInstance,
+    taSurfaceInstance, triggerInstance, originatorInstance, positionBookInstance,
   };
 });
 
@@ -98,6 +122,10 @@ vi.mock('../../src/core/llm_trade_originator.js', () => ({
 vi.mock('../../src/memory/llm_trade_proposals.js', () => ({
   updateTradeProposalOutcome: (...args: unknown[]) => mocks.updateTradeProposalOutcome(...args),
   updateTradeProposalStatus: (...args: unknown[]) => mocks.updateTradeProposalStatus(...args),
+}));
+
+vi.mock('../../src/memory/decision_audit.js', () => ({
+  recordDecisionAudit: (...args: unknown[]) => mocks.recordDecisionAudit(...args),
 }));
 
 vi.mock('../../src/discovery/engine.js', () => ({
@@ -204,16 +232,8 @@ vi.mock('../../src/core/exit_contract.js', () => ({
 }));
 
 vi.mock('../../src/core/position_book.js', () => {
-  const bookInstance = {
-    refresh: vi.fn(async () => {}),
-    getAll: vi.fn(() => []),
-    get: vi.fn(() => undefined),
-    hasPosition: vi.fn(() => false),
-    hasConflict: vi.fn(() => false),
-    findOppositeSideLosers: vi.fn(() => []),
-  };
   const PositionBook = {
-    _instance: bookInstance,
+    _instance: mocks.positionBookInstance,
     getInstance() { return this._instance; },
   };
   return { PositionBook };
@@ -316,6 +336,8 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     mocks.listForecastsForEvent.mockReturnValue([]);
     mocks.listOutcomesForEvent.mockReturnValue([]);
     mocks.searchHistoricalCases.mockReturnValue([]);
+    mocks.positionBookInstance.getAll.mockReturnValue([]);
+    mocks.positionBookInstance.hasPosition.mockReturnValue(false);
   });
 
   it('1. proposal → gate approve → executor called, exit policy written with LLM TTL and invalidation price', async () => {
@@ -435,6 +457,65 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       expect(symbols).not.toContain('BTC');
     }
     // If originator wasn't called (trigger didn't fire with new taSnapshots), that's also valid
+  });
+
+  it('4a. returns explicit ta_unavailable result when TA snapshots collapse to zero before triggering originator', async () => {
+    mocks.taComputeAll.mockResolvedValue([]);
+
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('approve');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: {} }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    const result = await manager.runScan({ forceExecute: true });
+
+    expect(result).toContain('ta_unavailable');
+    expect(result).toContain('0/2');
+    expect(mocks.triggerShouldFire).not.toHaveBeenCalled();
+    expect(mocks.originatorPropose).not.toHaveBeenCalled();
+    expect(mocks.runDiscovery).not.toHaveBeenCalled();
+    expect(mocks.recordDecisionAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tradeOutcome: 'skipped',
+        notes: expect.objectContaining({
+          originatorExitStage: 'ta_unavailable',
+          requestedCount: 2,
+          snapshotCount: 0,
+          usableSnapshotCount: 0,
+        }),
+      })
+    );
+  });
+
+  it('4c. returns explicit ta_unavailable result when usable TA coverage is filtered out by an existing position', async () => {
+    mocks.positionBookInstance.hasPosition.mockImplementation((symbol: string) => symbol === 'BTC');
+
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('approve');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: {} }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    const result = await manager.runScan({ forceExecute: true });
+
+    expect(result).toContain('ta_unavailable');
+    expect(result).toContain('usable coverage collapsed');
+    expect(mocks.triggerShouldFire).not.toHaveBeenCalled();
+    expect(mocks.originatorPropose).not.toHaveBeenCalled();
+    expect(mocks.recordDecisionAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notes: expect.objectContaining({
+          originatorExitStage: 'ta_unavailable',
+          requestedCount: 2,
+          snapshotCount: 1,
+          usableSnapshotCount: 0,
+          filteredOutCount: 1,
+        }),
+      })
+    );
   });
 
   it('4b. event artifacts and historical cases are injected into originator bundle for commodity contexts', async () => {

@@ -17,6 +17,14 @@ export interface TaSnapshot {
   alertReason?: string;
 }
 
+export interface TaCoverageSummary {
+  requestedMarkets: string[];
+  requestedCount: number;
+  snapshotCount: number;
+  coverageRatio: number;
+  missingMarkets: string[];
+}
+
 const EMA_PERIOD = 20;
 const EMA_MULTIPLIER = 2 / (EMA_PERIOD + 1);
 // Funding comes from Hyperliquid as an 8h rate; annualise: * (24/8) * 365 * 100
@@ -85,6 +93,31 @@ export class TaSurface {
       }
     }
     return snapshots;
+  }
+
+  summarizeCoverage(markets: string[], snapshots: TaSnapshot[]): TaCoverageSummary {
+    const requestedMarkets = Array.from(
+      new Set(
+        markets
+          .map((market) => String(market ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+    const snapshotSymbols = new Set(
+      snapshots
+        .map((snapshot) => String(snapshot.symbol ?? '').trim())
+        .filter(Boolean)
+    );
+    const missingMarkets = requestedMarkets.filter((market) => !snapshotSymbols.has(market));
+    const requestedCount = requestedMarkets.length;
+    const snapshotCount = snapshotSymbols.size;
+    return {
+      requestedMarkets,
+      requestedCount,
+      snapshotCount,
+      coverageRatio: requestedCount > 0 ? snapshotCount / requestedCount : 0,
+      missingMarkets,
+    };
   }
 
   private async computeOne(
