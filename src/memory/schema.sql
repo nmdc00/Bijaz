@@ -115,7 +115,7 @@ WHERE outcome_basis     = 'final'
 
 CREATE TABLE IF NOT EXISTS learning_cases (
     id TEXT PRIMARY KEY,
-    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality')),
+    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality', 'thesis_quality')),
     domain TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS learning_cases (
     source_prediction_id TEXT,
     source_trade_id INTEGER,
     source_dossier_id TEXT,
+    source_hypothesis_id TEXT,
     source_artifact_id INTEGER,
     belief_payload TEXT,
     baseline_payload TEXT,
@@ -143,6 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_learning_cases_comparable ON learning_cases(compa
 CREATE INDEX IF NOT EXISTS idx_learning_cases_prediction ON learning_cases(source_prediction_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_trade ON learning_cases(source_trade_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_dossier ON learning_cases(source_dossier_id);
+CREATE INDEX IF NOT EXISTS idx_learning_cases_hypothesis ON learning_cases(source_hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_entity ON learning_cases(entity_type, entity_id);
 
 CREATE VIEW IF NOT EXISTS comparable_learning_cases AS
@@ -155,6 +157,11 @@ CREATE VIEW IF NOT EXISTS execution_learning_cases AS
 SELECT *
 FROM learning_cases
 WHERE case_type = 'execution_quality';
+
+CREATE VIEW IF NOT EXISTS thesis_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'thesis_quality';
 
 -- ============================================================================
 -- Canonical Trade Dossiers (v2.1)
