@@ -62,9 +62,76 @@ import { searchHistoricalCases } from '../events/casebase.js';
 import { executeToolCall } from './tool-executor.js';
 import { buildOriginationEventContext, resolveOriginationContextDomain } from './origination_context.js';
 import type { MarketContextDomain } from '../markets/context.js';
+import { retrieveSimilarTradeDossiers, type TradeSimilaritySummary } from './trade_similarity.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+function inferSymbolClass(symbol: string): string {
+  const normalized = symbol.trim().toUpperCase();
+  if (normalized.startsWith('XYZ:')) {
+    return normalized.endsWith('COIN') || normalized.endsWith('MSTR')
+      ? 'equity_proxy'
+      : 'macro_contract';
+  }
+  if (normalized.startsWith('FLX:')) return 'alt_perp';
+  if (normalized.includes('/')) return 'spot_pair';
+  return 'crypto';
+}
+
+function formatTradeSimilaritySummary(summary: TradeSimilaritySummary): string {
+  if ((summary.stats.sampleSize ?? 0) <= 0) {
+    return 'No materially similar historical dossiers found.';
+  }
+  const winRatePct =
+    summary.stats.winRate != null ? `${(summary.stats.winRate * 100).toFixed(0)}%` : 'n/a';
+  const avgPnl =
+    summary.stats.averageRealizedPnlUsd != null
+      ? `$${summary.stats.averageRealizedPnlUsd.toFixed(2)}`
+      : 'n/a';
+  const lessons =
+    summary.topLessons.length > 0 ? summary.topLessons.slice(0, 2).join(' | ') : 'none';
+  const repeatTags = summary.repeatTags.length > 0 ? summary.repeatTags.slice(0, 3).join(', ') : 'none';
+  const avoidTags = summary.avoidTags.length > 0 ? summary.avoidTags.slice(0, 3).join(', ') : 'none';
+  return [
+    `recommendation=${summary.recommendation}`,
+    `sampleSize=${summary.stats.sampleSize}`,
+    `winRate=${winRatePct}`,
+    `avgNetPnl=${avgPnl}`,
+    `repeatTags=${repeatTags}`,
+    `avoidTags=${avoidTags}`,
+    `lessons=${lessons}`,
+  ].join(' ; ');
+}
+
+function buildSimilarityContextForMarkets(input: {
+  symbols: string[];
+  triggerReason: 'cadence' | 'ta_alert' | 'event';
+  signalClass: string;
+  regime?: string | null;
+  stretchBySymbol?: Map<string, number>;
+  limit?: number;
+}): string {
+  const sections: string[] = [];
+  const seen = new Set<string>();
+  for (const symbol of input.symbols) {
+    const normalized = String(symbol ?? '').trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    const summary = retrieveSimilarTradeDossiers({
+      symbol: normalized,
+      signalClass: input.signalClass,
+      triggerReason: input.triggerReason,
+      regime: input.regime ?? null,
+      symbolClass: inferSymbolClass(normalized),
+      entryStretchPct: input.stretchBySymbol?.get(normalized) ?? null,
+      limit: input.limit ?? 3,
+    });
+    sections.push(`${normalized}: ${formatTradeSimilaritySummary(summary)}`);
+    if (sections.length >= 3) break;
+  }
+  return sections.length > 0 ? sections.join('\n') : '(none)';
 }
 
 interface ScanCycleSnapshot {
@@ -585,12 +652,27 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         )
         .join('\n') || '(no history yet)';
 
+    const stretchBySymbol = new Map(
+      taSnapshots.map((snapshot) => [
+        String(snapshot.symbol ?? '').trim().toUpperCase(),
+        Number.isFinite(snapshot.priceVsEma20_1h) ? snapshot.priceVsEma20_1h : 0,
+      ])
+    );
+    const similarityContext = buildSimilarityContextForMarkets({
+      symbols: triggerResult.alertedSymbols.length > 0 ? triggerResult.alertedSymbols : contextSymbols,
+      triggerReason: triggerResult.reason,
+      signalClass: 'llm_originator',
+      regime: 'unknown',
+      stretchBySymbol,
+    });
+
     const bundle = {
       book: book.getAll(),
       taSnapshots,
       marketContext,
       recentEvents,
       eventContext,
+      similarityContext,
       contextDomain,
       alertedSymbols: triggerResult.alertedSymbols,
       triggerReason: triggerResult.reason,
@@ -736,6 +818,21 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       Number.isFinite(this.thufirConfig.hyperliquid.maxLeverage)
         ? Math.max(1, Number(this.thufirConfig.hyperliquid.maxLeverage))
         : 50;
+    const proposalEntryStretchPct = stretchBySymbol.get(symbol) ?? null;
+    const proposalSimilarity = retrieveSimilarTradeDossiers({
+      symbol,
+      direction: proposal.side === 'long' ? 'long' : 'short',
+      strategySource: 'autonomous_originator',
+      triggerReason: triggerResult.reason,
+      signalClass: 'llm_originator',
+      regime: 'unknown',
+      symbolClass: inferSymbolClass(symbol),
+      entryStretchPct: proposalEntryStretchPct,
+      gateVerdict: null,
+      limit: 5,
+    });
+    const proposalSimilaritySummary = formatTradeSimilaritySummary(proposalSimilarity);
+
     const gateCandidate = {
       symbol,
       side: side as 'buy' | 'sell',
@@ -748,7 +845,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       domain: 'perp',
       regime: 'unknown',
       session: sessionContext.session,
-      entryReasoning: proposal.thesisText,
+      entryReasoning: `${proposal.thesisText}\nHistorical similarity: ${proposalSimilaritySummary}`,
       invalidationPrice: proposal.invalidationPrice,
       suggestedTtlMinutes: proposal.suggestedTtlMinutes,
       expectedRMultiple: proposal.expectedRMultiple,
@@ -900,8 +997,11 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             context: {
               triggerReason: triggerResult.reason,
               signalClass: 'llm_originator',
+              symbolClass: inferSymbolClass(symbol),
               marketRegime: 'unknown',
               session: sessionContext.session,
+              entryStretchPct: proposalEntryStretchPct,
+              similarity: proposalSimilarity,
             },
             gate: {
               verdict: originatorGateVerdict,
@@ -910,6 +1010,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               approvedNotionalUsd: probeUsd,
               requestedLeverage: proposal.leverage,
               approvedLeverage: targetLeverage,
+              historicalSimilarity: proposalSimilaritySummary,
             },
             execution: {
               tradeId: lifecycleTradeId,
@@ -919,6 +1020,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               filledNotionalUsd: markPrice > 0 ? size * markPrice : probeUsd,
               orderId: tradeResult.orderId ?? null,
               executionMessage: tradeResult.message,
+              entryStretchPct: proposalEntryStretchPct,
             },
             exitPlan: {
               invalidationPrice: proposal.invalidationPrice,
@@ -947,14 +1049,15 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           context: {
             horizonMinutes: proposal.suggestedTtlMinutes,
             mode: executionMode,
-            signalClass: 'llm_originator',
-            triggerReason: triggerResult.reason,
-            entryGateVerdict: originatorGateVerdict,
-            entryGateReasonCode: originatorGateReasonCode,
-            requestedNotionalUsd: gateCandidate.notionalUsd,
-            approvedNotionalUsd: probeUsd,
-            invalidationPrice: proposal.invalidationPrice,
-          },
+              signalClass: 'llm_originator',
+              triggerReason: triggerResult.reason,
+              entryGateVerdict: originatorGateVerdict,
+              entryGateReasonCode: originatorGateReasonCode,
+              requestedNotionalUsd: gateCandidate.notionalUsd,
+              approvedNotionalUsd: probeUsd,
+              invalidationPrice: proposal.invalidationPrice,
+              historicalSimilarity: proposalSimilarity,
+            },
           action: {
             side,
             executed: true,
@@ -1380,6 +1483,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         Number.isFinite(this.thufirConfig.hyperliquid.maxLeverage)
           ? Math.max(1, Number(this.thufirConfig.hyperliquid.maxLeverage))
           : 50;
+      const quantSimilarity = retrieveSimilarTradeDossiers({
+        symbol,
+        direction: expr.side === 'buy' ? 'long' : 'short',
+        strategySource: 'autonomous_quant',
+        triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+        signalClass,
+        regime,
+        gateVerdict: null,
+        limit: 5,
+      });
+      const quantSimilaritySummary = formatTradeSimilaritySummary(quantSimilarity);
       const gateCandidate = {
         symbol,
         side: expr.side,
@@ -1391,7 +1505,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         signalClass,
         regime,
         session: sessionContext.session,
-        entryReasoning: expr.expectedMove ?? '',
+        entryReasoning: `${expr.expectedMove ?? ''}\nHistorical similarity: ${quantSimilaritySummary}`,
       };
       let gateStopLevelPrice: number | null = null;
       let entryGateVerdict: 'approve' | 'reject' | 'resize' | null = null;
@@ -1525,11 +1639,13 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               },
               context: {
                 signalClass,
+                symbolClass: inferSymbolClass(symbol),
                 marketRegime: regime,
                 volatilityBucket,
                 liquidityBucket,
                 session: sessionContext.session,
                 triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+                similarity: quantSimilarity,
               },
               gate: {
                 verdict: entryGateVerdict,
@@ -1538,6 +1654,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
                 approvedNotionalUsd: probeUsd,
                 approvedLeverage: targetLeverage,
                 stopLevelPrice: gateStopLevelPrice,
+                historicalSimilarity: quantSimilaritySummary,
               },
               execution: {
                 tradeId: tradeResult.tradeId ?? null,
@@ -1583,6 +1700,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               entryGateReasonCode,
               requestedNotionalUsd: gateCandidate.notionalUsd,
               approvedNotionalUsd: probeUsd,
+              historicalSimilarity: quantSimilarity,
             },
             action: {
               side: expr.side,
