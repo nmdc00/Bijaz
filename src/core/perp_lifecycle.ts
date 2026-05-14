@@ -17,6 +17,7 @@ export interface PerpExecutionLearningCaseInput {
   symbol: string;
   executionMode: 'paper' | 'live';
   tradeId: number | null;
+  dossierId: string | null;
   hypothesisId: string | null;
   capturedAtMs: number;
   side: 'buy' | 'sell';
@@ -73,6 +74,7 @@ export function buildPerpExecutionLearningCase(
     entityId: input.symbol,
     executionMode: input.executionMode,
     sourceTradeId: input.tradeId,
+    sourceDossierId: input.dossierId,
     sourceHypothesisId: input.hypothesisId,
     createdAtMs: input.capturedAtMs,
     context: {
@@ -138,6 +140,7 @@ export function toPerpExecutionLearningCaseInput(
     comparable: false,
     comparatorKind: null,
     sourceTradeId: learningCase.sourceTradeId,
+    sourceDossierId: learningCase.sourceDossierId,
     belief: null,
     baseline: null,
     context: learningCase.context as unknown as Record<string, unknown>,

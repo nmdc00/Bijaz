@@ -24,6 +24,7 @@ export type ExecutionLearningCase = {
   entityId: string;
   executionMode: 'paper' | 'live' | null;
   sourceTradeId: number | null;
+  sourceDossierId: string | null;
   sourceHypothesisId: string | null;
   createdAtMs: number | null;
   context: {
@@ -186,6 +187,7 @@ export function normalizeJournalEntriesToExecutionLearningCases(
       entityId: entry.symbol,
       executionMode: entry.execution_mode ?? null,
       sourceTradeId: entry.tradeId ?? null,
+      sourceDossierId: null,
       sourceHypothesisId: entry.hypothesisId ?? null,
       createdAtMs: parseCreatedAtMs(snapshot),
       context: {
