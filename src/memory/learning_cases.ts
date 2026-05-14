@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
 
-export type LearningCaseType = 'comparable_forecast' | 'execution_quality';
+export type LearningCaseType = 'comparable_forecast' | 'execution_quality' | 'thesis_quality';
 
 export interface LearningCasePayloadMap {
   belief?: Record<string, unknown> | null;
@@ -17,6 +17,7 @@ export interface LearningCasePayloadMap {
 export interface LearningCaseSourceLinks {
   sourcePredictionId?: string | null;
   sourceTradeId?: number | null;
+  sourceDossierId?: string | null;
   sourceArtifactId?: number | null;
 }
 
@@ -29,6 +30,8 @@ export interface LearningCaseInput extends LearningCasePayloadMap, LearningCaseS
   comparable: boolean;
   comparatorKind?: string | null;
   exclusionReason?: string | null;
+  pairedCases?: LearningCaseInput[];
+  sourceHypothesisId?: string | null;
 }
 
 export interface LearningCase extends LearningCasePayloadMap, LearningCaseSourceLinks {
@@ -42,6 +45,7 @@ export interface LearningCase extends LearningCasePayloadMap, LearningCaseSource
   exclusionReason: string | null;
   createdAt: string;
   updatedAt: string | null;
+  sourceHypothesisId?: string | null;
 }
 
 export interface UpdateLearningCaseOutcomeInput {
@@ -62,6 +66,7 @@ export interface ListLearningCasesFilters {
   entityId?: string;
   sourcePredictionId?: string;
   sourceTradeId?: number;
+  sourceDossierId?: string;
   sourceArtifactId?: number;
   limit?: number;
 }
@@ -90,6 +95,8 @@ type LearningCaseRow = {
   comparator_kind: string | null;
   source_prediction_id: string | null;
   source_trade_id: number | null;
+  source_dossier_id: string | null;
+  source_hypothesis_id: string | null;
   source_artifact_id: number | null;
   belief_payload: string | null;
   baseline_payload: string | null;
@@ -132,6 +139,8 @@ function toLearningCase(row: LearningCaseRow): LearningCase {
     comparatorKind: row.comparator_kind,
     sourcePredictionId: row.source_prediction_id,
     sourceTradeId: row.source_trade_id,
+    sourceDossierId: row.source_dossier_id,
+    sourceHypothesisId: row.source_hypothesis_id,
     sourceArtifactId: row.source_artifact_id,
     belief: parseJson(row.belief_payload),
     baseline: parseJson(row.baseline_payload),
@@ -146,7 +155,7 @@ function toLearningCase(row: LearningCaseRow): LearningCase {
   };
 }
 
-export function createLearningCase(input: LearningCaseInput): LearningCase {
+function createLearningCaseRecord(input: LearningCaseInput): LearningCase {
   const db = openDatabase();
   const id = input.id ?? randomUUID();
   db.prepare(
@@ -161,6 +170,8 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
         comparator_kind,
         source_prediction_id,
         source_trade_id,
+        source_dossier_id,
+        source_hypothesis_id,
         source_artifact_id,
         belief_payload,
         baseline_payload,
@@ -180,6 +191,8 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
         @comparatorKind,
         @sourcePredictionId,
         @sourceTradeId,
+        @sourceDossierId,
+        @sourceHypothesisId,
         @sourceArtifactId,
         @belief,
         @baseline,
@@ -201,6 +214,8 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
     comparatorKind: input.comparatorKind ?? null,
     sourcePredictionId: input.sourcePredictionId ?? null,
     sourceTradeId: input.sourceTradeId ?? null,
+    sourceDossierId: input.sourceDossierId ?? null,
+    sourceHypothesisId: input.sourceHypothesisId ?? null,
     sourceArtifactId: input.sourceArtifactId ?? null,
     belief: serializeJson(input.belief),
     baseline: serializeJson(input.baseline),
@@ -213,6 +228,24 @@ export function createLearningCase(input: LearningCaseInput): LearningCase {
   });
 
   return getLearningCaseById(id);
+}
+
+export function createLearningCase(input: LearningCaseInput): LearningCase {
+  const db = openDatabase();
+  const transaction = db.transaction((rootInput: LearningCaseInput) => {
+    const primary = createLearningCaseRecord({
+      ...rootInput,
+      pairedCases: undefined,
+    });
+    for (const pairedCase of rootInput.pairedCases ?? []) {
+      createLearningCaseRecord({
+        ...pairedCase,
+        pairedCases: undefined,
+      });
+    }
+    return primary;
+  });
+  return transaction(input);
 }
 
 export function getLearningCaseById(id: string): LearningCase {
@@ -268,6 +301,7 @@ export function listLearningCases(filters: ListLearningCasesFilters = {}): Learn
           AND (@entityId IS NULL OR entity_id = @entityId)
           AND (@sourcePredictionId IS NULL OR source_prediction_id = @sourcePredictionId)
           AND (@sourceTradeId IS NULL OR source_trade_id = @sourceTradeId)
+          AND (@sourceDossierId IS NULL OR source_dossier_id = @sourceDossierId)
           AND (@sourceArtifactId IS NULL OR source_artifact_id = @sourceArtifactId)
         ORDER BY created_at DESC, id DESC
         LIMIT @limit
@@ -282,6 +316,7 @@ export function listLearningCases(filters: ListLearningCasesFilters = {}): Learn
       entityId: filters.entityId ?? null,
       sourcePredictionId: filters.sourcePredictionId ?? null,
       sourceTradeId: filters.sourceTradeId ?? null,
+      sourceDossierId: filters.sourceDossierId ?? null,
       sourceArtifactId: filters.sourceArtifactId ?? null,
       limit: filters.limit ?? 100,
     }) as LearningCaseRow[];

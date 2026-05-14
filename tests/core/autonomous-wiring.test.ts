@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => {
   const updateTradeProposalOutcome = vi.fn();
   const updateTradeProposalStatus = vi.fn();
   const recordDecisionAudit = vi.fn();
+  const recordPerpTradeJournal = vi.fn();
+  const upsertTradeDossier = vi.fn(() => ({ id: 'dossier-mock-id' }));
   const createPrediction = vi.fn(() => 'pred-mock-id');
   const createLearningCase = vi.fn(() => ({ id: 'case-mock-id' }));
   const getSignalWeights = vi.fn(() => ({ technical: 0.5, news: 0.3, onChain: 0.2 }));
@@ -41,6 +43,21 @@ const mocks = vi.hoisted(() => {
   const listForecastsForEvent = vi.fn(() => []);
   const listOutcomesForEvent = vi.fn(() => []);
   const searchHistoricalCases = vi.fn(() => []);
+  const retrieveSimilarTradeDossiers = vi.fn(() => ({
+    recommendation: 'caution',
+    stats: {
+      sampleSize: 2,
+      winRate: 0.5,
+      averageRealizedPnlUsd: 12.5,
+      averageEntryStretchPct: 4.2,
+      averageInterventionScore: 0.15,
+      gateVerdictCounts: { resize: 1, approve: 1 },
+    },
+    topLessons: ['Late entries should stay small.'],
+    repeatTags: ['thesis_valid'],
+    avoidTags: ['late_entry'],
+    topMatches: [],
+  }));
 
   // Stable mock objects — replaced entirely on each TaSurface/OriginationTrigger/LlmTradeOriginator construction
   // by capturing via the constructor mock
@@ -81,9 +98,10 @@ const mocks = vi.hoisted(() => {
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit,
+    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit, recordPerpTradeJournal, upsertTradeDossier,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
     getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
+    retrieveSimilarTradeDossiers,
     taSurfaceInstance, triggerInstance, originatorInstance, positionBookInstance,
   };
 });
@@ -144,11 +162,16 @@ vi.mock('../../src/discovery/market_selector.js', () => ({
 
 vi.mock('../../src/memory/perp_trades.js', () => ({
   recordPerpTrade: vi.fn(() => 1),
+  setActivePerpPositionLifecycle: vi.fn(),
 }));
 
 vi.mock('../../src/memory/perp_trade_journal.js', () => ({
-  recordPerpTradeJournal: vi.fn(),
+  recordPerpTradeJournal: (...args: unknown[]) => mocks.recordPerpTradeJournal(...args),
   listPerpTradeJournals: vi.fn(() => []),
+}));
+
+vi.mock('../../src/memory/trade_dossiers.js', () => ({
+  upsertTradeDossier: (...args: unknown[]) => mocks.upsertTradeDossier(...args),
 }));
 
 vi.mock('../../src/execution/perp-risk.js', () => ({
@@ -217,6 +240,10 @@ vi.mock('../../src/memory/events.js', () => ({
 
 vi.mock('../../src/events/casebase.js', () => ({
   searchHistoricalCases: (...args: unknown[]) => mocks.searchHistoricalCases(...args),
+}));
+
+vi.mock('../../src/core/trade_similarity.js', () => ({
+  retrieveSimilarTradeDossiers: (...args: unknown[]) => mocks.retrieveSimilarTradeDossiers(...args),
 }));
 
 vi.mock('../../src/markets/context.js', () => ({
@@ -336,6 +363,21 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     mocks.listForecastsForEvent.mockReturnValue([]);
     mocks.listOutcomesForEvent.mockReturnValue([]);
     mocks.searchHistoricalCases.mockReturnValue([]);
+    mocks.retrieveSimilarTradeDossiers.mockReturnValue({
+      recommendation: 'caution',
+      stats: {
+        sampleSize: 2,
+        winRate: 0.5,
+        averageRealizedPnlUsd: 12.5,
+        averageEntryStretchPct: 4.2,
+        averageInterventionScore: 0.15,
+        gateVerdictCounts: { resize: 1, approve: 1 },
+      },
+      topLessons: ['Late entries should stay small.'],
+      repeatTags: ['thesis_valid'],
+      avoidTags: ['late_entry'],
+      topMatches: [],
+    });
     mocks.positionBookInstance.getAll.mockReturnValue([]);
     mocks.positionBookInstance.hasPosition.mockReturnValue(false);
   });
@@ -386,6 +428,26 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       originatorExitStage: 'executed',
       originatorExitReason: 'paper ok',
       requestedLeverage: 5,
+    }));
+    expect(mocks.createLearningCase).toHaveBeenCalledWith(expect.objectContaining({
+      caseType: 'comparable_forecast',
+      sourcePredictionId: 'pred-mock-id',
+      sourceDossierId: 'dossier-mock-id',
+    }));
+    expect(mocks.recordPerpTradeJournal).toHaveBeenCalledWith(expect.objectContaining({
+      symbol: 'BTC',
+      reduceOnly: false,
+      outcome: 'executed',
+      signalClass: 'llm_originator',
+    }));
+    expect(mocks.upsertTradeDossier).toHaveBeenCalledWith(expect.objectContaining({
+      dossier: expect.objectContaining({
+        context: expect.objectContaining({
+          similarity: expect.objectContaining({
+            recommendation: 'caution',
+          }),
+        }),
+      }),
     }));
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 
@@ -617,6 +679,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(bundle.eventContext).toContain('Shipping disruption reduces crude availability');
     expect(bundle.eventContext).toContain('CL up 24h');
     expect(bundle.eventContext).toContain('2019-abqaiq-attack-oil');
+    expect(bundle.similarityContext).toContain('XYZ:CL');
   });
 
   it('5. gate reject → executor NOT called', async () => {

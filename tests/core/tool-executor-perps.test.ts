@@ -11,6 +11,7 @@ import { countFinalPredictions } from '../../src/memory/calibration.js';
 import { openDatabase } from '../../src/memory/db.js';
 import { listLearningCases } from '../../src/memory/learning_cases.js';
 import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
+import { listTradeDossiers } from '../../src/memory/trade_dossiers.js';
 
 describe('tool-executor perps', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
@@ -770,7 +771,9 @@ describe('tool-executor perps', () => {
     expect(action.entryPrice).not.toBeNull();
     expect(outcome.exitMode).toBe('take_profit');
     expect(quality.capturedR).not.toBeNull();
-    expect(policyInputs.planContext).toEqual({ setupKey: 'perp:execution-learning' });
+    expect(policyInputs.planContext).toEqual(
+      expect.objectContaining({ setupKey: 'perp:execution-learning' })
+    );
 
     const artifactRow = db.prepare(
       `SELECT payload FROM decision_artifacts WHERE kind = 'execution_learning_case' AND market_id = 'BTCLEARN' ORDER BY id DESC LIMIT 1`
@@ -1439,16 +1442,40 @@ describe('tool-executor perps', () => {
       entityId: 'BTCLEARN',
       limit: 1,
     })[0];
+    const thesisCase = listLearningCases({
+      caseType: 'thesis_quality',
+      entityType: 'symbol',
+      entityId: 'BTCLEARN',
+      limit: 1,
+    })[0];
 
     expect(learningCase).toBeTruthy();
+    expect(thesisCase).toBeTruthy();
     expect(learningCase.caseType).toBe('execution_quality');
     expect(learningCase.comparable).toBe(false);
     expect(learningCase.exclusionReason).toBe('execution_quality_case');
+    expect(typeof learningCase.sourceDossierId).toBe('string');
     expect(learningCase.context?.signalClass).toBe('momentum_breakout');
     expect(learningCase.action?.reduceOnly).toBe(true);
     expect(learningCase.outcome?.exitMode).toBe('take_profit');
     expect(learningCase.outcome?.thesisCorrect).toBe(true);
     expect(typeof learningCase.qualityScores?.compositeScore).toBe('number');
+    expect(thesisCase.caseType).toBe('thesis_quality');
+    expect(thesisCase.sourceDossierId).toBe(learningCase.sourceDossierId);
+    expect(thesisCase.outcome?.thesisCorrect).toBe(true);
+    expect(thesisCase.policyInputs?.sourceTrack).toBe('thesis_quality');
+
+    const dossier = listTradeDossiers({ symbol: 'BTCLEARN', limit: 1 })[0];
+    expect(dossier).toBeTruthy();
+    expect(dossier.id).toBe(learningCase.sourceDossierId);
+    expect(dossier.status).toBe('closed');
+    expect(dossier.review?.entryQuality).toBeTruthy();
+    expect(dossier.review?.gateInterventionQuality).toBeTruthy();
+    expect(dossier.review?.contextFit).toBeTruthy();
+    expect(Array.isArray(dossier.review?.lessons)).toBe(true);
+    expect(Array.isArray(dossier.review?.repeatTags)).toBe(true);
+    expect(Array.isArray(dossier.review?.avoidTags)).toBe(true);
+    expect(typeof (dossier.dossier as any)?.counterfactuals?.interventionScore).toBe('number');
   });
 
   it('get_fills live mode returns mapped fills from Hyperliquid API', async () => {
