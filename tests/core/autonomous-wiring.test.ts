@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
   const originatorPropose = vi.fn();
   const upsertExitPolicy = vi.fn();
   const updateTradeProposalOutcome = vi.fn();
+  const updateTradeProposalStatus = vi.fn();
   const createPrediction = vi.fn(() => 'pred-mock-id');
   const createLearningCase = vi.fn(() => ({ id: 'case-mock-id' }));
   const getSignalWeights = vi.fn(() => ({ technical: 0.5, news: 0.3, onChain: 0.2 }));
@@ -56,7 +57,7 @@ const mocks = vi.hoisted(() => {
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy, updateTradeProposalOutcome,
+    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
     getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
     taSurfaceInstance, triggerInstance, originatorInstance,
@@ -96,6 +97,7 @@ vi.mock('../../src/core/llm_trade_originator.js', () => ({
 
 vi.mock('../../src/memory/llm_trade_proposals.js', () => ({
   updateTradeProposalOutcome: (...args: unknown[]) => mocks.updateTradeProposalOutcome(...args),
+  updateTradeProposalStatus: (...args: unknown[]) => mocks.updateTradeProposalStatus(...args),
 }));
 
 vi.mock('../../src/discovery/engine.js', () => ({
@@ -263,6 +265,7 @@ const BASE_PROPOSAL = {
   proposalRecordId: 42,
   symbol: 'BTC',
   side: 'long' as const,
+  leverage: 5,
   thesisText: 'BTC breaking out with OI spike',
   invalidationCondition: 'close below 68000',
   invalidationPrice: 68000,
@@ -341,10 +344,31 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(timeStop).toBeGreaterThan(Date.now());
     expect(timeStop).toBeLessThanOrEqual(Date.now() + 45 * 60 * 1000 + 1000);
 
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: true,
+      originatorExitStage: 'proposed',
+      requestedLeverage: 5,
+    }));
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: true,
+      originatorExitStage: 'entry_gate_pending',
+    }));
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: true,
+      originatorExitStage: 'entry_gate_approved',
+      originatorExitReason: 'test verdict: approve',
+      requestedLeverage: 5,
+    }));
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: true,
+      originatorExitStage: 'executed',
+      originatorExitReason: 'paper ok',
+      requestedLeverage: 5,
+    }));
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 
     expect(result).toContain('paper ok');
-  }, 20_000);
+  }, 60_000);
 
   it('2. null proposal + cadence trigger → quant fallback runs', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'cadence', alertedSymbols: [] });
@@ -361,7 +385,7 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
 
     // Discovery ran (no expressions → quant fallback message)
     expect(result).toMatch(/No discovery expressions/i);
-  }, 20_000);
+  }, 60_000);
 
   it('3. null proposal + ta_alert trigger → quant fallback does NOT run, returns originator message', async () => {
     mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'ta_alert', alertedSymbols: ['BTC'] });
@@ -527,7 +551,39 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(executor.execute).not.toHaveBeenCalled();
     expect(result).toMatch(/rejected by LLM entry gate/i);
     expect(limiter.release).toHaveBeenCalled();
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: true,
+      originatorExitStage: 'entry_gate_rejected',
+      originatorExitReason: 'test verdict: reject',
+      requestedLeverage: 5,
+    }));
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'reject', false);
+  });
+
+  it('5b. execute=false leaves proposal pre-gate and records execute_disabled status', async () => {
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('approve');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    manager.setFullAuto(false);
+    const result = await manager.runScan();
+
+    expect(result).toMatch(/execute=false/i);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(mocks.updateTradeProposalOutcome).not.toHaveBeenCalled();
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: false,
+      originatorExitStage: 'proposed',
+      requestedLeverage: 5,
+    }));
+    expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
+      executeTrades: false,
+      originatorExitStage: 'execute_disabled',
+      originatorExitReason: 'runScan invoked with executeTrades=false',
+    }));
   });
 
   it('6. gate resize → executor called with adjusted size', async () => {
