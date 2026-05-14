@@ -143,8 +143,6 @@ CREATE INDEX IF NOT EXISTS idx_learning_cases_domain ON learning_cases(domain);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_comparable ON learning_cases(comparable);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_prediction ON learning_cases(source_prediction_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_trade ON learning_cases(source_trade_id);
-CREATE INDEX IF NOT EXISTS idx_learning_cases_dossier ON learning_cases(source_dossier_id);
-CREATE INDEX IF NOT EXISTS idx_learning_cases_hypothesis ON learning_cases(source_hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_learning_cases_entity ON learning_cases(entity_type, entity_id);
 
 CREATE VIEW IF NOT EXISTS comparable_learning_cases AS
