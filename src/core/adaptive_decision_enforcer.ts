@@ -1,11 +1,15 @@
 import type { AdaptivePolicyTrace, AdaptiveRetrievalSummary } from './trade_dossier_types.js';
-import type { TradePolicyAdjustmentProposal } from './trade_policy_adaptation.js';
+import {
+  filterActionableTradePolicyAdjustments,
+  type RuntimeTradePolicyAdjustment,
+  type TradePolicyAdjustmentProposal,
+} from './trade_policy_adaptation.js';
 
 export interface AdaptiveDecisionRequest {
   requestedNotionalUsd: number;
   requestedLeverage: number | null;
   retrieval: AdaptiveRetrievalSummary;
-  policyAdjustments: TradePolicyAdjustmentProposal[];
+  policyAdjustments: Array<TradePolicyAdjustmentProposal | RuntimeTradePolicyAdjustment>;
 }
 
 export interface AdaptiveDecisionResult {
@@ -23,6 +27,7 @@ function clamp(value: number, min: number, max: number): number {
 export function applyAdaptiveDecisionEnforcement(
   request: AdaptiveDecisionRequest
 ): AdaptiveDecisionResult {
+  const activeAdjustments = filterActionableTradePolicyAdjustments(request.policyAdjustments);
   let approvedNotionalUsd = request.requestedNotionalUsd;
   let approvedLeverage = request.requestedLeverage;
   const sizeHaircuts: number[] = [];
@@ -43,20 +48,25 @@ export function applyAdaptiveDecisionEnforcement(
     reasonCodes.push('retrieval:low_confidence');
   }
 
-  for (const adjustment of request.policyAdjustments) {
+  for (const adjustment of activeAdjustments) {
     if (adjustment.policyDomain === 'size' && typeof adjustment.newValue === 'number') {
       approvedNotionalUsd = approvedNotionalUsd * adjustment.newValue;
       sizeHaircuts.push(clamp(1 - adjustment.newValue, 0, 0.8));
+      reasonCodes.push(`policy:size:${adjustment.policyKey}`);
     } else if (adjustment.policyDomain === 'leverage' && typeof adjustment.newValue === 'number') {
       approvedLeverage =
         approvedLeverage == null ? adjustment.newValue : Math.min(approvedLeverage, adjustment.newValue);
       leverageCaps.push(adjustment.newValue);
+      reasonCodes.push(`policy:leverage:${adjustment.policyKey}`);
     } else if (adjustment.policyDomain === 'confirmation') {
       confirmationRequirements.push(adjustment.policyKey);
+      reasonCodes.push(`policy:confirmation:${adjustment.policyKey}`);
     } else if (adjustment.policyDomain === 'cooldown') {
       triggeredCooldowns.push(adjustment.policyKey);
+      reasonCodes.push(`policy:cooldown:${adjustment.policyKey}`);
     } else if (adjustment.policyDomain === 'confidence' && typeof adjustment.newValue === 'number') {
       confidencePenalties.push(adjustment.newValue);
+      reasonCodes.push(`policy:confidence:${adjustment.policyKey}`);
     }
   }
 
@@ -75,9 +85,13 @@ export function applyAdaptiveDecisionEnforcement(
     policyTrace: {
       activePolicies: [
         'retrieval_similarity',
-        ...request.policyAdjustments.map((row) => `${row.policyDomain}:${row.policyKey}`),
+        ...activeAdjustments.map((row) => `${row.policyDomain}:${row.policyKey}`),
       ],
-      activeAdjustmentIds: request.policyAdjustments.map((row) => `${row.policyDomain}:${row.policyKey}`),
+      activeAdjustmentIds: activeAdjustments.map(
+        (row) => ('id' in row && typeof row.id === 'string' && row.id.trim()
+          ? row.id
+          : `${row.policyDomain}:${row.policyKey}`)
+      ),
       sizeHaircuts,
       leverageCaps,
       confirmationRequirements,

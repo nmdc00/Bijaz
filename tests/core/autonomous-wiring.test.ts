@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
   const storeDecisionArtifact = vi.fn();
   const recordPerpTradeJournal = vi.fn();
   const upsertTradeDossier = vi.fn(() => ({ id: 'dossier-mock-id' }));
+  const listTradePolicyAdjustments = vi.fn(() => []);
   const createPrediction = vi.fn(() => 'pred-mock-id');
   const createLearningCase = vi.fn(() => ({ id: 'case-mock-id' }));
   const getSignalWeights = vi.fn(() => ({ technical: 0.5, news: 0.3, onChain: 0.2 }));
@@ -46,6 +47,9 @@ const mocks = vi.hoisted(() => {
   const searchHistoricalCases = vi.fn(() => []);
   const retrieveSimilarTradeDossiers = vi.fn(() => ({
     recommendation: 'caution',
+    retrievalSupportScore: 0.48,
+    retrievalConfidence: 0.58,
+    retrievalRiskFlags: ['late_entry_cluster'],
     stats: {
       sampleSize: 2,
       winRate: 0.5,
@@ -99,7 +103,7 @@ const mocks = vi.hoisted(() => {
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit, storeDecisionArtifact, recordPerpTradeJournal, upsertTradeDossier,
+    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit, storeDecisionArtifact, recordPerpTradeJournal, upsertTradeDossier, listTradePolicyAdjustments,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
     getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
     retrieveSimilarTradeDossiers,
@@ -179,6 +183,10 @@ vi.mock('../../src/memory/trade_dossiers.js', () => ({
   upsertTradeDossier: (...args: unknown[]) => mocks.upsertTradeDossier(...args),
 }));
 
+vi.mock('../../src/memory/trade_policy_adjustments.js', () => ({
+  listTradePolicyAdjustments: (...args: unknown[]) => mocks.listTradePolicyAdjustments(...args),
+}));
+
 vi.mock('../../src/execution/perp-risk.js', () => ({
   checkPerpRiskLimits: vi.fn(async () => ({ allowed: true })),
 }));
@@ -248,6 +256,9 @@ vi.mock('../../src/events/casebase.js', () => ({
 }));
 
 vi.mock('../../src/core/trade_similarity.js', () => ({
+  inferTradeSymbolClass: vi.fn((symbol: string) =>
+    String(symbol ?? '').trim().toUpperCase().startsWith('XYZ:') ? 'equity_proxy' : 'crypto'
+  ),
   retrieveSimilarTradeDossiers: (...args: unknown[]) => mocks.retrieveSimilarTradeDossiers(...args),
 }));
 
@@ -296,6 +307,16 @@ function makeLimiter(remaining = 1000) {
     confirm: vi.fn(),
     release: vi.fn(),
   } as any;
+}
+
+function findUpsertTradeDossierCall(
+  predicate: (input: Record<string, any>) => boolean
+): Record<string, any> {
+  const match = mocks.upsertTradeDossier.mock.calls
+    .map(([input]) => input as Record<string, any>)
+    .find(predicate);
+  expect(match).toBeDefined();
+  return match as Record<string, any>;
 }
 
 const BASE_SNAPSHOT = {
@@ -368,8 +389,12 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     mocks.listForecastsForEvent.mockReturnValue([]);
     mocks.listOutcomesForEvent.mockReturnValue([]);
     mocks.searchHistoricalCases.mockReturnValue([]);
+    mocks.listTradePolicyAdjustments.mockReturnValue([]);
     mocks.retrieveSimilarTradeDossiers.mockReturnValue({
       recommendation: 'caution',
+      retrievalSupportScore: 0.48,
+      retrievalConfidence: 0.58,
+      retrievalRiskFlags: ['late_entry_cluster'],
       stats: {
         sampleSize: 2,
         winRate: 0.5,
@@ -465,6 +490,11 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
         }),
       }),
     }));
+    const originatorOpenDossier = findUpsertTradeDossierCall(
+      (input) => input.strategySource === 'autonomous_originator' && input.status === 'open'
+    );
+    expect(originatorOpenDossier.retrieval).toEqual(originatorOpenDossier.dossier.retrieval);
+    expect(originatorOpenDossier.policyTrace).toEqual(originatorOpenDossier.dossier.policy_trace);
     expect(mocks.storeDecisionArtifact).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'adaptive_pre_execution_trace',
       outcome: 'pending',
@@ -479,6 +509,68 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(mocks.updateTradeProposalOutcome).toHaveBeenCalledWith(42, 'approve', true);
 
     expect(result).toContain('paper ok');
+  }, 60_000);
+
+  it('1b. matching persisted adaptive adjustments resize the live candidate and surface row ids in traces', async () => {
+    mocks.listTradePolicyAdjustments.mockReturnValue([
+      {
+        id: 'adj-size-1',
+        policyDomain: 'size',
+        policyKey: 'setup_family_max_size',
+        scope: { signalClass: 'llm_originator', symbolClass: 'crypto' },
+        adjustmentType: 'scale',
+        oldValue: 1,
+        newValue: 0.7,
+        delta: -0.3,
+        evidenceCount: 4,
+        evidenceWindowStart: null,
+        evidenceWindowEnd: null,
+        reasonSummary: 'Cut size for this setup family.',
+        confidence: 0.7,
+        active: true,
+        createdAt: '2026-05-15T00:00:00.000Z',
+        expiresAt: null,
+      },
+    ]);
+
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('approve');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'paper ok' })) } as any;
+    const marketClient = {
+      getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }),
+    } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    await manager.runScan({ forceExecute: true });
+
+    expect(mocks.listTradePolicyAdjustments).toHaveBeenCalledWith(
+      expect.objectContaining({ active: true })
+    );
+    expect(mocks.storeDecisionArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'adaptive_pre_execution_trace',
+      payload: expect.objectContaining({
+        finalRequest: expect.objectContaining({
+          notionalUsd: expect.any(Number),
+        }),
+        policyTrace: expect.objectContaining({
+          activeAdjustmentIds: expect.arrayContaining(['adj-size-1']),
+        }),
+      }),
+    }));
+    const pendingTrace = mocks.storeDecisionArtifact.mock.calls.find(
+      ([entry]) => entry?.kind === 'adaptive_pre_execution_trace' && entry?.outcome === 'pending'
+    )?.[0];
+    expect(
+      Number((pendingTrace as any)?.payload?.finalRequest?.notionalUsd ?? 0)
+    ).toBeLessThan(Number((pendingTrace as any)?.payload?.originalRequest?.notionalUsd ?? 0));
+    expect(mocks.upsertTradeDossier).toHaveBeenCalledWith(expect.objectContaining({
+      dossier: expect.objectContaining({
+        policy_trace: expect.objectContaining({
+          activeAdjustmentIds: expect.arrayContaining(['adj-size-1']),
+        }),
+      }),
+    }));
   }, 60_000);
 
   it('2. null proposal + cadence trigger → quant fallback runs', async () => {
@@ -743,6 +835,16 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
         }),
       }),
     }));
+    const originatorBlockedDossier = findUpsertTradeDossierCall(
+      (input) =>
+        input.strategySource === 'autonomous_originator' && input.status === 'closed'
+    );
+    expect(originatorBlockedDossier.retrieval).toEqual(
+      originatorBlockedDossier.dossier.retrieval
+    );
+    expect(originatorBlockedDossier.policyTrace).toEqual(
+      originatorBlockedDossier.dossier.policy_trace
+    );
     expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
       executeTrades: true,
       originatorExitStage: 'entry_gate_rejected',
@@ -940,6 +1042,70 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
         }),
       }),
     }));
+    const quantOpenDossier = findUpsertTradeDossierCall(
+      (input) =>
+        input.strategySource === 'autonomous_quant' &&
+        input.status === 'open' &&
+        input.sourcePredictionId === 'pred-mock-id'
+    );
+    expect(quantOpenDossier.retrieval).toEqual(quantOpenDossier.dossier.retrieval);
+    expect(quantOpenDossier.policyTrace).toEqual(quantOpenDossier.dossier.policy_trace);
+  });
+
+  it('10b. quant blocked path persists dedicated retrieval and policy trace payloads', async () => {
+    mocks.triggerShouldFire.mockReturnValue({ fire: true, reason: 'cadence', alertedSymbols: [] });
+    mocks.originatorPropose.mockResolvedValue(null);
+    mocks.runDiscovery.mockResolvedValue({
+      clusters: [],
+      hypotheses: [],
+      expressions: [
+        {
+          id: 'expr-btc',
+          hypothesisId: 'hyp-btc',
+          symbol: 'BTC',
+          side: 'buy',
+          confidence: 0.8,
+          expectedEdge: 0.12,
+          entryZone: 'market',
+          invalidation: 'below support',
+          expectedMove: 'breakout continuation',
+          orderType: 'market',
+          leverage: 2,
+          probeSizeUsd: 20,
+          newsTrigger: null,
+        },
+      ],
+      selector: { source: 'configured', symbols: ['BTC'] },
+    });
+
+    const { AutonomousManager } = await import('../../src/core/autonomous.js');
+    const llm = makeGateLlm('reject');
+    const executor = { execute: vi.fn(async () => ({ executed: true, message: 'paper ok' })) } as any;
+    const marketClient = { getMarket: async () => ({ symbol: 'BTC', markPrice: 70000, metadata: { maxLeverage: 10 } }) } as any;
+    const limiter = makeLimiter();
+
+    const manager = new AutonomousManager(llm, llm, marketClient, executor, limiter, baseConfig);
+    const result = await manager.runScan({ forceExecute: true });
+
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(result).toMatch(/rejected by LLM entry gate/i);
+    const quantBlockedDossier = findUpsertTradeDossierCall(
+      (input) => input.strategySource === 'autonomous_quant' && input.status === 'closed'
+    );
+    expect(quantBlockedDossier.retrieval).toEqual(quantBlockedDossier.dossier.retrieval);
+    expect(quantBlockedDossier.policyTrace).toEqual(
+      quantBlockedDossier.dossier.policy_trace
+    );
+    expect(quantBlockedDossier.retrieval).toEqual(
+      expect.objectContaining({
+        retrievalVersion: 'v2.2',
+      })
+    );
+    expect(quantBlockedDossier.policyTrace).toEqual(
+      expect.objectContaining({
+        blockedReason: 'test verdict: reject',
+      })
+    );
   });
 
   it('11. originator path: createPrediction NOT called when gate rejects', async () => {
