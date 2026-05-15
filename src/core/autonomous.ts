@@ -63,22 +63,21 @@ import { storeDecisionArtifact } from '../memory/decision_artifacts.js';
 import { searchHistoricalCases } from '../events/casebase.js';
 import { buildOriginationEventContext, resolveOriginationContextDomain } from './origination_context.js';
 import type { MarketContextDomain } from '../markets/context.js';
-import { retrieveSimilarTradeDossiers, type TradeSimilaritySummary } from './trade_similarity.js';
+import { listTradePolicyAdjustments } from '../memory/trade_policy_adjustments.js';
+import { applyAdaptiveDecisionEnforcement } from './adaptive_decision_enforcer.js';
+import type { AdaptivePolicyTrace } from './trade_dossier_types.js';
+import {
+  selectRuntimeTradePolicyAdjustments,
+  type TradePolicyAdjustmentRuntimeContext,
+} from './trade_policy_adaptation.js';
+import {
+  inferTradeSymbolClass,
+  retrieveSimilarTradeDossiers,
+  type TradeSimilaritySummary,
+} from './trade_similarity.js';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
-}
-
-function inferSymbolClass(symbol: string): string {
-  const normalized = symbol.trim().toUpperCase();
-  if (normalized.startsWith('XYZ:')) {
-    return normalized.endsWith('COIN') || normalized.endsWith('MSTR')
-      ? 'equity_proxy'
-      : 'macro_contract';
-  }
-  if (normalized.startsWith('FLX:')) return 'alt_perp';
-  if (normalized.includes('/')) return 'spot_pair';
-  return 'crypto';
 }
 
 function formatTradeSimilaritySummary(summary: TradeSimilaritySummary): string {
@@ -147,53 +146,61 @@ function buildPolicyTrace(params: {
   approvedNotionalUsd: number | null;
   requestedLeverage: number | null;
   approvedLeverage: number | null;
-  gateVerdict: string | null;
-  gateReasonCode: string | null;
+  gateVerdict?: string | null;
+  gateReasonCode?: string | null;
   gateReasoning?: string | null;
   policyReasonCode?: string | null;
   policyReason?: string | null;
   policySizeMultiplier?: number | null;
   retrievalRecommendation?: string | null;
   blockedReason?: string | null;
+  adaptiveTrace?: AdaptivePolicyTrace | null;
 }): Record<string, unknown> {
+  const baseTrace = params.adaptiveTrace ?? null;
+  const baselinePostSize = baseTrace?.postAdjustmentSize ?? params.requestedNotionalUsd;
   const sizeHaircut =
-    params.requestedNotionalUsd != null &&
-    params.requestedNotionalUsd > 0 &&
+    baselinePostSize != null &&
+    baselinePostSize > 0 &&
     params.approvedNotionalUsd != null
-      ? Math.max(0, 1 - params.approvedNotionalUsd / params.requestedNotionalUsd)
+      ? Math.max(0, 1 - params.approvedNotionalUsd / baselinePostSize)
       : null;
+  const baselinePostLeverage = baseTrace?.postAdjustmentLeverage ?? params.requestedLeverage;
   const leverageCap =
-    params.requestedLeverage != null &&
-    params.requestedLeverage > 0 &&
+    baselinePostLeverage != null &&
+    baselinePostLeverage > 0 &&
     params.approvedLeverage != null &&
-    params.approvedLeverage < params.requestedLeverage
+    params.approvedLeverage < baselinePostLeverage
       ? params.approvedLeverage
       : null;
   return {
     activePolicies: [
-      'retrieval_similarity',
+      ...(baseTrace?.activePolicies ?? ['retrieval_similarity']),
       params.policyReasonCode ? 'adaptive_policy' : null,
       params.gateVerdict != null ? 'llm_entry_gate' : null,
-    ].filter((value): value is string => Boolean(value)),
-    activeAdjustmentIds: [
-      params.policyReasonCode ?? null,
-      params.gateReasonCode ?? null,
-      params.retrievalRecommendation ? `retrieval:${params.retrievalRecommendation}` : null,
-    ].filter((value): value is string => Boolean(value)),
-    sizeHaircuts: sizeHaircut != null ? [sizeHaircut] : [],
-    leverageCaps: leverageCap != null ? [leverageCap] : [],
-    confirmationRequirements: [],
-    confidencePenalties: [],
-    triggeredCooldowns: [],
-    preAdjustmentSize: params.requestedNotionalUsd,
-    postAdjustmentSize: params.approvedNotionalUsd,
-    preAdjustmentLeverage: params.requestedLeverage,
-    postAdjustmentLeverage: params.approvedLeverage,
-    retrievalChangedVerdict:
+    ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index),
+    activeAdjustmentIds: [...new Set(baseTrace?.activeAdjustmentIds ?? [])],
+    sizeHaircuts: [
+      ...(baseTrace?.sizeHaircuts ?? []),
+      ...(sizeHaircut != null && sizeHaircut > 0 ? [sizeHaircut] : []),
+    ],
+    leverageCaps: [
+      ...(baseTrace?.leverageCaps ?? []),
+      ...(leverageCap != null ? [leverageCap] : []),
+    ],
+    confirmationRequirements: [...new Set(baseTrace?.confirmationRequirements ?? [])],
+    confidencePenalties: [...(baseTrace?.confidencePenalties ?? [])],
+    triggeredCooldowns: [...new Set(baseTrace?.triggeredCooldowns ?? [])],
+    preAdjustmentSize: baseTrace?.preAdjustmentSize ?? params.requestedNotionalUsd,
+    postAdjustmentSize: params.approvedNotionalUsd ?? baseTrace?.postAdjustmentSize ?? null,
+    preAdjustmentLeverage: baseTrace?.preAdjustmentLeverage ?? params.requestedLeverage,
+    postAdjustmentLeverage: params.approvedLeverage ?? baseTrace?.postAdjustmentLeverage ?? null,
+    retrievalChangedVerdict: baseTrace?.retrievalChangedVerdict ?? (
       params.retrievalRecommendation === 'size_reduction'
         ? params.gateVerdict === 'reject' || (sizeHaircut ?? 0) > 0
-        : false,
+        : false
+    ),
     adaptationChangedOutcome:
+      Boolean(baseTrace?.adaptationChangedOutcome) ||
       params.blockedReason != null ||
       params.gateVerdict === 'reject' ||
       (sizeHaircut ?? 0) > 0 ||
@@ -203,6 +210,15 @@ function buildPolicyTrace(params: {
     gateReasoning: params.gateReasoning ?? null,
     policyReason: params.policyReason ?? null,
   };
+}
+
+function loadRuntimePolicyAdjustments(
+  context: TradePolicyAdjustmentRuntimeContext
+) {
+  return selectRuntimeTradePolicyAdjustments(
+    listTradePolicyAdjustments({ active: true, limit: 100 }),
+    context
+  );
 }
 
 function persistAdaptiveDecisionTrace(params: {
@@ -242,7 +258,7 @@ function buildSimilarityContextForMarkets(input: {
       signalClass: input.signalClass,
       triggerReason: input.triggerReason,
       regime: input.regime ?? null,
-      symbolClass: inferSymbolClass(normalized),
+      symbolClass: inferTradeSymbolClass(normalized),
       entryStretchPct: input.stretchBySymbol?.get(normalized) ?? null,
       limit: input.limit ?? 3,
     });
@@ -952,7 +968,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       triggerReason: triggerResult.reason,
       signalClass: 'llm_originator',
       regime: 'unknown',
-      symbolClass: inferSymbolClass(symbol),
+      symbolClass: inferTradeSymbolClass(symbol),
       entryStretchPct: proposalEntryStretchPct,
       gateVerdict: null,
       limit: 5,
@@ -961,6 +977,146 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     const proposalRetrieval = buildRetrievalSection(proposalSimilarity, proposalSimilaritySummary);
     const requestedProbeUsd = probeUsd;
     const requestedLeverage = targetLeverage;
+    const originatorRuntimeAdjustments = loadRuntimePolicyAdjustments({
+      symbol,
+      direction: proposal.side === 'long' ? 'long' : 'short',
+      strategySource: 'autonomous_originator',
+      triggerReason: triggerResult.reason,
+      signalClass: 'llm_originator',
+      regime: 'unknown',
+      symbolClass: inferTradeSymbolClass(symbol),
+      session: sessionContext.session,
+    });
+    const originatorAdaptiveDecision = applyAdaptiveDecisionEnforcement({
+      requestedNotionalUsd: requestedProbeUsd,
+      requestedLeverage,
+      retrieval: proposalSimilarity,
+      policyAdjustments: originatorRuntimeAdjustments,
+    });
+
+    if (originatorAdaptiveDecision.verdict === 'reject') {
+      const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+      const adaptiveRejectReason =
+        originatorAdaptiveDecision.reasonCodes.join(' | ') ||
+        'adaptive policy runtime rejected candidate';
+      const policyTrace = buildPolicyTrace({
+        stage: 'adaptive_policy_rejected',
+        requestedNotionalUsd: requestedProbeUsd,
+        approvedNotionalUsd: null,
+        requestedLeverage,
+        approvedLeverage: null,
+        blockedReason: adaptiveRejectReason,
+        retrievalRecommendation: proposalSimilarity.recommendation,
+        adaptiveTrace: originatorAdaptiveDecision.policyTrace,
+      });
+      const blockedPayload = {
+        version: 'v2.2',
+        thesis: {
+          reasoning: proposal.thesisText,
+          invalidationPrice: proposal.invalidationPrice,
+          thesisConfidence: proposal.confidence,
+          uncertaintySummary: null,
+        },
+        context: {
+          signalClass: 'llm_originator',
+          symbolClass: inferTradeSymbolClass(symbol),
+          marketRegime: 'unknown',
+          session: sessionContext.session,
+          triggerReason: triggerResult.reason,
+          entryStretchPct: proposalEntryStretchPct,
+        },
+        request: {
+          requestedSize: requestedProbeUsd,
+          requestedLeverage,
+          requestedNotionalUsd: requestedProbeUsd,
+        },
+        gate: {
+          verdict: 'reject',
+          reasonCode: null,
+          requestedSize: requestedProbeUsd,
+          approvedSize: null,
+          requestedLeverage,
+          approvedLeverage: null,
+          interventionType: 'reject',
+          interventionSummary: adaptiveRejectReason,
+        },
+        execution: {
+          tradeId: null,
+          side,
+          size: markPrice > 0 ? requestedProbeUsd / markPrice : requestedProbeUsd,
+          fillPrice: markPrice || null,
+          executionMessage: adaptiveRejectReason,
+          estimatedNotionalUsd: requestedProbeUsd,
+        },
+        review: null,
+        counterfactual_summary: null,
+        retrieval: proposalRetrieval,
+        policy_trace: policyTrace,
+        regret: {
+          missedOpportunityFlag: null,
+          blockedWinnerFlag: null,
+          approvedLoserFlag: false,
+          resizeHelpedFlag: null,
+          resizeHurtFlag: null,
+        },
+      } satisfies Record<string, unknown>;
+      persistAdaptiveDecisionTrace({
+        symbol,
+        confidence: proposal.confidence,
+        outcome: 'blocked',
+        payload: {
+          stage: 'originator_adaptive_policy',
+          symbol,
+          triggerReason: triggerResult.reason,
+          originalRequest: {
+            notionalUsd: requestedProbeUsd,
+            leverage: requestedLeverage,
+            side,
+          },
+          retrieval: proposalRetrieval,
+          policyTrace,
+          finalRequest: null,
+          finalRejectReason: adaptiveRejectReason,
+        },
+        notes: {
+          signalClass: 'llm_originator',
+          dossierStatus: 'closed',
+        },
+      });
+      try {
+        upsertTradeDossier({
+          symbol,
+          status: 'closed',
+          direction: proposal.side === 'long' ? 'long' : 'short',
+          strategySource: 'autonomous_originator',
+          executionMode,
+          proposalRecordId: proposal.proposalRecordId ?? null,
+          triggerReason: triggerResult.reason,
+          openedAt: new Date().toISOString(),
+          closedAt: new Date().toISOString(),
+          dossier: blockedPayload,
+          review: null,
+          retrieval: proposalRetrieval,
+          policyTrace,
+        });
+      } catch { /* best-effort */ }
+      if (proposal.proposalRecordId != null) {
+        updateTradeProposalStatus(proposal.proposalRecordId, {
+          executeTrades: true,
+          originatorExitStage: 'adaptive_policy_rejected',
+          originatorExitReason: adaptiveRejectReason,
+          requestedLeverage: requestedLeverage ?? null,
+        });
+        updateTradeProposalOutcome(proposal.proposalRecordId, 'reject', false);
+      }
+      this.limiter.release(probeUsd);
+      return `${symbol}: Originator proposal rejected by adaptive policy runtime — ${adaptiveRejectReason}`;
+    }
+
+    probeUsd = originatorAdaptiveDecision.approvedNotionalUsd;
+    if (originatorAdaptiveDecision.approvedLeverage != null) {
+      targetLeverage = originatorAdaptiveDecision.approvedLeverage;
+    }
 
     const gateCandidate = {
       symbol,
@@ -1008,6 +1164,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           gateReasoning: gateDecision.reasoning,
           retrievalRecommendation: proposalSimilarity.recommendation,
           blockedReason: gateDecision.reasoning,
+          adaptiveTrace: originatorAdaptiveDecision.policyTrace,
         });
         const blockedPayload = {
           version: 'v2.2',
@@ -1019,7 +1176,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           },
           context: {
             signalClass: 'llm_originator',
-            symbolClass: inferSymbolClass(symbol),
+            symbolClass: inferTradeSymbolClass(symbol),
             marketRegime: 'unknown',
             session: sessionContext.session,
             triggerReason: triggerResult.reason,
@@ -1096,6 +1253,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             closedAt: new Date().toISOString(),
             dossier: blockedPayload,
             review: null,
+            retrieval: proposalRetrieval,
+            policyTrace,
           });
         } catch { /* best-effort */ }
         try {
@@ -1159,6 +1318,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       gateReasonCode: originatorGateReasonCode,
       gateReasoning: originatorGateReasoning,
       retrievalRecommendation: proposalSimilarity.recommendation,
+      adaptiveTrace: originatorAdaptiveDecision.policyTrace,
     });
     const originatorExecutionTrace = {
       stage: 'originator_pre_execution',
@@ -1252,6 +1412,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           proposalRecordId: proposal.proposalRecordId ?? null,
           triggerReason: triggerResult.reason,
           openedAt: new Date().toISOString(),
+          retrieval: proposalRetrieval,
+          policyTrace: originatorPolicyTrace,
           dossier: {
             version: 'v2.2',
             thesis: {
@@ -1271,7 +1433,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             context: {
               triggerReason: triggerResult.reason,
               signalClass: 'llm_originator',
-              symbolClass: inferSymbolClass(symbol),
+              symbolClass: inferTradeSymbolClass(symbol),
               marketRegime: 'unknown',
               session: sessionContext.session,
               entryStretchPct: proposalEntryStretchPct,
@@ -1815,6 +1977,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
         signalClass,
         regime,
+        symbolClass: inferTradeSymbolClass(symbol),
         gateVerdict: null,
         limit: 5,
       });
@@ -1822,6 +1985,142 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const quantRetrieval = buildRetrievalSection(quantSimilarity, quantSimilaritySummary);
       const requestedProbeUsd = probeUsd;
       const requestedLeverage = targetLeverage;
+      const quantRuntimeAdjustments = loadRuntimePolicyAdjustments({
+        symbol,
+        direction: expr.side === 'buy' ? 'long' : 'short',
+        strategySource: 'autonomous_quant',
+        triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+        signalClass,
+        regime,
+        symbolClass: inferTradeSymbolClass(symbol),
+        session: sessionContext.session,
+      });
+      const quantAdaptiveDecision = applyAdaptiveDecisionEnforcement({
+        requestedNotionalUsd: requestedProbeUsd,
+        requestedLeverage,
+        retrieval: quantSimilarity,
+        policyAdjustments: quantRuntimeAdjustments,
+      });
+
+      if (quantAdaptiveDecision.verdict === 'reject') {
+        const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+        const adaptiveRejectReason =
+          quantAdaptiveDecision.reasonCodes.join(' | ') ||
+          'adaptive policy runtime rejected candidate';
+        const policyTrace = buildPolicyTrace({
+          stage: 'adaptive_policy_rejected',
+          requestedNotionalUsd: requestedProbeUsd,
+          approvedNotionalUsd: null,
+          requestedLeverage,
+          approvedLeverage: null,
+          policyReasonCode: globalGate.reasonCode ?? null,
+          policyReason: globalGate.reason ?? null,
+          policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
+          retrievalRecommendation: quantSimilarity.recommendation,
+          blockedReason: adaptiveRejectReason,
+          adaptiveTrace: quantAdaptiveDecision.policyTrace,
+        });
+        const blockedPayload = {
+          version: 'v2.2',
+          thesis: {
+            reasoning: expr.expectedMove ?? null,
+            expectedEdge: expr.expectedEdge,
+            invalidationPrice: null,
+            timeStopAtMs: expr.newsTrigger?.expiresAtMs ?? null,
+            thesisConfidence: confidenceWeighted,
+            uncertaintySummary: null,
+          },
+          context: {
+            signalClass,
+            symbolClass: inferTradeSymbolClass(symbol),
+            marketRegime: regime,
+            volatilityBucket,
+            liquidityBucket,
+            session: sessionContext.session,
+            triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+            similarity: quantSimilarity,
+          },
+          request: {
+            requestedSize: requestedProbeUsd,
+            requestedLeverage,
+            requestedNotionalUsd: requestedProbeUsd,
+          },
+          gate: {
+            verdict: 'reject',
+            reasonCode: globalGate.reasonCode ?? null,
+            requestedSize: requestedProbeUsd,
+            approvedSize: null,
+            requestedLeverage,
+            approvedLeverage: null,
+            interventionType: 'reject',
+            interventionSummary: adaptiveRejectReason,
+          },
+          execution: {
+            tradeId: null,
+            side: expr.side,
+            size,
+            fillPrice: markPrice || null,
+            executionMessage: adaptiveRejectReason,
+            estimatedNotionalUsd: requestedProbeUsd,
+          },
+          review: null,
+          counterfactual_summary: null,
+          retrieval: quantRetrieval,
+          policy_trace: policyTrace,
+          regret: {
+            missedOpportunityFlag: null,
+            blockedWinnerFlag: null,
+            approvedLoserFlag: false,
+            resizeHelpedFlag: null,
+            resizeHurtFlag: null,
+          },
+        } satisfies Record<string, unknown>;
+        persistAdaptiveDecisionTrace({
+          symbol,
+          confidence: confidenceWeighted,
+          outcome: 'blocked',
+          payload: {
+            stage: 'quant_adaptive_policy',
+            symbol,
+            originalRequest: {
+              notionalUsd: requestedProbeUsd,
+              leverage: requestedLeverage,
+              side: expr.side,
+            },
+            retrieval: quantRetrieval,
+            policyTrace,
+            finalRequest: null,
+            finalRejectReason: adaptiveRejectReason,
+          },
+          notes: { signalClass, regime, strategySource: 'autonomous_quant' },
+        });
+        try {
+          upsertTradeDossier({
+            symbol,
+            status: 'closed',
+            direction: expr.side === 'buy' ? 'long' : 'short',
+            strategySource: 'autonomous_quant',
+            executionMode,
+            sourcePredictionId: null,
+            triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+            openedAt: new Date().toISOString(),
+            closedAt: new Date().toISOString(),
+            dossier: blockedPayload,
+            review: null,
+            retrieval: quantRetrieval,
+            policyTrace,
+          });
+        } catch { /* best-effort */ }
+        outputs.push(`${symbol}: Rejected by adaptive policy runtime — ${adaptiveRejectReason}`);
+        this.limiter.release(probeUsd);
+        continue;
+      }
+
+      probeUsd = quantAdaptiveDecision.approvedNotionalUsd;
+      if (quantAdaptiveDecision.approvedLeverage != null) {
+        targetLeverage = quantAdaptiveDecision.approvedLeverage;
+      }
+      size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
       const gateCandidate = {
         symbol,
         side: expr.side,
@@ -1860,6 +2159,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
             retrievalRecommendation: quantSimilarity.recommendation,
             blockedReason: gateDecision.reasoning,
+            adaptiveTrace: quantAdaptiveDecision.policyTrace,
           });
           const blockedPayload = {
             version: 'v2.2',
@@ -1872,8 +2172,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               uncertaintySummary: null,
             },
             context: {
-              signalClass,
-              symbolClass: inferSymbolClass(symbol),
+            signalClass,
+            symbolClass: inferTradeSymbolClass(symbol),
               marketRegime: regime,
               volatilityBucket,
               liquidityBucket,
@@ -1948,6 +2248,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               closedAt: new Date().toISOString(),
               dossier: blockedPayload,
               review: null,
+              retrieval: quantRetrieval,
+              policyTrace,
             });
           } catch { /* best-effort */ }
           try {
@@ -2005,6 +2307,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         policyReason: globalGate.reason ?? null,
         policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
         retrievalRecommendation: quantSimilarity.recommendation,
+        adaptiveTrace: quantAdaptiveDecision.policyTrace,
       });
       persistAdaptiveDecisionTrace({
         symbol,
@@ -2101,6 +2404,8 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             sourcePredictionId: predictionId,
             triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
             openedAt: new Date().toISOString(),
+            retrieval: quantRetrieval,
+            policyTrace: quantPolicyTrace,
             dossier: {
               version: 'v2.2',
               thesis: {
@@ -2115,7 +2420,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               },
               context: {
                 signalClass,
-                symbolClass: inferSymbolClass(symbol),
+                symbolClass: inferTradeSymbolClass(symbol),
                 marketRegime: regime,
                 volatilityBucket,
                 liquidityBucket,

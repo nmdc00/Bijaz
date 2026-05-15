@@ -109,6 +109,61 @@ describe('trade dossiers', () => {
     expect(dossiers[0]?.id).toBe(opened.id);
   });
 
+  it('persists dedicated retrieval and policy trace payloads alongside dossier JSON', () => {
+    const retrieval = {
+      retrievalVersion: 'v2.2',
+      candidateCount: 2,
+      recommendation: 'caution',
+    };
+    const policyTrace = {
+      activePolicies: ['retrieval_similarity', 'llm_entry_gate'],
+      blockedReason: null,
+      stage: 'executed_open',
+    };
+
+    const created = upsertTradeDossier({
+      symbol: 'BTC',
+      status: 'open',
+      direction: 'long',
+      strategySource: 'autonomous_originator',
+      executionMode: 'paper',
+      triggerReason: 'ta_alert',
+      openedAt: '2026-05-15T10:00:00.000Z',
+      retrieval,
+      policyTrace,
+      dossier: {
+        version: 'v2.2',
+        retrieval,
+        policy_trace: policyTrace,
+        execution: {
+          tradeId: 77,
+        },
+      },
+    });
+
+    const db = openDatabase(process.env.THUFIR_DB_PATH as string);
+    const row = db
+      .prepare(
+        `SELECT dossier_payload, retrieval_payload, policy_trace_payload
+         FROM trade_dossiers
+         WHERE id = ?`
+      )
+      .get(created.id) as {
+        dossier_payload: string;
+        retrieval_payload: string;
+        policy_trace_payload: string;
+      };
+
+    expect(JSON.parse(row.dossier_payload)).toEqual(
+      expect.objectContaining({
+        retrieval,
+        policy_trace: policyTrace,
+      })
+    );
+    expect(JSON.parse(row.retrieval_payload)).toEqual(retrieval);
+    expect(JSON.parse(row.policy_trace_payload)).toEqual(policyTrace);
+  });
+
   it('repairs legacy dossier tables with v2.2 trace columns', () => {
     const dbPath = process.env.THUFIR_DB_PATH as string;
     const raw = new Database(dbPath);
