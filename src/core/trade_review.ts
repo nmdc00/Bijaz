@@ -12,6 +12,7 @@ export interface StructuredTradeReview {
   exitQuality: TradeReviewBand;
   gateInterventionQuality: TradeReviewBand;
   contextFit: TradeReviewBand;
+  reviewConfidence: number;
   counterfactualNeeded: boolean;
   mainSuccessDriver: string | null;
   mainFailureMode: string | null;
@@ -106,17 +107,23 @@ function buildDerivedLessons(review: StructuredTradeReview): string[] {
   return [...new Set(lessons)];
 }
 
+function deriveReviewConfidence(
+  reviewRecord: Record<string, unknown>,
+  learningCases: LearningCase[]
+): number {
+  let score = 0.2;
+  if (Object.keys(reviewRecord).length > 0) score += 0.35;
+  if (learningCases.some((row) => row.caseType === 'execution_quality')) score += 0.25;
+  if (learningCases.some((row) => row.caseType === 'thesis_quality')) score += 0.2;
+  return Math.max(0, Math.min(1, score));
+}
+
 export function normalizeStructuredTradeReview(
   reviewPayload: Record<string, unknown> | null,
   learningCases: LearningCase[] = []
 ): StructuredTradeReview {
   const executionCase = learningCases.find((row) => row.caseType === 'execution_quality');
-  const thesisCase = learningCases.find(
-    (row) =>
-      row.caseType === 'comparable_forecast' &&
-      row.policyInputs &&
-      readString(row.policyInputs.sourceTrack)?.toLowerCase() === 'thesis_quality'
-  );
+  const thesisCase = learningCases.find((row) => row.caseType === 'thesis_quality');
 
   const reviewRecord = readRecord(reviewPayload) ?? {};
   const review = {
@@ -167,6 +174,10 @@ export function normalizeStructuredTradeReview(
         executionCase?.qualityScores ? readRecord(executionCase.qualityScores)?.contextFit : null
       )
     ),
+    reviewConfidence:
+      typeof reviewRecord.reviewConfidence === 'number'
+        ? Math.max(0, Math.min(1, reviewRecord.reviewConfidence))
+        : deriveReviewConfidence(reviewRecord, learningCases),
     counterfactualNeeded:
       readBoolean(reviewRecord.counterfactualNeeded) ??
       (firstPopulatedString(reviewRecord.gateInterventionQuality) == null &&
