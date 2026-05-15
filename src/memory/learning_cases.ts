@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
 
-export type LearningCaseType = 'comparable_forecast' | 'execution_quality' | 'thesis_quality';
+export type LearningCaseType =
+  | 'comparable_forecast'
+  | 'execution_quality'
+  | 'thesis_quality'
+  | 'intervention_quality'
+  | 'regret_case';
 
 export interface LearningCasePayloadMap {
   belief?: Record<string, unknown> | null;
@@ -18,6 +23,7 @@ export interface LearningCaseSourceLinks {
   sourcePredictionId?: string | null;
   sourceTradeId?: number | null;
   sourceDossierId?: string | null;
+  sourceHypothesisId?: string | null;
   sourceArtifactId?: number | null;
 }
 
@@ -31,7 +37,6 @@ export interface LearningCaseInput extends LearningCasePayloadMap, LearningCaseS
   comparatorKind?: string | null;
   exclusionReason?: string | null;
   pairedCases?: LearningCaseInput[];
-  sourceHypothesisId?: string | null;
 }
 
 export interface LearningCase extends LearningCasePayloadMap, LearningCaseSourceLinks {
@@ -45,7 +50,6 @@ export interface LearningCase extends LearningCasePayloadMap, LearningCaseSource
   exclusionReason: string | null;
   createdAt: string;
   updatedAt: string | null;
-  sourceHypothesisId?: string | null;
 }
 
 export interface UpdateLearningCaseOutcomeInput {
@@ -67,6 +71,7 @@ export interface ListLearningCasesFilters {
   sourcePredictionId?: string;
   sourceTradeId?: number;
   sourceDossierId?: string;
+  sourceHypothesisId?: string;
   sourceArtifactId?: number;
   limit?: number;
 }
@@ -79,10 +84,16 @@ export interface LearningCaseExclusionCount {
 export interface LearningCaseTrackSummary {
   comparableForecastCases: number;
   executionQualityCases: number;
+  thesisQualityCases: number;
+  interventionQualityCases: number;
+  regretCases: number;
   comparableIncludedCases: number;
   excludedComparableCases: number;
   comparableByDomain: Record<string, number>;
   executionByDomain: Record<string, number>;
+  thesisByDomain: Record<string, number>;
+  interventionByDomain: Record<string, number>;
+  regretByDomain: Record<string, number>;
 }
 
 type LearningCaseRow = {
@@ -302,6 +313,7 @@ export function listLearningCases(filters: ListLearningCasesFilters = {}): Learn
           AND (@sourcePredictionId IS NULL OR source_prediction_id = @sourcePredictionId)
           AND (@sourceTradeId IS NULL OR source_trade_id = @sourceTradeId)
           AND (@sourceDossierId IS NULL OR source_dossier_id = @sourceDossierId)
+          AND (@sourceHypothesisId IS NULL OR source_hypothesis_id = @sourceHypothesisId)
           AND (@sourceArtifactId IS NULL OR source_artifact_id = @sourceArtifactId)
         ORDER BY created_at DESC, id DESC
         LIMIT @limit
@@ -310,13 +322,13 @@ export function listLearningCases(filters: ListLearningCasesFilters = {}): Learn
     .all({
       caseType: filters.caseType ?? null,
       domain: filters.domain ?? null,
-      comparable:
-        filters.comparable === undefined ? null : filters.comparable ? 1 : 0,
+      comparable: filters.comparable === undefined ? null : filters.comparable ? 1 : 0,
       entityType: filters.entityType ?? null,
       entityId: filters.entityId ?? null,
       sourcePredictionId: filters.sourcePredictionId ?? null,
       sourceTradeId: filters.sourceTradeId ?? null,
       sourceDossierId: filters.sourceDossierId ?? null,
+      sourceHypothesisId: filters.sourceHypothesisId ?? null,
       sourceArtifactId: filters.sourceArtifactId ?? null,
       limit: filters.limit ?? 100,
     }) as LearningCaseRow[];
@@ -375,6 +387,9 @@ export function summarizeLearningTracks(): LearningCaseTrackSummary {
         SELECT
           SUM(CASE WHEN case_type = 'comparable_forecast' THEN 1 ELSE 0 END) AS comparable_forecast_cases,
           SUM(CASE WHEN case_type = 'execution_quality' THEN 1 ELSE 0 END) AS execution_quality_cases,
+          SUM(CASE WHEN case_type = 'thesis_quality' THEN 1 ELSE 0 END) AS thesis_quality_cases,
+          SUM(CASE WHEN case_type = 'intervention_quality' THEN 1 ELSE 0 END) AS intervention_quality_cases,
+          SUM(CASE WHEN case_type = 'regret_case' THEN 1 ELSE 0 END) AS regret_cases,
           SUM(CASE WHEN case_type = 'comparable_forecast' AND comparable = 1 THEN 1 ELSE 0 END) AS comparable_included_cases,
           SUM(CASE WHEN case_type = 'comparable_forecast' AND comparable = 0 THEN 1 ELSE 0 END) AS excluded_comparable_cases
         FROM learning_cases
@@ -384,6 +399,9 @@ export function summarizeLearningTracks(): LearningCaseTrackSummary {
     | {
         comparable_forecast_cases: number | null;
         execution_quality_cases: number | null;
+        thesis_quality_cases: number | null;
+        intervention_quality_cases: number | null;
+        regret_cases: number | null;
         comparable_included_cases: number | null;
         excluded_comparable_cases: number | null;
       }
@@ -392,9 +410,15 @@ export function summarizeLearningTracks(): LearningCaseTrackSummary {
   return {
     comparableForecastCases: Number(counts?.comparable_forecast_cases ?? 0),
     executionQualityCases: Number(counts?.execution_quality_cases ?? 0),
+    thesisQualityCases: Number(counts?.thesis_quality_cases ?? 0),
+    interventionQualityCases: Number(counts?.intervention_quality_cases ?? 0),
+    regretCases: Number(counts?.regret_cases ?? 0),
     comparableIncludedCases: Number(counts?.comparable_included_cases ?? 0),
     excludedComparableCases: Number(counts?.excluded_comparable_cases ?? 0),
     comparableByDomain: summarizeDomains('comparable_forecast', true),
     executionByDomain: summarizeDomains('execution_quality'),
+    thesisByDomain: summarizeDomains('thesis_quality'),
+    interventionByDomain: summarizeDomains('intervention_quality'),
+    regretByDomain: summarizeDomains('regret_case'),
   };
 }
