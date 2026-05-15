@@ -1,9 +1,11 @@
+import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { openDatabase } from '../../src/memory/db.js';
 import { listTradeDossiers, upsertTradeDossier } from '../../src/memory/trade_dossiers.js';
 
 describe('trade dossiers', () => {
@@ -35,6 +37,7 @@ describe('trade dossiers', () => {
       executionMode: 'paper',
       sourceTradeId: 101,
       sourcePredictionId: 'pred-101',
+      sourceHypothesisId: 'hyp-101',
       triggerReason: 'ta_alert',
       openedAt: '2026-05-14T16:42:07.110Z',
       dossier: {
@@ -66,9 +69,16 @@ describe('trade dossiers', () => {
         entryQuality: 'weak',
         lessons: ['Gate resize should remain part of the lesson.'],
       },
+      retrieval: {
+        retrievedCases: [{ dossierId: 'prior-17', score: 0.81 }],
+      },
+      policyTrace: {
+        activeAdjustments: [{ policyKey: 'entry.resize_cap', delta: -0.2 }],
+      },
     });
 
     expect(closed.status).toBe('closed');
+    expect(closed.sourceHypothesisId).toBe('hyp-101');
     expect(closed.dossier?.thesis).toEqual(
       expect.objectContaining({
         thesisText: 'Crypto beta continuation via COIN',
@@ -89,9 +99,47 @@ describe('trade dossiers', () => {
       })
     );
     expect(closed.review?.entryQuality).toBe('weak');
+    expect(closed.retrieval?.retrievedCases).toEqual([{ dossierId: 'prior-17', score: 0.81 }]);
+    expect(closed.policyTrace?.activeAdjustments).toEqual([
+      { policyKey: 'entry.resize_cap', delta: -0.2 },
+    ]);
 
     const dossiers = listTradeDossiers({ symbol: 'XYZ:COIN', limit: 5 });
     expect(dossiers).toHaveLength(1);
     expect(dossiers[0]?.id).toBe(opened.id);
+  });
+
+  it('repairs legacy dossier tables with v2.2 trace columns', () => {
+    const dbPath = process.env.THUFIR_DB_PATH as string;
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE trade_dossiers (
+        id TEXT PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        status TEXT NOT NULL,
+        direction TEXT,
+        strategy_source TEXT,
+        execution_mode TEXT,
+        source_trade_id INTEGER,
+        source_prediction_id TEXT,
+        proposal_record_id INTEGER,
+        trigger_reason TEXT,
+        opened_at TEXT,
+        closed_at TEXT,
+        dossier_payload TEXT,
+        review_payload TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      )
+    `);
+    raw.close();
+
+    const db = openDatabase(dbPath);
+    const columns = db.prepare("PRAGMA table_info('trade_dossiers')").all() as Array<{ name: string }>;
+    const columnNames = new Set(columns.map((column) => column.name));
+
+    expect(columnNames.has('source_hypothesis_id')).toBe(true);
+    expect(columnNames.has('retrieval_payload')).toBe(true);
+    expect(columnNames.has('policy_trace_payload')).toBe(true);
   });
 });

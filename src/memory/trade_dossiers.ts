@@ -13,12 +13,15 @@ export interface TradeDossier {
   executionMode: 'paper' | 'live' | null;
   sourceTradeId: number | null;
   sourcePredictionId: string | null;
+  sourceHypothesisId: string | null;
   proposalRecordId: number | null;
   triggerReason: string | null;
   openedAt: string | null;
   closedAt: string | null;
   dossier: Record<string, unknown> | null;
   review: Record<string, unknown> | null;
+  retrieval: Record<string, unknown> | null;
+  policyTrace: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string | null;
 }
@@ -32,12 +35,15 @@ export interface UpsertTradeDossierInput {
   executionMode?: 'paper' | 'live' | null;
   sourceTradeId?: number | null;
   sourcePredictionId?: string | null;
+  sourceHypothesisId?: string | null;
   proposalRecordId?: number | null;
   triggerReason?: string | null;
   openedAt?: string | null;
   closedAt?: string | null;
   dossier?: Record<string, unknown> | null;
   review?: Record<string, unknown> | null;
+  retrieval?: Record<string, unknown> | null;
+  policyTrace?: Record<string, unknown> | null;
 }
 
 function serializeJson(value: Record<string, unknown> | null | undefined): string | null {
@@ -71,12 +77,15 @@ function ensureTradeDossierSchema(): void {
       execution_mode TEXT CHECK(execution_mode IN ('paper', 'live')),
       source_trade_id INTEGER,
       source_prediction_id TEXT,
+      source_hypothesis_id TEXT,
       proposal_record_id INTEGER,
       trigger_reason TEXT,
       opened_at TEXT,
       closed_at TEXT,
       dossier_payload TEXT,
       review_payload TEXT,
+      retrieval_payload TEXT,
+      policy_trace_payload TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT
     );
@@ -84,7 +93,23 @@ function ensureTradeDossierSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_trade_dossiers_status ON trade_dossiers(status);
     CREATE INDEX IF NOT EXISTS idx_trade_dossiers_trade ON trade_dossiers(source_trade_id);
     CREATE INDEX IF NOT EXISTS idx_trade_dossiers_prediction ON trade_dossiers(source_prediction_id);
+    CREATE INDEX IF NOT EXISTS idx_trade_dossiers_hypothesis ON trade_dossiers(source_hypothesis_id);
   `);
+
+  const columns = db.prepare("PRAGMA table_info('trade_dossiers')").all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  const addColumnIfMissing = (name: string, definition: string): void => {
+    if (columnNames.has(name)) return;
+    db.exec(`ALTER TABLE trade_dossiers ADD COLUMN ${definition}`);
+    columnNames.add(name);
+  };
+
+  addColumnIfMissing('source_hypothesis_id', 'source_hypothesis_id TEXT');
+  addColumnIfMissing('retrieval_payload', 'retrieval_payload TEXT');
+  addColumnIfMissing('policy_trace_payload', 'policy_trace_payload TEXT');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_trade_dossiers_hypothesis ON trade_dossiers(source_hypothesis_id)'
+  );
 }
 
 function rowToTradeDossier(row: Record<string, unknown> | undefined): TradeDossier | null {
@@ -104,12 +129,18 @@ function rowToTradeDossier(row: Record<string, unknown> | undefined): TradeDossi
         : null,
     sourceTradeId: row.source_trade_id == null ? null : Number(row.source_trade_id),
     sourcePredictionId: row.source_prediction_id == null ? null : String(row.source_prediction_id),
+    sourceHypothesisId:
+      row.source_hypothesis_id == null ? null : String(row.source_hypothesis_id),
     proposalRecordId: row.proposal_record_id == null ? null : Number(row.proposal_record_id),
     triggerReason: row.trigger_reason == null ? null : String(row.trigger_reason),
     openedAt: row.opened_at == null ? null : String(row.opened_at),
     closedAt: row.closed_at == null ? null : String(row.closed_at),
     dossier: parseJson(typeof row.dossier_payload === 'string' ? row.dossier_payload : null),
     review: parseJson(typeof row.review_payload === 'string' ? row.review_payload : null),
+    retrieval: parseJson(typeof row.retrieval_payload === 'string' ? row.retrieval_payload : null),
+    policyTrace: parseJson(
+      typeof row.policy_trace_payload === 'string' ? row.policy_trace_payload : null
+    ),
     createdAt: String(row.created_at ?? ''),
     updatedAt: row.updated_at == null ? null : String(row.updated_at),
   };
@@ -154,17 +185,21 @@ export function upsertTradeDossier(input: UpsertTradeDossierInput): TradeDossier
   const id = input.id ?? existing?.id ?? randomUUID();
   const mergedDossier = deepMerge(existing?.dossier ?? null, input.dossier);
   const mergedReview = deepMerge(existing?.review ?? null, input.review);
+  const mergedRetrieval = deepMerge(existing?.retrieval ?? null, input.retrieval);
+  const mergedPolicyTrace = deepMerge(existing?.policyTrace ?? null, input.policyTrace);
 
   db.prepare(
     `
       INSERT INTO trade_dossiers (
         id, symbol, status, direction, strategy_source, execution_mode,
-        source_trade_id, source_prediction_id, proposal_record_id, trigger_reason,
-        opened_at, closed_at, dossier_payload, review_payload, updated_at
+        source_trade_id, source_prediction_id, source_hypothesis_id, proposal_record_id,
+        trigger_reason, opened_at, closed_at, dossier_payload, review_payload,
+        retrieval_payload, policy_trace_payload, updated_at
       ) VALUES (
         @id, @symbol, @status, @direction, @strategySource, @executionMode,
-        @sourceTradeId, @sourcePredictionId, @proposalRecordId, @triggerReason,
-        @openedAt, @closedAt, @dossierPayload, @reviewPayload, datetime('now')
+        @sourceTradeId, @sourcePredictionId, @sourceHypothesisId, @proposalRecordId,
+        @triggerReason, @openedAt, @closedAt, @dossierPayload, @reviewPayload,
+        @retrievalPayload, @policyTracePayload, datetime('now')
       )
       ON CONFLICT(id) DO UPDATE SET
         symbol = excluded.symbol,
@@ -174,12 +209,15 @@ export function upsertTradeDossier(input: UpsertTradeDossierInput): TradeDossier
         execution_mode = COALESCE(excluded.execution_mode, trade_dossiers.execution_mode),
         source_trade_id = COALESCE(excluded.source_trade_id, trade_dossiers.source_trade_id),
         source_prediction_id = COALESCE(excluded.source_prediction_id, trade_dossiers.source_prediction_id),
+        source_hypothesis_id = COALESCE(excluded.source_hypothesis_id, trade_dossiers.source_hypothesis_id),
         proposal_record_id = COALESCE(excluded.proposal_record_id, trade_dossiers.proposal_record_id),
         trigger_reason = COALESCE(excluded.trigger_reason, trade_dossiers.trigger_reason),
         opened_at = COALESCE(excluded.opened_at, trade_dossiers.opened_at),
         closed_at = COALESCE(excluded.closed_at, trade_dossiers.closed_at),
         dossier_payload = COALESCE(excluded.dossier_payload, trade_dossiers.dossier_payload),
         review_payload = COALESCE(excluded.review_payload, trade_dossiers.review_payload),
+        retrieval_payload = COALESCE(excluded.retrieval_payload, trade_dossiers.retrieval_payload),
+        policy_trace_payload = COALESCE(excluded.policy_trace_payload, trade_dossiers.policy_trace_payload),
         updated_at = datetime('now')
     `
   ).run({
@@ -191,12 +229,15 @@ export function upsertTradeDossier(input: UpsertTradeDossierInput): TradeDossier
     executionMode: input.executionMode ?? existing?.executionMode ?? null,
     sourceTradeId: input.sourceTradeId ?? existing?.sourceTradeId ?? null,
     sourcePredictionId: input.sourcePredictionId ?? existing?.sourcePredictionId ?? null,
+    sourceHypothesisId: input.sourceHypothesisId ?? existing?.sourceHypothesisId ?? null,
     proposalRecordId: input.proposalRecordId ?? existing?.proposalRecordId ?? null,
     triggerReason: input.triggerReason ?? existing?.triggerReason ?? null,
     openedAt: normalizeTimestamp(input.openedAt ?? existing?.openedAt ?? null),
     closedAt: normalizeTimestamp(input.closedAt ?? existing?.closedAt ?? null),
     dossierPayload: serializeJson(mergedDossier),
     reviewPayload: serializeJson(mergedReview),
+    retrievalPayload: serializeJson(mergedRetrieval),
+    policyTracePayload: serializeJson(mergedPolicyTrace),
   });
 
   return (
@@ -209,12 +250,15 @@ export function upsertTradeDossier(input: UpsertTradeDossierInput): TradeDossier
       executionMode: input.executionMode ?? existing?.executionMode ?? null,
       sourceTradeId: input.sourceTradeId ?? existing?.sourceTradeId ?? null,
       sourcePredictionId: input.sourcePredictionId ?? existing?.sourcePredictionId ?? null,
+      sourceHypothesisId: input.sourceHypothesisId ?? existing?.sourceHypothesisId ?? null,
       proposalRecordId: input.proposalRecordId ?? existing?.proposalRecordId ?? null,
       triggerReason: input.triggerReason ?? existing?.triggerReason ?? null,
       openedAt: normalizeTimestamp(input.openedAt ?? existing?.openedAt ?? null),
       closedAt: normalizeTimestamp(input.closedAt ?? existing?.closedAt ?? null),
       dossier: mergedDossier,
       review: mergedReview,
+      retrieval: mergedRetrieval,
+      policyTrace: mergedPolicyTrace,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
