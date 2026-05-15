@@ -2,7 +2,7 @@
 
 Thufir is an autonomous crypto/perps trading agent built around one idea: let the LLM reason about market context and trade thesis, but keep execution, sizing, and risk controls deterministic.
 
-The current codebase runs through a gateway process, supports CLI/Telegram/WhatsApp, persists state in SQLite, and targets Hyperliquid for perp trading. Paper mode is the default.
+The current codebase runs through a gateway process, is operated in practice through Telegram, persists state in SQLite, and targets Hyperliquid for perp trading. Paper mode is the default. CLI commands still exist for local development and debugging.
 
 ## Current Model
 
@@ -15,6 +15,70 @@ Thufir is not a pure rules engine and not a pure chat trader.
   - `LlmEntryGate` can approve, reject, or resize new trades before execution.
   - `LlmExitConsultant` can re-evaluate open positions during heartbeat ticks.
   - `PositionHeartbeatService` still enforces mechanical trigger paths even when LLM consultation is disabled.
+
+## Current Decision Flow
+
+Today, the key autonomous trading path is:
+
+```text
+candidate/proposal
+  -> deterministic risk + wallet checks
+  -> LlmEntryGate
+  -> executor
+  -> journals / learning writes
+```
+
+The important current code seams are:
+
+- `src/core/autonomous.ts`
+  Builds candidates, runs deterministic checks, calls the entry gate, and executes.
+- `src/core/llm_entry_gate.ts`
+  Accepts a structured candidate and returns `approve`, `reject`, or `resize`, plus optional leverage guidance.
+- `src/core/autonomy_policy.ts`
+  Applies deterministic policy gating/downweighting before execution.
+- `src/core/perp_lifecycle.ts`
+  Builds execution-quality learning artifacts on close.
+
+This means the repo already has a real pre-execution control point. The next step is to make learned evidence first-class there instead of keeping it mostly post-trade.
+
+## Adaptive Learning Direction
+
+The v2.x learning direction is:
+
+```text
+trade/decision
+  -> dossier
+  -> review
+  -> counterfactuals
+  -> retrieval features
+  -> policy evidence
+  -> future decision-time enforcement
+```
+
+The intended v2.2 enforcement model is:
+
+```text
+candidate/proposal
+  -> deterministic hard risk checks
+  -> retrieval lookup
+  -> active policy lookup
+  -> adaptive decision enforcement
+  -> LlmEntryGate
+  -> executor
+```
+
+The goal is to answer three hard questions with explicit wiring:
+
+1. Can retrieval really alter live decisions?
+   Yes, but only through bounded modifiers such as confidence haircuts, size haircuts, leverage caps, confirmation escalation, or reject-band escalation.
+2. Can policy really resize/reject based on learned evidence?
+   Yes, but only through a deterministic enforcement layer with minimum evidence thresholds, bounded deltas, and expiry.
+3. Can weak evidence be prevented from poisoning the loop?
+   Yes, by requiring evidence counts, confidence, freshness, contradiction checks, and missing-data flags before learned signals gain real authority.
+
+This is documented in:
+- [release/v2.2-adaptive-decision-learning.prd.md](/home/nmcdc/projects/Thufir-Hawat/release/v2.2-adaptive-decision-learning.prd.md)
+- [release/v2.2-adaptive-decision-learning.tdd.md](/home/nmcdc/projects/Thufir-Hawat/release/v2.2-adaptive-decision-learning.tdd.md)
 
 ## Architecture
 
@@ -31,6 +95,8 @@ Channels (CLI / Telegram / WhatsApp)
     -> Execution adapters (paper / live Hyperliquid / webhook)
 ```
 
+Operationally, the live channel in use is Telegram. CLI remains useful for local inspection and development workflows.
+
 Key runtime pieces:
 
 - `src/gateway/index.ts`: process entrypoint, channel wiring, schedulers, heartbeat startup
@@ -38,6 +104,9 @@ Key runtime pieces:
 - `src/core/autonomous.ts`: scan loop, policy filters, entry gate, execution
 - `src/core/position_heartbeat.ts`: polling-based position supervision and exit actions
 - `src/core/position_book.ts`: shared open-position view used by entry/exit coherence logic
+- `src/core/llm_entry_gate.ts`: approve/reject/resize gate for new autonomous trades
+- `src/core/autonomy_policy.ts`: deterministic pre-execution policy filters and downweight logic
+- `src/core/perp_lifecycle.ts`: closed-trade execution-learning case construction
 - `src/trade-management/`: exchange-native risk controls and stop management
 - `src/memory/`: SQLite-backed journals, policy state, sessions, alerts, artifacts
 
@@ -55,6 +124,24 @@ This matters because the system now has a tighter feedback loop between:
 2. what other positions are already live
 3. whether new trades conflict with the existing book
 4. whether an open thesis still makes sense as market context changes
+
+## Current Learning State
+
+The current tree has real learning infrastructure, but it is still uneven:
+
+- implemented today:
+  - `execution_quality` learning case generation on close
+  - entry-gate journaling
+  - deterministic risk / wallet enforcement
+  - proposal-to-gate-to-execution control path
+- partially implemented or planned in release docs:
+  - dossier-backed learning
+  - thesis-vs-execution separation
+  - structured trade review
+  - retrieval-driven decision support
+  - adaptive policy enforcement
+
+In other words, the repo already supports learning artifacts, but the main open problem is wiring those artifacts back into future decisions with bounded authority.
 
 ## Quick Start
 
@@ -195,7 +282,7 @@ agent:
 
 ## Command Surface
 
-### CLI
+### CLI (local/dev)
 
 ```bash
 thufir env verify-live --symbol BTC
@@ -212,7 +299,7 @@ thufir auto report
 thufir gateway
 ```
 
-### Gateway / Chat Commands
+### Telegram Commands
 
 - `/help`
 - `/status`
@@ -293,7 +380,7 @@ THUFIR_DB_PATH=/tmp/thufir-test.sqlite pnpm vitest run
 - Do not enable `fullAuto` with loose wallet limits.
 - Keep live mode off until paper behavior is stable.
 - Do not store private keys in committed config.
-- Review Telegram/gateway exposure carefully before binding outside loopback.
+- Review Telegram gateway exposure carefully before binding outside loopback.
 
 ## License
 
