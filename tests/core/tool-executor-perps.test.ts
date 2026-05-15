@@ -11,7 +11,9 @@ import { countFinalPredictions } from '../../src/memory/calibration.js';
 import { openDatabase } from '../../src/memory/db.js';
 import { listLearningCases } from '../../src/memory/learning_cases.js';
 import { createPrediction, getPrediction } from '../../src/memory/predictions.js';
-import { listTradeDossiers } from '../../src/memory/trade_dossiers.js';
+import { listTradeCounterfactuals } from '../../src/memory/trade_counterfactuals.js';
+import { getTradeSimilarityFeatures } from '../../src/memory/trade_similarity_features.js';
+import { listTradeDossiers, upsertTradeDossier } from '../../src/memory/trade_dossiers.js';
 
 describe('tool-executor perps', () => {
   const originalDbPath = process.env.THUFIR_DB_PATH;
@@ -1420,6 +1422,26 @@ describe('tool-executor perps', () => {
       },
       ctx
     );
+    const openedDossier = listTradeDossiers({ symbol: 'BTCLEARN', limit: 1 })[0];
+    expect(openedDossier).toBeTruthy();
+    upsertTradeDossier({
+      id: openedDossier?.id,
+      symbol: 'BTCLEARN',
+      status: 'open',
+      sourceTradeId: openedDossier?.sourceTradeId ?? null,
+      dossier: {
+        version: 'v2.2',
+        gate: {
+          verdict: 'resize',
+        },
+      },
+      retrieval: {
+        retrievedCases: [{ dossierId: 'prior-7', score: 0.84 }],
+      },
+      policyTrace: {
+        activeAdjustmentIds: ['adj-7'],
+      },
+    });
     const closeRes = await executeToolCall(
       'perp_place_order',
       {
@@ -1469,6 +1491,9 @@ describe('tool-executor perps', () => {
     expect(dossier).toBeTruthy();
     expect(dossier.id).toBe(learningCase.sourceDossierId);
     expect(dossier.status).toBe('closed');
+    expect((dossier.dossier as any)?.version).toBe('v2.2');
+    expect(dossier.retrieval?.retrievedCases).toEqual([{ dossierId: 'prior-7', score: 0.84 }]);
+    expect(dossier.policyTrace?.activeAdjustmentIds).toEqual(['adj-7']);
     expect(dossier.review?.entryQuality).toBeTruthy();
     expect(dossier.review?.gateInterventionQuality).toBeTruthy();
     expect(dossier.review?.contextFit).toBeTruthy();
@@ -1476,6 +1501,23 @@ describe('tool-executor perps', () => {
     expect(Array.isArray(dossier.review?.repeatTags)).toBe(true);
     expect(Array.isArray(dossier.review?.avoidTags)).toBe(true);
     expect(typeof (dossier.dossier as any)?.counterfactuals?.interventionScore).toBe('number');
+    const counterfactuals = listTradeCounterfactuals({ dossierId: dossier.id, limit: 20 });
+    expect(counterfactuals.map((row) => row.counterfactualType)).toEqual(
+      expect.arrayContaining([
+        'no_trade',
+        'approved_size',
+        'full_size',
+        'delay_entry',
+        'ttl_exit',
+      ])
+    );
+    const similarityFeatures = getTradeSimilarityFeatures(dossier.id);
+    expect(similarityFeatures.signalClass).toBe('momentum_breakout');
+    expect(similarityFeatures.tradeArchetype).toBe('intraday');
+    expect(similarityFeatures.gateVerdict).toBe('resize');
+    expect(similarityFeatures.thesisVerdict).toBe('correct');
+    expect(similarityFeatures.entryQuality).toBeTruthy();
+    expect(similarityFeatures.sizingQuality).toBeTruthy();
   });
 
   it('get_fills live mode returns mapped fills from Hyperliquid API', async () => {

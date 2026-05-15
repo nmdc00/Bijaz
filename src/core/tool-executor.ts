@@ -30,6 +30,8 @@ import { recordDecisionAudit } from '../memory/decision_audit.js';
 import { storeDecisionArtifact } from '../memory/decision_artifacts.js';
 import { createLearningCase } from '../memory/learning_cases.js';
 import { findOpenTradeDossierBySymbol, findTradeDossierByTradeId, upsertTradeDossier } from '../memory/trade_dossiers.js';
+import { createTradeCounterfactual } from '../memory/trade_counterfactuals.js';
+import { upsertTradeSimilarityFeatures } from '../memory/trade_similarity_features.js';
 import { listRecentAgentIncidents } from '../memory/incidents.js';
 import { getPlaybook, searchPlaybooks, upsertPlaybook } from '../memory/playbooks.js';
 import {
@@ -68,6 +70,8 @@ import {
   toPerpExecutionLearningCaseInput,
 } from './perp_lifecycle.js';
 import { computePerpInterventionEvidence } from './thesis_learning.js';
+import { buildTradeCounterfactuals } from './trade_counterfactuals.js';
+import { deriveTradeSimilarityFeatures } from './trade_similarity_feature_derivation.js';
 import type { TradeReviewBand, TradeThesisVerdict } from './trade_review.js';
 
 /** Minimal interface for spending limit enforcement used in tool execution */
@@ -780,7 +784,7 @@ function buildTradeDossierReview(params: {
             ? 'directional thesis failed'
             : null;
   return {
-    reviewVersion: 'v2.1',
+    reviewVersion: 'v2.2',
     thesisVerdict,
     entryQuality,
     sizingQuality,
@@ -2782,6 +2786,7 @@ export async function executeToolCall(
               ? findTradeDossierByTradeId(lifecycleTradeId)
               : findOpenTradeDossierBySymbol(symbol);
           const existingDossierPayload = readRecord(existingDossier?.dossier) ?? {};
+          const existingDossierContext = readRecord(existingDossierPayload.context) ?? {};
           const existingDossierGate = readRecord(existingDossierPayload.gate) ?? {};
           const existingDossierExecution = readRecord(existingDossierPayload.execution) ?? {};
           const requestedEntrySize =
@@ -2832,7 +2837,7 @@ export async function executeToolCall(
                 netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
               })
             : null;
-          const dossierId = upsertTradeDossier({
+          const upsertedDossier = upsertTradeDossier({
             id: existingDossier?.id ?? undefined,
             symbol,
             status: closedPositionCompletely ? 'closed' : 'open',
@@ -2853,7 +2858,7 @@ export async function executeToolCall(
             openedAt: existingDossier?.openedAt ?? new Date(executionStartMs).toISOString(),
             closedAt: closedPositionCompletely ? new Date().toISOString() : null,
             dossier: {
-              version: 'v2.1',
+              version: 'v2.2',
               thesis: {
                 reasoning: policyReasoning,
                 expectedEdge: expectedEdge ?? closeReference?.expectedEdge ?? null,
@@ -2861,11 +2866,41 @@ export async function executeToolCall(
                 timeStopAtMs: timeStopAtMs ?? closeReference?.timeStopAtMs ?? null,
               },
               context: {
-                signalClass: effectiveSignalClass ?? closeReference?.signalClass ?? null,
-                marketRegime: marketRegime ?? closeReference?.marketRegime ?? null,
-                volatilityBucket: volatilityBucket ?? closeReference?.volatilityBucket ?? null,
-                liquidityBucket: liquidityBucket ?? closeReference?.liquidityBucket ?? null,
-                entryTrigger: entryTrigger ?? closeReference?.entryTrigger ?? null,
+                signalClass:
+                  effectiveSignalClass ??
+                  closeReference?.signalClass ??
+                  readString(existingDossierContext.signalClass) ??
+                  null,
+                marketRegime:
+                  marketRegime ??
+                  closeReference?.marketRegime ??
+                  readString(existingDossierContext.marketRegime) ??
+                  null,
+                volatilityBucket:
+                  volatilityBucket ??
+                  closeReference?.volatilityBucket ??
+                  readString(existingDossierContext.volatilityBucket) ??
+                  null,
+                liquidityBucket:
+                  liquidityBucket ??
+                  closeReference?.liquidityBucket ??
+                  readString(existingDossierContext.liquidityBucket) ??
+                  null,
+                entryTrigger:
+                  entryTrigger ??
+                  closeReference?.entryTrigger ??
+                  readString(existingDossierContext.entryTrigger) ??
+                  null,
+                tradeArchetype:
+                  tradeArchetype ??
+                  closeReference?.tradeArchetype ??
+                  readString(existingDossierContext.tradeArchetype) ??
+                  null,
+                newsSubtype:
+                  newsSubtype ??
+                  closeReference?.newsSubtype ??
+                  readString(existingDossierContext.newsSubtype) ??
+                  null,
               },
               gate: {
                 verdict: gateVerdictForReview ?? null,
@@ -2897,7 +2932,8 @@ export async function executeToolCall(
               counterfactuals: interventionEvidence,
             },
             review: dossierReview,
-          }).id;
+          });
+          const dossierId = upsertedDossier.id;
           if (closedPositionCompletely) {
             const learningCase = buildPerpExecutionLearningCase({
               symbol,
@@ -2950,6 +2986,35 @@ export async function executeToolCall(
               gateReasonCode:
                 closeReference?.entryGateReasonCode ?? readString(existingDossierGate.reasonCode),
             });
+            for (const counterfactual of buildTradeCounterfactuals({
+              requestedSize: requestedEntrySize,
+              approvedSize: approvedEntrySize,
+              requestedLeverage: requestedEntryLeverage,
+              approvedLeverage: approvedEntryLeverage,
+              netRealizedPnlUsd: closeSummary?.netRealizedPnlUsd ?? null,
+              capturedR: componentScores?.capturedR ?? null,
+              gateVerdict: gateVerdictForReview ?? null,
+            })) {
+              createTradeCounterfactual({
+                dossierId,
+                counterfactualType: counterfactual.counterfactualType,
+                baselineKind: counterfactual.baselineKind,
+                summary: counterfactual.summary,
+                score: counterfactual.score,
+                estimatedNetPnlUsd: counterfactual.estimatedNetPnlUsd,
+                estimatedRMultiple: counterfactual.estimatedRMultiple,
+                valueAddUsd: counterfactual.valueAddUsd,
+                confidence: counterfactual.confidence,
+                inputs: counterfactual.inputsPayload ?? null,
+                result: counterfactual.resultPayload ?? null,
+              });
+            }
+            upsertTradeSimilarityFeatures(
+              deriveTradeSimilarityFeatures({
+                dossier: upsertedDossier,
+                learningCase,
+              })
+            );
             persistExecutionLearningCase({
               symbol,
               fingerprint: `${executedEvidenceFingerprint}:execution_quality`,

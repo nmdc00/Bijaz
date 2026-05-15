@@ -2,14 +2,16 @@ import { randomUUID } from 'node:crypto';
 
 import { openDatabase } from './db.js';
 
+export type TradePolicyAdjustmentValue = number | string | boolean | null;
+
 export interface TradePolicyAdjustment {
   id: string;
   policyDomain: string;
   policyKey: string;
   scope: Record<string, unknown> | null;
   adjustmentType: string;
-  oldValue: number | null;
-  newValue: number | null;
+  oldValue: TradePolicyAdjustmentValue;
+  newValue: TradePolicyAdjustmentValue;
   delta: number | null;
   evidenceCount: number | null;
   evidenceWindowStart: string | null;
@@ -27,8 +29,8 @@ export interface CreateTradePolicyAdjustmentInput {
   policyKey: string;
   scope?: Record<string, unknown> | null;
   adjustmentType: string;
-  oldValue?: number | null;
-  newValue?: number | null;
+  oldValue?: TradePolicyAdjustmentValue;
+  newValue?: TradePolicyAdjustmentValue;
   delta?: number | null;
   evidenceCount?: number | null;
   evidenceWindowStart?: string | null;
@@ -60,6 +62,34 @@ function parseJson(value: string | null): Record<string, unknown> | null {
   }
 }
 
+function serializeScalar(value: TradePolicyAdjustmentValue | undefined): string | null {
+  if (value === undefined) return null;
+  return JSON.stringify(value);
+}
+
+function parseScalar(
+  payload: string | null,
+  fallback: unknown
+): TradePolicyAdjustmentValue {
+  if (payload) {
+    try {
+      return JSON.parse(payload) as TradePolicyAdjustmentValue;
+    } catch {
+      // Fall through to legacy scalar columns.
+    }
+  }
+  if (fallback == null) return null;
+  if (typeof fallback === 'number' && Number.isFinite(fallback)) return fallback;
+  if (typeof fallback === 'string') {
+    const normalized = fallback.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    return fallback;
+  }
+  if (typeof fallback === 'boolean') return fallback;
+  return null;
+}
+
 function ensureTradePolicyAdjustmentsSchema(): void {
   const db = openDatabase();
   db.exec(`
@@ -71,6 +101,8 @@ function ensureTradePolicyAdjustmentsSchema(): void {
       adjustment_type TEXT NOT NULL,
       old_value REAL,
       new_value REAL,
+      old_value_payload TEXT,
+      new_value_payload TEXT,
       delta REAL,
       evidence_count INTEGER,
       evidence_window_start TEXT,
@@ -86,6 +118,19 @@ function ensureTradePolicyAdjustmentsSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_trade_policy_adjustments_active
       ON trade_policy_adjustments(active, created_at);
   `);
+
+  const columns = db
+    .prepare("PRAGMA table_info('trade_policy_adjustments')")
+    .all() as Array<{ name?: string }>;
+  const columnNames = new Set(columns.map((column) => String(column.name ?? '')));
+  const addColumnIfMissing = (name: string, definition: string): void => {
+    if (columnNames.has(name)) return;
+    db.exec(`ALTER TABLE trade_policy_adjustments ADD COLUMN ${definition}`);
+    columnNames.add(name);
+  };
+
+  addColumnIfMissing('old_value_payload', 'old_value_payload TEXT');
+  addColumnIfMissing('new_value_payload', 'new_value_payload TEXT');
 }
 
 function toTradePolicyAdjustment(row: Record<string, unknown>): TradePolicyAdjustment {
@@ -95,8 +140,14 @@ function toTradePolicyAdjustment(row: Record<string, unknown>): TradePolicyAdjus
     policyKey: String(row.policy_key ?? ''),
     scope: parseJson(typeof row.scope_payload === 'string' ? row.scope_payload : null),
     adjustmentType: String(row.adjustment_type ?? ''),
-    oldValue: row.old_value == null ? null : Number(row.old_value),
-    newValue: row.new_value == null ? null : Number(row.new_value),
+    oldValue: parseScalar(
+      typeof row.old_value_payload === 'string' ? row.old_value_payload : null,
+      row.old_value
+    ),
+    newValue: parseScalar(
+      typeof row.new_value_payload === 'string' ? row.new_value_payload : null,
+      row.new_value
+    ),
     delta: row.delta == null ? null : Number(row.delta),
     evidenceCount: row.evidence_count == null ? null : Number(row.evidence_count),
     evidenceWindowStart:
@@ -126,6 +177,8 @@ export function createTradePolicyAdjustment(
         adjustment_type,
         old_value,
         new_value,
+        old_value_payload,
+        new_value_payload,
         delta,
         evidence_count,
         evidence_window_start,
@@ -142,6 +195,8 @@ export function createTradePolicyAdjustment(
         @adjustmentType,
         @oldValue,
         @newValue,
+        @oldValuePayload,
+        @newValuePayload,
         @delta,
         @evidenceCount,
         @evidenceWindowStart,
@@ -158,8 +213,10 @@ export function createTradePolicyAdjustment(
     policyKey: input.policyKey,
     scopePayload: serializeJson(input.scope),
     adjustmentType: input.adjustmentType,
-    oldValue: input.oldValue ?? null,
-    newValue: input.newValue ?? null,
+    oldValue: typeof input.oldValue === 'number' ? input.oldValue : null,
+    newValue: typeof input.newValue === 'number' ? input.newValue : null,
+    oldValuePayload: serializeScalar(input.oldValue),
+    newValuePayload: serializeScalar(input.newValue),
     delta: input.delta ?? null,
     evidenceCount: input.evidenceCount ?? null,
     evidenceWindowStart: input.evidenceWindowStart ?? null,

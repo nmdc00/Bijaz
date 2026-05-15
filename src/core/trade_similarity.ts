@@ -92,7 +92,7 @@ function normalizeText(value: string | null | undefined): string | null {
   return value?.trim().toLowerCase() ?? null;
 }
 
-function inferSymbolClass(symbol: string): string {
+export function inferTradeSymbolClass(symbol: string): string {
   const normalized = symbol.trim().toUpperCase();
   if (normalized.startsWith('XYZ:')) {
     return normalized.endsWith('COIN') || normalized.endsWith('MSTR') ? 'equity_proxy' : 'macro_contract';
@@ -138,10 +138,10 @@ function extractFeatureVector(
   return {
     symbolClass:
       normalizeText(
-        readString(context.symbolClass) ??
+          readString(context.symbolClass) ??
           readString(learningContext.symbolClass) ??
-          inferSymbolClass(dossier.symbol)
-      ) ?? inferSymbolClass(dossier.symbol),
+          inferTradeSymbolClass(dossier.symbol)
+      ) ?? inferTradeSymbolClass(dossier.symbol),
     signalClass: normalizeText(
       readString(context.signalClass) ?? readString(learningContext.signalClass)
     ),
@@ -172,7 +172,7 @@ function buildMatch(
 ): TradeSimilarityMatch {
   const features = extractFeatureVector(dossier, learningCases);
   const review = buildStructuredTradeReviewSnapshot(dossier, learningCases);
-  const querySymbolClass = normalizeText(query.symbolClass ?? inferSymbolClass(query.symbol));
+  const querySymbolClass = normalizeText(query.symbolClass ?? inferTradeSymbolClass(query.symbol));
   const querySignalClass = normalizeText(query.signalClass);
   const queryRegime = normalizeText(query.regime);
   const queryGateVerdict = normalizeText(query.gateVerdict);

@@ -65,4 +65,36 @@ describe('trade policy adjustments', () => {
       })
     ).toHaveLength(1);
   });
+
+  it('round-trips non-numeric adjustment payloads for runtime policy flags', () => {
+    const created = createTradePolicyAdjustment({
+      id: 'adj-confirmation-1',
+      policyDomain: 'confirmation',
+      policyKey: 'gate_intervention_prior',
+      scope: { signalClass: 'llm_originator', symbolClass: 'crypto' },
+      adjustmentType: 'flag',
+      oldValue: false,
+      newValue: true,
+      evidenceCount: 4,
+      confidence: 0.62,
+      reasonSummary: 'Keep the prior confirmation requirement live for this segment.',
+    });
+
+    expect(created.oldValue).toBe(false);
+    expect(created.newValue).toBe(true);
+    expect(
+      listTradePolicyAdjustments({
+        policyDomain: 'confirmation',
+        active: true,
+      })[0]
+    ).toEqual(
+      expect.objectContaining({
+        id: 'adj-confirmation-1',
+        newValue: true,
+        scope: expect.objectContaining({
+          signalClass: 'llm_originator',
+        }),
+      })
+    );
+  });
 });
