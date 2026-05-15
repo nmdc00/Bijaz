@@ -1584,6 +1584,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         const positionSide = proposal.side === 'long' ? 'long' : 'short';
         const exitContract = buildLegacyExitContract({
           thesis: decision.reasoning ?? `${symbol} ${positionSide} thesis`,
+          invalidationPrice: proposal.invalidationPrice,
           side: positionSide,
           tradeType: proposal.tradeType,
         });
@@ -2516,6 +2517,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           const side = expr.side === 'buy' ? 'long' : 'short';
           const exitContract = buildLegacyExitContract({
             thesis: decision.reasoning ?? `${symbol} ${side} thesis`,
+            invalidationPrice: gateStopLevelPrice,
             side,
             tradeType: expr.newsTrigger?.enabled ? 'structural' : 'tactical',
           });

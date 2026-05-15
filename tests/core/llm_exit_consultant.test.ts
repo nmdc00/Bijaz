@@ -655,6 +655,23 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
     expect(calls.some(c => c.tool === 'perp_place_order')).toBe(false);
   });
 
+  it('closes when consultant tries to extend beyond tactical TTL cap', async () => {
+    const consultant = makeStubConsultant({
+      action: 'extend_ttl',
+      reasoning: 'keep it alive',
+      newTimeStopAtMs: Date.now() + 12 * 60 * 60 * 1000,
+    });
+
+    const { calls } = await runTick([makePosition()], consultant, {
+      thesisExpiresAtMs: Date.now() + 60 * 60 * 1000,
+      exitContract: { thesis: 'BTC breakout', tradeType: 'tactical', hardRules: [], reviewGuidance: [] } as any,
+      entryAtMs: Date.now() - 7 * 60 * 60 * 1000,
+    });
+
+    expect(mockUpsertPolicyInteg).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.tool === 'perp_place_order')).toBe(true);
+  });
+
   it('close order placed when consultant returns close', async () => {
     const consultant = makeStubConsultant({ action: 'close', reasoning: 'thesis invalidated' });
 
@@ -674,6 +691,26 @@ describe('PositionHeartbeatService + LlmExitConsultant integration', () => {
     expect(order).toBeDefined();
     // size should be 2 * (1 - 0.5) = 1
     expect(order?.input.size).toBe(1);
+  });
+
+  it('rebuilds exit contract notes when consultant updates invalidation', async () => {
+    const consultant = makeStubConsultant({
+      action: 'update_invalidation',
+      reasoning: 'raise the stop',
+      newInvalidationPrice: 49500,
+    });
+
+    await runTick([makePosition()], consultant, {
+      exitContract: { thesis: 'BTC breakout', tradeType: 'tactical', hardRules: [], reviewGuidance: [] } as any,
+    });
+
+    expect(mockUpsertPolicyInteg).toHaveBeenCalledWith(
+      'BTC',
+      'long',
+      expect.any(Number),
+      49500,
+      expect.stringContaining('thesis invalidation')
+    );
   });
 
   it('nothing happens when consultant returns hold', async () => {
