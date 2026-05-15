@@ -108,7 +108,9 @@ const STUB_BOOK_ENTRY = {
   symbol: 'ETH', side: 'long', size: 1, entryPrice: 100,
   thesisExpiresAtMs: Date.now() + 3_600_000,
   entryReasoningText: 'test thesis',
+  exitContract: { thesis: 'test thesis', tradeType: 'tactical', hardRules: [], reviewGuidance: [] },
   lastConsultAtMs: 0, lastConsultDecision: null,
+  entryAtMs: Date.now() - 30 * 60 * 1000,
 } as any;
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -200,6 +202,46 @@ describe('position heartbeat — per-position exit policy', () => {
     expect(calls.some((c) => c.tool === 'perp_place_order')).toBe(false);
     expect(mockUpsertPolicy).toHaveBeenCalledOnce();
     expect(mockClearPolicy).not.toHaveBeenCalled();
+  });
+
+  it('closes instead of extending when tactical TTL cap is already exhausted', async () => {
+    mockGetPolicy.mockReturnValue({
+      symbol: 'ETH',
+      side: 'long',
+      timeStopAtMs: Date.now() - 1000,
+      invalidationPrice: null,
+      notes: null,
+      entryAtMs: Date.now() - 7 * 60 * 60 * 1000,
+    });
+
+    const exitConsultant = {
+      shouldConsult: vi.fn().mockReturnValue(false),
+      consult: vi.fn().mockResolvedValue({ action: 'hold' }),
+    };
+
+    const exhaustedBookEntry = {
+      ...STUB_BOOK_ENTRY,
+      thesisExpiresAtMs: Date.now() - 1000,
+      entryAtMs: Date.now() - 7 * 60 * 60 * 1000,
+    };
+
+    const { service, calls } = makeService(
+      makeSafeConfig(),
+      [makePosition()],
+      100,
+      [],
+      exitConsultant,
+      () => exhaustedBookEntry
+    );
+
+    service.start();
+    await service.tickOnce();
+    service.stop();
+
+    const orders = calls.filter((c) => c.tool === 'perp_place_order');
+    expect(orders.length).toBe(1);
+    expect(mockUpsertPolicy).not.toHaveBeenCalled();
+    expect(mockClearPolicy).toHaveBeenCalledWith('ETH');
   });
 
   it('extends TTL when TTL fires and exit consultant LLM is unavailable', async () => {
