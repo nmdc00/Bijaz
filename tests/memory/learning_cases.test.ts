@@ -62,7 +62,13 @@ describe('learning_cases memory', () => {
         `
           SELECT name, type
           FROM sqlite_master
-          WHERE name IN ('learning_cases', 'comparable_learning_cases', 'execution_learning_cases')
+          WHERE name IN (
+            'learning_cases',
+            'comparable_learning_cases',
+            'execution_learning_cases',
+            'intervention_learning_cases',
+            'regret_learning_cases'
+          )
           ORDER BY name
         `
       )
@@ -71,7 +77,9 @@ describe('learning_cases memory', () => {
     expect(objects).toEqual([
       { name: 'comparable_learning_cases', type: 'view' },
       { name: 'execution_learning_cases', type: 'view' },
+      { name: 'intervention_learning_cases', type: 'view' },
       { name: 'learning_cases', type: 'table' },
+      { name: 'regret_learning_cases', type: 'view' },
     ]);
   });
 
@@ -116,6 +124,34 @@ describe('learning_cases memory', () => {
       policyInputs: { policyTrack: 'execution_quality' },
     });
 
+    createLearningCase({
+      id: 'case-intervention-1',
+      caseType: 'intervention_quality',
+      domain: 'perp',
+      entityType: 'dossier',
+      entityId: 'dossier-77',
+      comparable: false,
+      sourceTradeId: 77,
+      sourceDossierId: 'dossier-77',
+      sourceHypothesisId: 'hyp-77',
+      context: { gateVerdict: 'resize' },
+      outcome: { realizedPnlUsd: 1.4 },
+      qualityScores: { gateInterventionQuality: 'strong' },
+    });
+
+    createLearningCase({
+      id: 'case-regret-1',
+      caseType: 'regret_case',
+      domain: 'perp',
+      entityType: 'symbol',
+      entityId: 'BTC',
+      comparable: false,
+      sourceTradeId: 91,
+      sourceHypothesisId: 'hyp-91',
+      context: { missedTrade: true },
+      outcome: { missedPnlUsd: 5.6 },
+    });
+
     const updatedExecutionCase = updateLearningCaseOutcome({
       id: executionCase.id,
       outcome: { realizedPnlUsd: 12.5, thesisCorrect: true },
@@ -144,15 +180,27 @@ describe('learning_cases memory', () => {
     });
     expect(executionRows).toHaveLength(1);
     expect(executionRows[0]?.entityId).toBe('BTC');
+    expect(
+      listLearningCases({
+        caseType: 'intervention_quality',
+        sourceHypothesisId: 'hyp-77',
+      })
+    ).toHaveLength(1);
 
     const summary = summarizeLearningTracks();
     expect(summary).toEqual({
       comparableForecastCases: 1,
       executionQualityCases: 1,
+      thesisQualityCases: 0,
+      interventionQualityCases: 1,
+      regretCases: 1,
       comparableIncludedCases: 1,
       excludedComparableCases: 0,
       comparableByDomain: { prediction_market: 1 },
       executionByDomain: { perp: 1 },
+      thesisByDomain: {},
+      interventionByDomain: { perp: 1 },
+      regretByDomain: { perp: 1 },
     });
 
     const viewCounts = db
@@ -160,11 +208,23 @@ describe('learning_cases memory', () => {
         `
           SELECT
             (SELECT COUNT(*) FROM comparable_learning_cases) AS comparable_count,
-            (SELECT COUNT(*) FROM execution_learning_cases) AS execution_count
+            (SELECT COUNT(*) FROM execution_learning_cases) AS execution_count,
+            (SELECT COUNT(*) FROM intervention_learning_cases) AS intervention_count,
+            (SELECT COUNT(*) FROM regret_learning_cases) AS regret_count
         `
       )
-      .get() as { comparable_count: number; execution_count: number };
-    expect(viewCounts).toEqual({ comparable_count: 1, execution_count: 1 });
+      .get() as {
+      comparable_count: number;
+      execution_count: number;
+      intervention_count: number;
+      regret_count: number;
+    };
+    expect(viewCounts).toEqual({
+      comparable_count: 1,
+      execution_count: 1,
+      intervention_count: 1,
+      regret_count: 1,
+    });
   });
 
   it('aggregates exclusion reasons for non-comparable learning cases', () => {

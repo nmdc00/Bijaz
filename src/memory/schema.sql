@@ -115,7 +115,7 @@ WHERE outcome_basis     = 'final'
 
 CREATE TABLE IF NOT EXISTS learning_cases (
     id TEXT PRIMARY KEY,
-    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality', 'thesis_quality')),
+    case_type TEXT NOT NULL CHECK(case_type IN ('comparable_forecast', 'execution_quality', 'thesis_quality', 'intervention_quality', 'regret_case')),
     domain TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
@@ -161,8 +161,18 @@ SELECT *
 FROM learning_cases
 WHERE case_type = 'thesis_quality';
 
+CREATE VIEW IF NOT EXISTS intervention_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'intervention_quality';
+
+CREATE VIEW IF NOT EXISTS regret_learning_cases AS
+SELECT *
+FROM learning_cases
+WHERE case_type = 'regret_case';
+
 -- ============================================================================
--- Canonical Trade Dossiers (v2.1)
+-- Canonical Trade Dossiers (v2.2)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS trade_dossiers (
@@ -174,12 +184,15 @@ CREATE TABLE IF NOT EXISTS trade_dossiers (
     execution_mode TEXT CHECK(execution_mode IN ('paper', 'live')),
     source_trade_id INTEGER,
     source_prediction_id TEXT,
+    source_hypothesis_id TEXT,
     proposal_record_id INTEGER,
     trigger_reason TEXT,
     opened_at TEXT,
     closed_at TEXT,
     dossier_payload TEXT,
     review_payload TEXT,
+    retrieval_payload TEXT,
+    policy_trace_payload TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT
 );
@@ -188,6 +201,105 @@ CREATE INDEX IF NOT EXISTS idx_trade_dossiers_symbol ON trade_dossiers(symbol);
 CREATE INDEX IF NOT EXISTS idx_trade_dossiers_status ON trade_dossiers(status);
 CREATE INDEX IF NOT EXISTS idx_trade_dossiers_trade ON trade_dossiers(source_trade_id);
 CREATE INDEX IF NOT EXISTS idx_trade_dossiers_prediction ON trade_dossiers(source_prediction_id);
+
+-- ============================================================================
+-- Trade Counterfactuals
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS trade_counterfactuals (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL,
+    counterfactual_type TEXT NOT NULL CHECK(counterfactual_type IN (
+        'no_trade',
+        'full_size',
+        'approved_size',
+        'delay_entry',
+        'invalidation_exit',
+        'ttl_exit',
+        'alternate_expression',
+        'leverage_cap'
+    )),
+    baseline_kind TEXT,
+    summary TEXT,
+    score REAL,
+    estimated_net_pnl_usd REAL,
+    estimated_r_multiple REAL,
+    value_add_usd REAL,
+    confidence REAL,
+    inputs_payload TEXT,
+    result_payload TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_counterfactuals_dossier ON trade_counterfactuals(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_trade_counterfactuals_type ON trade_counterfactuals(counterfactual_type);
+
+-- ============================================================================
+-- Trade Similarity Features
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS trade_similarity_features (
+    dossier_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    signal_class TEXT,
+    trade_archetype TEXT,
+    market_regime TEXT,
+    volatility_bucket TEXT,
+    liquidity_bucket TEXT,
+    entry_trigger TEXT,
+    news_subtype TEXT,
+    proxy_expression TEXT,
+    catalyst_freshness_bucket TEXT,
+    entry_extension_bucket TEXT,
+    portfolio_overlap_bucket TEXT,
+    gate_verdict TEXT,
+    failure_mode TEXT,
+    success_driver TEXT,
+    thesis_verdict TEXT,
+    entry_quality TEXT,
+    sizing_quality TEXT,
+    opportunity_rank REAL,
+    source_count INTEGER,
+    conflicting_evidence_count INTEGER,
+    execution_condition_bucket TEXT,
+    session_bucket TEXT,
+    regime_transition_flag INTEGER NOT NULL DEFAULT 0 CHECK(regime_transition_flag IN (0, 1)),
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_similarity_features_symbol ON trade_similarity_features(symbol);
+CREATE INDEX IF NOT EXISTS idx_trade_similarity_features_signal_class ON trade_similarity_features(signal_class);
+CREATE INDEX IF NOT EXISTS idx_trade_similarity_features_archetype ON trade_similarity_features(trade_archetype);
+CREATE INDEX IF NOT EXISTS idx_trade_similarity_features_regime ON trade_similarity_features(market_regime);
+CREATE INDEX IF NOT EXISTS idx_trade_similarity_features_gate_verdict ON trade_similarity_features(gate_verdict);
+
+-- ============================================================================
+-- Trade Policy Adjustments
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS trade_policy_adjustments (
+    id TEXT PRIMARY KEY,
+    policy_domain TEXT NOT NULL,
+    policy_key TEXT NOT NULL,
+    scope_payload TEXT,
+    adjustment_type TEXT NOT NULL,
+    old_value REAL,
+    new_value REAL,
+    delta REAL,
+    evidence_count INTEGER,
+    evidence_window_start TEXT,
+    evidence_window_end TEXT,
+    reason_summary TEXT,
+    confidence REAL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+    created_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_policy_adjustments_domain_key
+    ON trade_policy_adjustments(policy_domain, policy_key);
+CREATE INDEX IF NOT EXISTS idx_trade_policy_adjustments_active
+    ON trade_policy_adjustments(active, created_at);
 
 -- ============================================================================
 -- Calibration Cache
