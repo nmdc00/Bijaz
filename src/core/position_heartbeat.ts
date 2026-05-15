@@ -20,7 +20,12 @@ import {
 } from '../memory/position_exit_policy.js';
 import type { LlmExitConsultant } from './llm_exit_consultant.js';
 import { PositionBook, type BookEntry } from './position_book.js';
-import { evaluateExitContract, parseExitContract } from './exit_contract.js';
+import {
+  buildLegacyExitContract,
+  evaluateExitContract,
+  parseExitContract,
+  serializeExitContract,
+} from './exit_contract.js';
 
 type ToolExecutorFn = (
   toolName: string,
@@ -190,14 +195,48 @@ export class PositionHeartbeatService {
               await this.executePolicyClose(pos, 'thesis_time_stop → llm_exit_consultant: close', liqDistPct, nowIso);
               try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
             } else if (decision.action === 'extend_ttl' && decision.newTimeStopAtMs != null) {
-              upsertPositionExitPolicy(pos.symbol, pos.side, decision.newTimeStopAtMs, policy.invalidationPrice ?? null, policy.notes ?? null);
+              const boundedTtl = resolveBoundedTtlExtension(bookEntry, decision.newTimeStopAtMs, nowMs);
+              if (boundedTtl.action === 'close') {
+                await this.executePolicyClose(pos, boundedTtl.reason, liqDistPct, nowIso);
+                try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+              } else {
+                upsertPositionExitPolicy(
+                  pos.symbol,
+                  pos.side,
+                  boundedTtl.timeStopAtMs,
+                  policy.invalidationPrice ?? null,
+                  policy.notes ?? null
+                );
+              }
             } else if (decision.action === 'update_invalidation' && decision.newInvalidationPrice != null) {
-              const extendMs = nowMs + 4 * 60 * 60 * 1000;
-              upsertPositionExitPolicy(pos.symbol, pos.side, extendMs, decision.newInvalidationPrice, policy.notes ?? null);
+              const boundedTtl = resolveBoundedTtlExtension(bookEntry, nowMs + 4 * 60 * 60 * 1000, nowMs);
+              if (boundedTtl.action === 'close') {
+                await this.executePolicyClose(pos, boundedTtl.reason, liqDistPct, nowIso);
+                try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+              } else {
+                upsertPositionExitPolicy(
+                  pos.symbol,
+                  pos.side,
+                  boundedTtl.timeStopAtMs,
+                  decision.newInvalidationPrice,
+                  buildUpdatedExitPolicyNotes(bookEntry, pos.side, decision.newInvalidationPrice)
+                );
+              }
             } else {
               // hold or reduce — extend TTL by 4 h so the next tick doesn't re-fire immediately
-              const extendMs = nowMs + 4 * 60 * 60 * 1000;
-              upsertPositionExitPolicy(pos.symbol, pos.side, extendMs, policy.invalidationPrice ?? null, policy.notes ?? null);
+              const boundedTtl = resolveBoundedTtlExtension(bookEntry, nowMs + 4 * 60 * 60 * 1000, nowMs);
+              if (boundedTtl.action === 'close') {
+                await this.executePolicyClose(pos, boundedTtl.reason, liqDistPct, nowIso);
+                try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+              } else {
+                upsertPositionExitPolicy(
+                  pos.symbol,
+                  pos.side,
+                  boundedTtl.timeStopAtMs,
+                  policy.invalidationPrice ?? null,
+                  policy.notes ?? null
+                );
+              }
             }
             handled = true;
           } catch (err) {
@@ -206,9 +245,24 @@ export class PositionHeartbeatService {
         }
         if (!handled) {
           // No consultant or LLM unavailable — extend TTL rather than closing.
-          const extendMs = nowMs + 4 * 60 * 60 * 1000;
-          try { upsertPositionExitPolicy(pos.symbol, pos.side, extendMs, policy.invalidationPrice ?? null, policy.notes ?? null); } catch { /* best-effort */ }
-          this.logger.info(`PositionHeartbeat: TTL expired for ${pos.symbol} — no consultant available, extended TTL 4 h`);
+          const boundedTtl = resolveBoundedTtlExtension(bookEntry, nowMs + 4 * 60 * 60 * 1000, nowMs);
+          if (boundedTtl.action === 'close') {
+            await this.executePolicyClose(pos, boundedTtl.reason, liqDistPct, nowIso);
+            try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+          } else {
+            try {
+              upsertPositionExitPolicy(
+                pos.symbol,
+                pos.side,
+                boundedTtl.timeStopAtMs,
+                policy.invalidationPrice ?? null,
+                policy.notes ?? null
+              );
+            } catch { /* best-effort */ }
+            this.logger.info(
+              `PositionHeartbeat: TTL expired for ${pos.symbol} — no consultant available, extended TTL within cap`
+            );
+          }
         }
         continue;
       }
@@ -279,20 +333,36 @@ export class PositionHeartbeatService {
                 );
               }
             } else if (decision.action === 'extend_ttl' && decision.newTimeStopAtMs != null) {
+              const boundedTtl = resolveBoundedTtlExtension(bookEntry, decision.newTimeStopAtMs, nowMs);
+              if (boundedTtl.action === 'close') {
+                await this.executePolicyClose(pos, boundedTtl.reason, liqDistPct, nowIso);
+                try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+                continue;
+              }
               upsertPositionExitPolicy(
                 pos.symbol,
                 pos.side,
-                decision.newTimeStopAtMs,
+                boundedTtl.timeStopAtMs,
                 policy?.invalidationPrice ?? null,
                 policy?.notes ?? null
               );
             } else if (decision.action === 'update_invalidation' && decision.newInvalidationPrice != null) {
+              const boundedTtl = resolveBoundedTtlExtension(
+                bookEntry,
+                bookEntry.thesisExpiresAtMs,
+                nowMs
+              );
+              if (boundedTtl.action === 'close') {
+                await this.executePolicyClose(pos, boundedTtl.reason, liqDistPct, nowIso);
+                try { clearPositionExitPolicy(pos.symbol); } catch { /* best-effort */ }
+                continue;
+              }
               upsertPositionExitPolicy(
                 pos.symbol,
                 pos.side,
-                bookEntry.thesisExpiresAtMs,
+                boundedTtl.timeStopAtMs,
                 decision.newInvalidationPrice,
-                policy?.notes ?? null
+                buildUpdatedExitPolicyNotes(bookEntry, pos.side, decision.newInvalidationPrice)
               );
             }
             // 'hold' → do nothing
@@ -698,6 +768,53 @@ function resolveAction(
   }
   // Positive PnL shift or volatility spike → reduce by half.
   return 'reduce';
+}
+
+function resolveMaxLifecycleDurationMs(tradeType: string | null | undefined): number {
+  switch (tradeType) {
+    case 'scalp':
+      return 90 * 60 * 1000;
+    case 'structural':
+      return 48 * 60 * 60 * 1000;
+    case 'tactical':
+    default:
+      return 6 * 60 * 60 * 1000;
+  }
+}
+
+function resolveBoundedTtlExtension(
+  position: Pick<BookEntry, 'exitContract' | 'entryAtMs'> | undefined,
+  requestedStopAtMs: number,
+  nowMs: number
+): { action: 'extend'; timeStopAtMs: number } | { action: 'close'; reason: string } {
+  const tradeType = position?.exitContract?.tradeType ?? 'tactical';
+  const entryMs = position?.entryAtMs ?? nowMs;
+  const maxStopAtMs = entryMs + resolveMaxLifecycleDurationMs(tradeType);
+  const boundedStopAtMs = Math.min(requestedStopAtMs, maxStopAtMs);
+  if (!Number.isFinite(boundedStopAtMs) || boundedStopAtMs <= nowMs) {
+    return { action: 'close', reason: `ttl_cap_reached (${tradeType})` };
+  }
+  return { action: 'extend', timeStopAtMs: boundedStopAtMs };
+}
+
+function buildUpdatedExitPolicyNotes(
+  position: BookEntry,
+  side: 'long' | 'short',
+  invalidationPrice: number
+): string {
+  const tradeType = position.exitContract?.tradeType ?? 'tactical';
+  const thesis =
+    position.exitContract?.thesis?.trim() ||
+    position.entryReasoningText?.trim() ||
+    `${position.symbol} ${side} thesis`;
+  return serializeExitContract(
+    buildLegacyExitContract({
+      thesis,
+      invalidationPrice,
+      side,
+      tradeType,
+    })
+  );
 }
 
 async function retryWithBackoff<T>(fn: () => Promise<T>, attempts: number): Promise<T> {
