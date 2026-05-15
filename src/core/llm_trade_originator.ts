@@ -247,6 +247,146 @@ function parseProposal(raw: string): TradeProposal | null {
   }
 }
 
+function normalizeComparableSymbol(symbol: string): string {
+  return String(symbol ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\/USDT$/i, '')
+    .replace(/\/USD$/i, '')
+    .replace(/^XYZ:/i, '');
+}
+
+function findSnapshotPrice(proposal: TradeProposal, snapshots: TaSnapshot[]): number | null {
+  const proposalSymbol = normalizeComparableSymbol(proposal.symbol);
+  const match = snapshots.find((snapshot) => normalizeComparableSymbol(snapshot.symbol) === proposalSymbol);
+  return match && Number.isFinite(match.price) && match.price > 0 ? match.price : null;
+}
+
+function resolveTtlBoundsMinutes(
+  tradeType: TradeProposal['tradeType']
+): { min: number; max: number } {
+  switch (tradeType) {
+    case 'scalp':
+      return { min: 5, max: 90 };
+    case 'structural':
+      return { min: 60, max: 48 * 60 };
+    case 'tactical':
+    default:
+      return { min: 15, max: 6 * 60 };
+  }
+}
+
+function resolveMaxStopDistance(
+  tradeType: TradeProposal['tradeType']
+): number {
+  switch (tradeType) {
+    case 'scalp':
+      return 0.03;
+    case 'structural':
+      return 0.35;
+    case 'tactical':
+    default:
+      return 0.12;
+  }
+}
+
+function validateProposalAgainstMarketContext(
+  proposal: TradeProposal,
+  snapshots: TaSnapshot[]
+): TradeProposal | null {
+  if (!Number.isFinite(proposal.invalidationPrice) || proposal.invalidationPrice <= 0) {
+    logger.warn('LlmTradeOriginator: proposal rejected by invalidation_price_validation', {
+      symbol: proposal.symbol,
+      invalidationPrice: proposal.invalidationPrice,
+      reason: 'non_positive_or_non_finite',
+    });
+    return null;
+  }
+
+  if (!Number.isFinite(proposal.suggestedTtlMinutes) || proposal.suggestedTtlMinutes <= 0) {
+    logger.warn('LlmTradeOriginator: proposal rejected by ttl_validation', {
+      symbol: proposal.symbol,
+      suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+      reason: 'non_positive_or_non_finite',
+    });
+    return null;
+  }
+
+  const ttlBounds = resolveTtlBoundsMinutes(proposal.tradeType);
+  if (
+    proposal.suggestedTtlMinutes < ttlBounds.min ||
+    proposal.suggestedTtlMinutes > ttlBounds.max
+  ) {
+    logger.warn('LlmTradeOriginator: proposal rejected by ttl_validation', {
+      symbol: proposal.symbol,
+      tradeType: proposal.tradeType,
+      suggestedTtlMinutes: proposal.suggestedTtlMinutes,
+      bounds: ttlBounds,
+    });
+    return null;
+  }
+
+  const snapshotPrice = findSnapshotPrice(proposal, snapshots);
+  if (snapshotPrice == null) {
+    return proposal;
+  }
+
+  const invalidationOnWrongSide =
+    proposal.side === 'long'
+      ? proposal.invalidationPrice >= snapshotPrice
+      : proposal.invalidationPrice <= snapshotPrice;
+  if (invalidationOnWrongSide) {
+    logger.warn('LlmTradeOriginator: proposal rejected by invalidation_side_validation', {
+      symbol: proposal.symbol,
+      side: proposal.side,
+      invalidationPrice: proposal.invalidationPrice,
+      snapshotPrice,
+    });
+    return null;
+  }
+
+  const stopDistance = Math.abs(snapshotPrice - proposal.invalidationPrice) / snapshotPrice;
+  if (!Number.isFinite(stopDistance) || stopDistance < 0.001) {
+    logger.warn('LlmTradeOriginator: proposal rejected by stop_distance_validation', {
+      symbol: proposal.symbol,
+      side: proposal.side,
+      invalidationPrice: proposal.invalidationPrice,
+      snapshotPrice,
+      stopDistance,
+      reason: 'too_tight_or_non_finite',
+    });
+    return null;
+  }
+
+  const maxStopDistance = resolveMaxStopDistance(proposal.tradeType);
+  if (stopDistance > maxStopDistance) {
+    logger.warn('LlmTradeOriginator: proposal rejected by stop_distance_validation', {
+      symbol: proposal.symbol,
+      side: proposal.side,
+      tradeType: proposal.tradeType,
+      invalidationPrice: proposal.invalidationPrice,
+      snapshotPrice,
+      stopDistance,
+      maxStopDistance,
+      reason: 'too_wide',
+    });
+    return null;
+  }
+
+  const leverageCeiling = 0.7 / stopDistance;
+  if (proposal.leverage > leverageCeiling) {
+    logger.warn('LlmTradeOriginator: proposal rejected by leverage_validation', {
+      symbol: proposal.symbol,
+      leverage: proposal.leverage,
+      leverageCeiling,
+      stopDistance,
+    });
+    return null;
+  }
+
+  return proposal;
+}
+
 export class LlmTradeOriginator {
   private contextCache: { key: string; value: string; expiresAt: number } | null = null;
 
@@ -363,6 +503,10 @@ export class LlmTradeOriginator {
         minConfidence,
       });
       proposal = null;
+    }
+
+    if (proposal !== null) {
+      proposal = validateProposalAgainstMarketContext(proposal, effectiveBundle.taSnapshots);
     }
 
     // Write to DB

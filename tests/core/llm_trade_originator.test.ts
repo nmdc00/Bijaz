@@ -9,7 +9,7 @@
  * 5. Returns null when main LLM throws (fallback also fails) — no crash
  * 6. Fallback LLM is tried when main LLM times out/fails
  * 7. DB write (recordTradeProposal) is called for both null and non-null results
- * 8. invalidationPrice: null is accepted (optional field)
+ * 8. invalidationPrice is required and market-sane
  * 9. Market context is cached — second call within 10 min does NOT call gatherMarketContext again
  */
 
@@ -174,7 +174,7 @@ describe('LlmTradeOriginator', () => {
         side: 'short',
         thesisText: 'OI spiked negative, funding extreme',
         invalidationCondition: 'Break above $8 with volume',
-        invalidationPrice: 8.0,
+        invalidationPrice: 6.8,
         suggestedTtlMinutes: 60,
         confidence: 0.65,
         leverage: 2,
@@ -182,10 +182,31 @@ describe('LlmTradeOriginator', () => {
       });
       const mainLlm = makeLlmClient(shortProposal);
       const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
-      const result = await originator.propose(makeBundle());
+      const result = await originator.propose(
+        makeBundle({
+          taSnapshots: [
+            {
+              symbol: 'HYPE',
+              price: 7.2,
+              priceVs24hHigh: -0.5,
+              priceVs24hLow: 2.1,
+              oiUsd: 500_000_000,
+              oiDelta1hPct: 3.2,
+              oiDelta4hPct: 1.1,
+              fundingRatePct: 12,
+              volumeVs24hAvgPct: 89,
+              priceVsEma20_1h: 0.4,
+              trendBias: 'up',
+            },
+          ],
+        })
+      );
 
-      expect(result!.side).toBe('short');
-      expect(result!.symbol).toBe('HYPE');
+      expect(result).toBeNull();
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining('invalidation_side_validation'),
+        expect.objectContaining({ symbol: 'HYPE', side: 'short' })
+      );
     });
   });
 
@@ -434,6 +455,78 @@ describe('LlmTradeOriginator', () => {
       expect(result).not.toBeNull();
       expect(result!.invalidationPrice).toBe(140);
       expect(result!.expectedRMultiple).toBe(2.5);
+    });
+
+    it('returns null when invalidation is on the wrong side of market price', async () => {
+      const proposal = JSON.stringify({
+        symbol: 'BTC',
+        side: 'long',
+        thesisText: 'Breakout continuation',
+        invalidationCondition: 'Below entry',
+        invalidationPrice: 66000,
+        suggestedTtlMinutes: 90,
+        confidence: 0.7,
+        leverage: 2,
+        expectedRMultiple: 2.1,
+      });
+      const mainLlm = makeLlmClient(proposal);
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+
+      const result = await originator.propose(makeBundle());
+
+      expect(result).toBeNull();
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining('invalidation_side_validation'),
+        expect.objectContaining({ symbol: 'BTC', side: 'long', invalidationPrice: 66000 })
+      );
+    });
+
+    it('returns null when stop distance is implausibly wide for tactical trades', async () => {
+      const proposal = JSON.stringify({
+        symbol: 'BTC',
+        side: 'long',
+        thesisText: 'Weakly defined swing',
+        invalidationCondition: 'Lose the whole move',
+        invalidationPrice: 40000,
+        suggestedTtlMinutes: 120,
+        confidence: 0.66,
+        leverage: 1,
+        expectedRMultiple: 2.0,
+      });
+      const mainLlm = makeLlmClient(proposal);
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+
+      const result = await originator.propose(makeBundle());
+
+      expect(result).toBeNull();
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining('stop_distance_validation'),
+        expect.objectContaining({ symbol: 'BTC', tradeType: 'tactical', reason: 'too_wide' })
+      );
+    });
+
+    it('returns null when TTL exceeds trade-type bounds', async () => {
+      const proposal = JSON.stringify({
+        symbol: 'BTC',
+        side: 'long',
+        thesisText: 'Too slow for tactical',
+        invalidationCondition: 'Break below 63k',
+        invalidationPrice: 63000,
+        suggestedTtlMinutes: 800,
+        confidence: 0.7,
+        leverage: 2,
+        expectedRMultiple: 2.4,
+      });
+      const mainLlm = makeLlmClient(proposal);
+      const originator = new LlmTradeOriginator(mainLlm, makeLlmClient('null'), dummyConfig);
+
+      const result = await originator.propose(makeBundle());
+
+      expect(result).toBeNull();
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining('ttl_validation'),
+        expect.objectContaining({ symbol: 'BTC', tradeType: 'tactical', suggestedTtlMinutes: 800 })
+      );
     });
   });
 
