@@ -58,6 +58,7 @@ import { isSuppressed } from '../memory/signal_class_suppression.js';
 import { createLearningCase } from '../memory/learning_cases.js';
 import { getSignalWeights } from '../memory/learning.js';
 import { upsertTradeDossier } from '../memory/trade_dossiers.js';
+import { storeDecisionArtifact } from '../memory/decision_artifacts.js';
 import { searchHistoricalCases } from '../events/casebase.js';
 import { executeToolCall } from './tool-executor.js';
 import { buildOriginationEventContext, resolveOriginationContextDomain } from './origination_context.js';
@@ -103,6 +104,123 @@ function formatTradeSimilaritySummary(summary: TradeSimilaritySummary): string {
     `avoidTags=${avoidTags}`,
     `lessons=${lessons}`,
   ].join(' ; ');
+}
+
+function buildRetrievalSection(
+  summary: TradeSimilaritySummary,
+  summaryText: string
+): Record<string, unknown> {
+  return {
+    retrievalVersion: 'v2.2',
+    candidateCount: summary.stats.sampleSize,
+    nearestWins: summary.topMatches
+      .filter((match) => (match.realizedPnlUsd ?? 0) > 0)
+      .slice(0, 3)
+      .map((match) => match.dossierId),
+    nearestLosses: summary.topMatches
+      .filter((match) => (match.realizedPnlUsd ?? 0) < 0)
+      .slice(0, 3)
+      .map((match) => match.dossierId),
+    nearestExecutionMistakes: summary.topMatches
+      .filter((match) => match.review.entryQuality === 'poor' || match.review.exitQuality === 'poor')
+      .slice(0, 3)
+      .map((match) => match.dossierId),
+    nearestThesisMistakes: summary.topMatches
+      .filter((match) => match.thesisVerdict === 'incorrect')
+      .slice(0, 3)
+      .map((match) => match.dossierId),
+    nearestGateValueAddCases: summary.topMatches
+      .filter(
+        (match) =>
+          (match.interventionScore ?? -1) >= 0.1 ||
+          match.review.gateInterventionQuality === 'strong'
+      )
+      .slice(0, 3)
+      .map((match) => match.dossierId),
+    retrievedSummary: summaryText,
+  };
+}
+
+function buildPolicyTrace(params: {
+  stage: string;
+  requestedNotionalUsd: number | null;
+  approvedNotionalUsd: number | null;
+  requestedLeverage: number | null;
+  approvedLeverage: number | null;
+  gateVerdict: string | null;
+  gateReasonCode: string | null;
+  gateReasoning?: string | null;
+  policyReasonCode?: string | null;
+  policyReason?: string | null;
+  policySizeMultiplier?: number | null;
+  retrievalRecommendation?: string | null;
+  blockedReason?: string | null;
+}): Record<string, unknown> {
+  const sizeHaircut =
+    params.requestedNotionalUsd != null &&
+    params.requestedNotionalUsd > 0 &&
+    params.approvedNotionalUsd != null
+      ? Math.max(0, 1 - params.approvedNotionalUsd / params.requestedNotionalUsd)
+      : null;
+  const leverageCap =
+    params.requestedLeverage != null &&
+    params.requestedLeverage > 0 &&
+    params.approvedLeverage != null &&
+    params.approvedLeverage < params.requestedLeverage
+      ? params.approvedLeverage
+      : null;
+  return {
+    activePolicies: [
+      'retrieval_similarity',
+      params.policyReasonCode ? 'adaptive_policy' : null,
+      params.gateVerdict != null ? 'llm_entry_gate' : null,
+    ].filter((value): value is string => Boolean(value)),
+    activeAdjustmentIds: [
+      params.policyReasonCode ?? null,
+      params.gateReasonCode ?? null,
+      params.retrievalRecommendation ? `retrieval:${params.retrievalRecommendation}` : null,
+    ].filter((value): value is string => Boolean(value)),
+    sizeHaircuts: sizeHaircut != null ? [sizeHaircut] : [],
+    leverageCaps: leverageCap != null ? [leverageCap] : [],
+    confirmationRequirements: [],
+    confidencePenalties: [],
+    triggeredCooldowns: [],
+    preAdjustmentSize: params.requestedNotionalUsd,
+    postAdjustmentSize: params.approvedNotionalUsd,
+    preAdjustmentLeverage: params.requestedLeverage,
+    postAdjustmentLeverage: params.approvedLeverage,
+    retrievalChangedVerdict:
+      params.retrievalRecommendation === 'size_reduction'
+        ? params.gateVerdict === 'reject' || (sizeHaircut ?? 0) > 0
+        : false,
+    adaptationChangedOutcome:
+      params.blockedReason != null ||
+      params.gateVerdict === 'reject' ||
+      (sizeHaircut ?? 0) > 0 ||
+      leverageCap != null,
+    stage: params.stage,
+    blockedReason: params.blockedReason ?? null,
+    gateReasoning: params.gateReasoning ?? null,
+    policyReason: params.policyReason ?? null,
+  };
+}
+
+function persistAdaptiveDecisionTrace(params: {
+  symbol: string;
+  confidence: number | null;
+  outcome: 'executed' | 'blocked' | 'pending' | 'failed';
+  payload: Record<string, unknown>;
+  notes?: Record<string, unknown> | null;
+}): void {
+  storeDecisionArtifact({
+    source: 'autonomous',
+    kind: 'adaptive_pre_execution_trace',
+    marketId: params.symbol,
+    outcome: params.outcome,
+    confidence: params.confidence,
+    payload: params.payload,
+    notes: params.notes ?? null,
+  });
 }
 
 function buildSimilarityContextForMarkets(input: {
@@ -832,6 +950,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       limit: 5,
     });
     const proposalSimilaritySummary = formatTradeSimilaritySummary(proposalSimilarity);
+    const proposalRetrieval = buildRetrievalSection(proposalSimilarity, proposalSimilaritySummary);
+    const requestedProbeUsd = probeUsd;
+    const requestedLeverage = targetLeverage;
 
     const gateCandidate = {
       symbol,
@@ -853,6 +974,7 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
 
     let originatorGateVerdict: 'approve' | 'reject' | 'resize' | null = null;
     let originatorGateReasonCode: string | null = null;
+    let originatorGateReasoning: string | null = null;
     if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
       if (proposal.proposalRecordId != null) {
         updateTradeProposalStatus(proposal.proposalRecordId, {
@@ -864,11 +986,114 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
       originatorGateVerdict = gateDecision.verdict;
       originatorGateReasonCode = gateDecision.reasonCode ?? null;
+      originatorGateReasoning = gateDecision.reasoning ?? null;
       if (gateDecision.verdict === 'reject') {
+        const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+        const policyTrace = buildPolicyTrace({
+          stage: 'entry_gate_rejected',
+          requestedNotionalUsd: requestedProbeUsd,
+          approvedNotionalUsd: null,
+          requestedLeverage,
+          approvedLeverage: targetLeverage,
+          gateVerdict: originatorGateVerdict,
+          gateReasonCode: originatorGateReasonCode,
+          gateReasoning: gateDecision.reasoning,
+          retrievalRecommendation: proposalSimilarity.recommendation,
+          blockedReason: gateDecision.reasoning,
+        });
+        const blockedPayload = {
+          version: 'v2.2',
+          thesis: {
+            reasoning: proposal.thesisText,
+            invalidationPrice: proposal.invalidationPrice,
+            thesisConfidence: proposal.confidence,
+            uncertaintySummary: null,
+          },
+          context: {
+            signalClass: 'llm_originator',
+            symbolClass: inferSymbolClass(symbol),
+            marketRegime: 'unknown',
+            session: sessionContext.session,
+            triggerReason: triggerResult.reason,
+            entryStretchPct: proposalEntryStretchPct,
+          },
+          request: {
+            requestedSize: requestedProbeUsd,
+            requestedLeverage,
+            requestedNotionalUsd: requestedProbeUsd,
+          },
+          gate: {
+            verdict: originatorGateVerdict,
+            reasonCode: originatorGateReasonCode,
+            requestedSize: requestedProbeUsd,
+            approvedSize: null,
+            requestedLeverage,
+            approvedLeverage: targetLeverage,
+            interventionType: 'reject',
+            interventionSummary: gateDecision.reasoning,
+          },
+          execution: {
+            tradeId: null,
+            side,
+            size: markPrice > 0 ? requestedProbeUsd / markPrice : requestedProbeUsd,
+            fillPrice: markPrice || null,
+            executionMessage: gateDecision.reasoning,
+            estimatedNotionalUsd: requestedProbeUsd,
+          },
+          review: null,
+          counterfactual_summary: null,
+          retrieval: proposalRetrieval,
+          policy_trace: policyTrace,
+          regret: {
+            missedOpportunityFlag: null,
+            blockedWinnerFlag: null,
+            approvedLoserFlag: false,
+            resizeHelpedFlag: null,
+            resizeHurtFlag: null,
+          },
+        } satisfies Record<string, unknown>;
+        persistAdaptiveDecisionTrace({
+          symbol,
+          confidence: proposal.confidence,
+          outcome: 'blocked',
+          payload: {
+            stage: 'originator_entry_gate',
+            symbol,
+            triggerReason: triggerResult.reason,
+            originalRequest: {
+              notionalUsd: requestedProbeUsd,
+              leverage: requestedLeverage,
+              side,
+            },
+            retrieval: proposalRetrieval,
+            policyTrace,
+            finalRequest: null,
+            finalRejectReason: gateDecision.reasoning,
+          },
+          notes: {
+            signalClass: 'llm_originator',
+            dossierStatus: 'closed',
+          },
+        });
+        try {
+          upsertTradeDossier({
+            symbol,
+            status: 'closed',
+            direction: proposal.side === 'long' ? 'long' : 'short',
+            strategySource: 'autonomous_originator',
+            executionMode,
+            proposalRecordId: proposal.proposalRecordId ?? null,
+            triggerReason: triggerResult.reason,
+            openedAt: new Date().toISOString(),
+            closedAt: new Date().toISOString(),
+            dossier: blockedPayload,
+            review: null,
+          });
+        } catch { /* best-effort */ }
         try {
           recordPerpTradeJournal({
             kind: 'perp_trade_journal',
-            execution_mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+            execution_mode: executionMode,
             tradeId: null,
             symbol,
             side,
@@ -916,6 +1141,42 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
     }
 
     let size = markPrice > 0 ? probeUsd / markPrice : probeUsd;
+    const originatorPolicyTrace = buildPolicyTrace({
+      stage: originatorGateVerdict === 'resize' ? 'entry_gate_resized' : 'entry_gate_approved',
+      requestedNotionalUsd: requestedProbeUsd,
+      approvedNotionalUsd: probeUsd,
+      requestedLeverage,
+      approvedLeverage: targetLeverage,
+      gateVerdict: originatorGateVerdict,
+      gateReasonCode: originatorGateReasonCode,
+      gateReasoning: originatorGateReasoning,
+      retrievalRecommendation: proposalSimilarity.recommendation,
+    });
+    const originatorExecutionTrace = {
+      stage: 'originator_pre_execution',
+      symbol,
+      triggerReason: triggerResult.reason,
+      originalRequest: {
+        notionalUsd: requestedProbeUsd,
+        leverage: requestedLeverage,
+        side,
+      },
+      retrieval: proposalRetrieval,
+      policyTrace: originatorPolicyTrace,
+      finalRequest: {
+        notionalUsd: probeUsd,
+        leverage: targetLeverage,
+        side,
+      },
+      finalRejectReason: null,
+    } satisfies Record<string, unknown>;
+    persistAdaptiveDecisionTrace({
+      symbol,
+      confidence: proposal.confidence,
+      outcome: 'pending',
+      payload: originatorExecutionTrace,
+      notes: { signalClass: 'llm_originator' },
+    });
 
     const decision: TradeDecision = {
       action: side,
@@ -984,11 +1245,16 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           triggerReason: triggerResult.reason,
           openedAt: new Date().toISOString(),
           dossier: {
-            version: 'v2.1',
+            version: 'v2.2',
             thesis: {
+              reasoning: proposal.thesisText,
+              expectedEdge: 0.1,
+              invalidationPrice: proposal.invalidationPrice,
+              timeStopAtMs: now + proposal.suggestedTtlMinutes * 60_000,
+              thesisConfidence: proposal.confidence,
+              uncertaintySummary: null,
               thesisText: proposal.thesisText,
               invalidationCondition: proposal.invalidationCondition,
-              invalidationPrice: proposal.invalidationPrice,
               suggestedTtlMinutes: proposal.suggestedTtlMinutes,
               tradeType: proposal.tradeType ?? null,
               expectedRMultiple: proposal.expectedRMultiple ?? null,
@@ -1003,13 +1269,22 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               entryStretchPct: proposalEntryStretchPct,
               similarity: proposalSimilarity,
             },
+            request: {
+              requestedSize: requestedProbeUsd,
+              requestedLeverage,
+              requestedNotionalUsd: requestedProbeUsd,
+            },
             gate: {
               verdict: originatorGateVerdict,
               reasonCode: originatorGateReasonCode,
+              requestedSize: gateCandidate.notionalUsd,
+              approvedSize: probeUsd,
               requestedNotionalUsd: gateCandidate.notionalUsd,
               approvedNotionalUsd: probeUsd,
-              requestedLeverage: proposal.leverage,
+              requestedLeverage,
               approvedLeverage: targetLeverage,
+              interventionType: originatorGateVerdict === 'resize' ? 'resize' : 'approve',
+              interventionSummary: originatorGateReasoning,
               historicalSimilarity: proposalSimilaritySummary,
             },
             execution: {
@@ -1021,6 +1296,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
               orderId: tradeResult.orderId ?? null,
               executionMessage: tradeResult.message,
               entryStretchPct: proposalEntryStretchPct,
+            },
+            review: null,
+            counterfactual_summary: null,
+            retrieval: proposalRetrieval,
+            policy_trace: originatorPolicyTrace,
+            regret: {
+              missedOpportunityFlag: null,
+              blockedWinnerFlag: null,
+              approvedLoserFlag: null,
+              resizeHelpedFlag: originatorGateVerdict === 'resize' ? null : false,
+              resizeHurtFlag: originatorGateVerdict === 'resize' ? null : false,
             },
             exitPlan: {
               invalidationPrice: proposal.invalidationPrice,
@@ -1370,6 +1656,37 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         broadMarketPosture,
       });
       if (!globalGate.allowed) {
+        const blockedPolicyTrace = buildPolicyTrace({
+          stage: 'policy_gate_blocked',
+          requestedNotionalUsd: Number.isFinite(expr.probeSizeUsd) ? expr.probeSizeUsd : null,
+          approvedNotionalUsd: null,
+          requestedLeverage: expr.leverage,
+          approvedLeverage: null,
+          gateVerdict: 'reject',
+          gateReasonCode: globalGate.reasonCode ?? null,
+          policyReasonCode: globalGate.reasonCode ?? null,
+          policyReason: globalGate.reason ?? null,
+          blockedReason: globalGate.reason ?? 'policy gate',
+        });
+        persistAdaptiveDecisionTrace({
+          symbol,
+          confidence: confidenceWeighted,
+          outcome: 'blocked',
+          payload: {
+            stage: 'quant_pre_execution',
+            symbol,
+            originalRequest: {
+              notionalUsd: Number.isFinite(expr.probeSizeUsd) ? expr.probeSizeUsd : null,
+              leverage: expr.leverage,
+              side: expr.side,
+            },
+            retrieval: null,
+            policyTrace: blockedPolicyTrace,
+            finalRequest: null,
+            finalRejectReason: globalGate.reason ?? 'policy gate',
+          },
+          notes: { signalClass, regime },
+        });
         outputs.push(`${symbol}: Blocked (${globalGate.reason ?? 'policy gate'})`);
         continue;
       }
@@ -1494,6 +1811,9 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
         limit: 5,
       });
       const quantSimilaritySummary = formatTradeSimilaritySummary(quantSimilarity);
+      const quantRetrieval = buildRetrievalSection(quantSimilarity, quantSimilaritySummary);
+      const requestedProbeUsd = probeUsd;
+      const requestedLeverage = targetLeverage;
       const gateCandidate = {
         symbol,
         side: expr.side,
@@ -1510,15 +1830,122 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
       let gateStopLevelPrice: number | null = null;
       let entryGateVerdict: 'approve' | 'reject' | 'resize' | null = null;
       let entryGateReasonCode: string | null = null;
+      let entryGateReasoning: string | null = null;
       if (this.thufirConfig.autonomy?.llmEntryGate?.enabled !== false) {
         const gateDecision = await this.entryGate.evaluate(gateCandidate, markPrice);
         entryGateVerdict = gateDecision.verdict;
         entryGateReasonCode = gateDecision.reasonCode ?? null;
+        entryGateReasoning = gateDecision.reasoning ?? null;
         if (gateDecision.verdict === 'reject') {
+          const executionMode = this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper';
+          const policyTrace = buildPolicyTrace({
+            stage: 'entry_gate_rejected',
+            requestedNotionalUsd: requestedProbeUsd,
+            approvedNotionalUsd: null,
+            requestedLeverage,
+            approvedLeverage: targetLeverage,
+            gateVerdict: entryGateVerdict,
+            gateReasonCode: entryGateReasonCode,
+            gateReasoning: entryGateReasoning,
+            policyReasonCode: globalGate.reasonCode ?? null,
+            policyReason: globalGate.reason ?? null,
+            policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
+            retrievalRecommendation: quantSimilarity.recommendation,
+            blockedReason: gateDecision.reasoning,
+          });
+          const blockedPayload = {
+            version: 'v2.2',
+            thesis: {
+              reasoning: expr.expectedMove ?? null,
+              expectedEdge: expr.expectedEdge,
+              invalidationPrice: null,
+              timeStopAtMs: expr.newsTrigger?.expiresAtMs ?? null,
+              thesisConfidence: confidenceWeighted,
+              uncertaintySummary: null,
+            },
+            context: {
+              signalClass,
+              symbolClass: inferSymbolClass(symbol),
+              marketRegime: regime,
+              volatilityBucket,
+              liquidityBucket,
+              session: sessionContext.session,
+              triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+              similarity: quantSimilarity,
+            },
+            request: {
+              requestedSize: requestedProbeUsd,
+              requestedLeverage,
+              requestedNotionalUsd: requestedProbeUsd,
+            },
+            gate: {
+              verdict: entryGateVerdict,
+              reasonCode: entryGateReasonCode,
+              requestedSize: requestedProbeUsd,
+              approvedSize: null,
+              requestedLeverage,
+              approvedLeverage: targetLeverage,
+              interventionType: 'reject',
+              interventionSummary: gateDecision.reasoning,
+            },
+            execution: {
+              tradeId: null,
+              side: expr.side,
+              size,
+              fillPrice: markPrice || null,
+              executionMessage: gateDecision.reasoning,
+              estimatedNotionalUsd: requestedProbeUsd,
+            },
+            review: null,
+            counterfactual_summary: null,
+            retrieval: quantRetrieval,
+            policy_trace: policyTrace,
+            regret: {
+              missedOpportunityFlag: null,
+              blockedWinnerFlag: null,
+              approvedLoserFlag: false,
+              resizeHelpedFlag: null,
+              resizeHurtFlag: null,
+            },
+          } satisfies Record<string, unknown>;
+          persistAdaptiveDecisionTrace({
+            symbol,
+            confidence: confidenceWeighted,
+            outcome: 'blocked',
+            payload: {
+              stage: 'quant_pre_execution',
+              symbol,
+              originalRequest: {
+                notionalUsd: requestedProbeUsd,
+                leverage: requestedLeverage,
+                side: expr.side,
+              },
+              retrieval: quantRetrieval,
+              policyTrace,
+              finalRequest: null,
+              finalRejectReason: gateDecision.reasoning,
+            },
+            notes: { signalClass, regime, strategySource: 'autonomous_quant' },
+          });
+          try {
+            upsertTradeDossier({
+              symbol,
+              status: 'closed',
+              direction: expr.side === 'buy' ? 'long' : 'short',
+              strategySource: 'autonomous_quant',
+              executionMode,
+              sourcePredictionId: null,
+              triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
+              openedAt: new Date().toISOString(),
+              closedAt: new Date().toISOString(),
+              dossier: blockedPayload,
+              review: null,
+            });
+          } catch { /* best-effort */ }
           try {
             recordPerpTradeJournal({
               kind: 'perp_trade_journal',
-              execution_mode: this.thufirConfig.execution?.mode === 'live' ? 'live' : 'paper',
+              execution_mode: executionMode,
               tradeId: null,
               hypothesisId: expr.hypothesisId ?? null,
               symbol,
@@ -1557,6 +1984,43 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
           targetLeverage = gateDecision.suggestedLeverage;
         }
       }
+      const quantPolicyTrace = buildPolicyTrace({
+        stage: entryGateVerdict === 'resize' ? 'entry_gate_resized' : 'entry_gate_approved',
+        requestedNotionalUsd: requestedProbeUsd,
+        approvedNotionalUsd: probeUsd,
+        requestedLeverage,
+        approvedLeverage: targetLeverage,
+        gateVerdict: entryGateVerdict,
+        gateReasonCode: entryGateReasonCode,
+        gateReasoning: entryGateReasoning,
+        policyReasonCode: globalGate.reasonCode ?? null,
+        policyReason: globalGate.reason ?? null,
+        policySizeMultiplier: policySizeMultiplier < 1 ? policySizeMultiplier : null,
+        retrievalRecommendation: quantSimilarity.recommendation,
+      });
+      persistAdaptiveDecisionTrace({
+        symbol,
+        confidence: confidenceWeighted,
+        outcome: 'pending',
+        payload: {
+          stage: 'quant_pre_execution',
+          symbol,
+          originalRequest: {
+            notionalUsd: requestedProbeUsd,
+            leverage: requestedLeverage,
+            side: expr.side,
+          },
+          retrieval: quantRetrieval,
+          policyTrace: quantPolicyTrace,
+          finalRequest: {
+            notionalUsd: probeUsd,
+            leverage: targetLeverage,
+            side: expr.side,
+          },
+          finalRejectReason: null,
+        },
+        notes: { signalClass, regime, strategySource: 'autonomous_quant' },
+      });
       // gate approved or was disabled; fall through to executor.execute()
 
       const decision: TradeDecision = {
@@ -1630,12 +2094,16 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
             triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
             openedAt: new Date().toISOString(),
             dossier: {
-              version: 'v2.1',
+              version: 'v2.2',
               thesis: {
                 reasoning: decision.reasoning ?? null,
+                expectedEdge: expr.expectedEdge,
+                invalidationPrice: gateStopLevelPrice,
+                timeStopAtMs,
+                thesisConfidence: confidenceWeighted,
+                uncertaintySummary: null,
                 confidenceRaw,
                 confidenceWeighted,
-                expectedEdge: expr.expectedEdge,
               },
               context: {
                 signalClass,
@@ -1647,13 +2115,23 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
                 triggerReason: expr.newsTrigger?.enabled ? 'news' : 'technical',
                 similarity: quantSimilarity,
               },
+              request: {
+                requestedSize: requestedProbeUsd,
+                requestedLeverage,
+                requestedNotionalUsd: requestedProbeUsd,
+              },
               gate: {
                 verdict: entryGateVerdict,
                 reasonCode: entryGateReasonCode,
+                requestedSize: gateCandidate.notionalUsd,
+                approvedSize: probeUsd,
                 requestedNotionalUsd: gateCandidate.notionalUsd,
                 approvedNotionalUsd: probeUsd,
+                requestedLeverage,
                 approvedLeverage: targetLeverage,
                 stopLevelPrice: gateStopLevelPrice,
+                interventionType: entryGateVerdict === 'resize' ? 'resize' : 'approve',
+                interventionSummary: entryGateReasoning,
                 historicalSimilarity: quantSimilaritySummary,
               },
               execution: {
@@ -1664,6 +2142,17 @@ export class AutonomousManager extends EventEmitter<AutonomousEvents> {
                 filledNotionalUsd: markPrice > 0 ? size * markPrice : probeUsd,
                 orderId: tradeResult.orderId ?? null,
                 executionMessage: tradeResult.message,
+              },
+              review: null,
+              counterfactual_summary: null,
+              retrieval: quantRetrieval,
+              policy_trace: quantPolicyTrace,
+              regret: {
+                missedOpportunityFlag: null,
+                blockedWinnerFlag: null,
+                approvedLoserFlag: null,
+                resizeHelpedFlag: entryGateVerdict === 'resize' ? null : false,
+                resizeHurtFlag: entryGateVerdict === 'resize' ? null : false,
               },
               exitPlan: {
                 timeStopAtMs,

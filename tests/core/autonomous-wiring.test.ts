@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
   const updateTradeProposalOutcome = vi.fn();
   const updateTradeProposalStatus = vi.fn();
   const recordDecisionAudit = vi.fn();
+  const storeDecisionArtifact = vi.fn();
   const recordPerpTradeJournal = vi.fn();
   const upsertTradeDossier = vi.fn(() => ({ id: 'dossier-mock-id' }));
   const createPrediction = vi.fn(() => 'pred-mock-id');
@@ -98,7 +99,7 @@ const mocks = vi.hoisted(() => {
   return {
     dbRun, dbPrepare, dbExec,
     taComputeAll, triggerShouldFire, originatorPropose,
-    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit, recordPerpTradeJournal, upsertTradeDossier,
+    upsertExitPolicy, updateTradeProposalOutcome, updateTradeProposalStatus, recordDecisionAudit, storeDecisionArtifact, recordPerpTradeJournal, upsertTradeDossier,
     createPrediction, createLearningCase, getSignalWeights, runDiscovery,
     getLatestThought, listForecastsForEvent, listOutcomesForEvent, searchHistoricalCases,
     retrieveSimilarTradeDossiers,
@@ -144,6 +145,10 @@ vi.mock('../../src/memory/llm_trade_proposals.js', () => ({
 
 vi.mock('../../src/memory/decision_audit.js', () => ({
   recordDecisionAudit: (...args: unknown[]) => mocks.recordDecisionAudit(...args),
+}));
+
+vi.mock('../../src/memory/decision_artifacts.js', () => ({
+  storeDecisionArtifact: (...args: unknown[]) => mocks.storeDecisionArtifact(...args),
 }));
 
 vi.mock('../../src/discovery/engine.js', () => ({
@@ -442,10 +447,32 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     }));
     expect(mocks.upsertTradeDossier).toHaveBeenCalledWith(expect.objectContaining({
       dossier: expect.objectContaining({
+        version: 'v2.2',
+        request: expect.objectContaining({
+          requestedNotionalUsd: expect.any(Number),
+        }),
+        retrieval: expect.objectContaining({
+          retrievalVersion: 'v2.2',
+          candidateCount: 2,
+        }),
+        policy_trace: expect.objectContaining({
+          activePolicies: expect.arrayContaining(['retrieval_similarity', 'llm_entry_gate']),
+        }),
         context: expect.objectContaining({
           similarity: expect.objectContaining({
             recommendation: 'caution',
           }),
+        }),
+      }),
+    }));
+    expect(mocks.storeDecisionArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'adaptive_pre_execution_trace',
+      outcome: 'pending',
+      marketId: 'BTC',
+      payload: expect.objectContaining({
+        stage: 'originator_pre_execution',
+        finalRequest: expect.objectContaining({
+          side: 'buy',
         }),
       }),
     }));
@@ -695,6 +722,27 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
     expect(executor.execute).not.toHaveBeenCalled();
     expect(result).toMatch(/rejected by LLM entry gate/i);
     expect(limiter.release).toHaveBeenCalled();
+    expect(mocks.storeDecisionArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'adaptive_pre_execution_trace',
+      outcome: 'blocked',
+      marketId: 'BTC',
+      payload: expect.objectContaining({
+        stage: 'originator_entry_gate',
+        finalRejectReason: 'test verdict: reject',
+      }),
+    }));
+    expect(mocks.upsertTradeDossier).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'closed',
+      dossier: expect.objectContaining({
+        version: 'v2.2',
+        retrieval: expect.objectContaining({
+          retrievalVersion: 'v2.2',
+        }),
+        policy_trace: expect.objectContaining({
+          blockedReason: 'test verdict: reject',
+        }),
+      }),
+    }));
     expect(mocks.updateTradeProposalStatus).toHaveBeenCalledWith(42, expect.objectContaining({
       executeTrades: true,
       originatorExitStage: 'entry_gate_rejected',
@@ -881,6 +929,17 @@ describe('AutonomousManager — originator wiring (v1.98)', () => {
       baseline: { marketProbability: null },
       sourcePredictionId: 'pred-mock-id',
     });
+    expect(mocks.storeDecisionArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'adaptive_pre_execution_trace',
+      outcome: 'pending',
+      marketId: 'BTC',
+      payload: expect.objectContaining({
+        stage: 'quant_pre_execution',
+        finalRequest: expect.objectContaining({
+          side: 'buy',
+        }),
+      }),
+    }));
   });
 
   it('11. originator path: createPrediction NOT called when gate rejects', async () => {
