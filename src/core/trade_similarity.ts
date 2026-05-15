@@ -50,6 +50,9 @@ export interface TradeSimilarityMatch {
 
 export interface TradeSimilaritySummary {
   recommendation: 'approval' | 'caution' | 'size_reduction';
+  retrievalSupportScore: number;
+  retrievalConfidence: number;
+  retrievalRiskFlags: string[];
   stats: TradeSimilarityStats;
   topLessons: string[];
   repeatTags: string[];
@@ -320,13 +323,48 @@ function chooseRecommendation(
   return 'approval';
 }
 
+function deriveRetrievalSupportScore(
+  stats: TradeSimilarityStats,
+  repeatTags: string[],
+  avoidTags: string[]
+): number {
+  const winRate = stats.winRate ?? 0.5;
+  const intervention = stats.averageInterventionScore ?? 0;
+  const sampleFactor = Math.min(1, stats.sampleSize / 5);
+  const tagBias = Math.max(-0.25, Math.min(0.25, (repeatTags.length - avoidTags.length) * 0.05));
+  return Math.max(0, Math.min(1, winRate * 0.45 + sampleFactor * 0.25 + ((intervention + 1) / 2) * 0.2 + 0.1 + tagBias));
+}
+
+function deriveRetrievalRiskFlags(
+  stats: TradeSimilarityStats,
+  repeatTags: string[],
+  avoidTags: string[]
+): string[] {
+  const flags = new Set<string>();
+  if (stats.sampleSize < 2) flags.add('sparse_precedent');
+  if ((stats.winRate ?? 0.5) < 0.45) flags.add('weak_historical_win_rate');
+  if ((stats.averageInterventionScore ?? 0) < -0.1) flags.add('intervention_history_negative');
+  if (avoidTags.length > repeatTags.length) flags.add('avoid_tags_outnumber_repeat_tags');
+  if ((stats.averageEntryStretchPct ?? 0) > 6) flags.add('late_entry_cluster');
+  return [...flags];
+}
+
 export function summarizeTradeSimilarity(matches: TradeSimilarityMatch[]): TradeSimilaritySummary {
   const stats = summarizeStats(matches);
   const topLessons = topCounts(matches.flatMap((row) => row.review.lessons), 5);
   const repeatTags = topCounts(matches.flatMap((row) => row.review.repeatTags), 5);
   const avoidTags = topCounts(matches.flatMap((row) => row.review.avoidTags), 5);
+  const retrievalRiskFlags = deriveRetrievalRiskFlags(stats, repeatTags, avoidTags);
+  const retrievalSupportScore = deriveRetrievalSupportScore(stats, repeatTags, avoidTags);
+  const retrievalConfidence = Math.max(
+    0,
+    Math.min(1, Math.min(1, stats.sampleSize / 4) * 0.7 + (matches[0]?.review.reviewConfidence ?? 0.4) * 0.3)
+  );
   return {
     recommendation: chooseRecommendation(stats, repeatTags, avoidTags),
+    retrievalSupportScore,
+    retrievalConfidence,
+    retrievalRiskFlags,
     stats,
     topLessons,
     repeatTags,
